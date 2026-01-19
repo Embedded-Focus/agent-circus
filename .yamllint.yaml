@@ -1,0 +1,12 @@
+---
+extends: default
+
+rules:
+  indentation:
+    spaces: 2
+    indent-sequences: false
+  line-length:
+    allow-non-breakable-words: true
+    max: 120
+
+  document-start: disable

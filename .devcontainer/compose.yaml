@@ -1,0 +1,75 @@
+---
+# Common configuration for claude-code and codex services
+x-common-service: &common-service
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      TZ: ${TZ:-America/Los_Angeles}
+      GIT_DELTA_VERSION: 0.18.2
+      ZSH_IN_DOCKER_VERSION: 1.2.0
+
+  cap_add:
+  - NET_ADMIN
+  - NET_RAW
+
+  environment:
+    NODE_OPTIONS: --max-old-space-size=4096
+    POWERLEVEL9K_DISABLE_GITSTATUS: "true"
+
+  command: tail -f /dev/null
+
+  user: node
+
+  working_dir: /workspace
+
+services:
+  claude-code:
+    !!merge <<: *common-service
+    build:
+      target: claude-code
+      args:
+        CLAUDE_CODE_VERSION: latest
+        CLAUDE_CODE_ACP_VERSION: v0.10.9
+    volumes:
+    - ..:/workspace:cached
+    - bashhistory:/commandhistory
+    - ${HOME}/.claude:/home/node/.claude
+
+    labels:
+      io.devcontainer.exec-target: "claude-code"
+
+    environment:
+      NODE_OPTIONS: --max-old-space-size=4096
+      CLAUDE_CONFIG_DIR: /home/node/.claude
+      POWERLEVEL9K_DISABLE_GITSTATUS: "true"
+
+  codex:
+    !!merge <<: *common-service
+    build:
+      target: codex
+      args:
+        CODEX_VERSION: 0.65.0
+        CODEX_ACP_VERSION: 0.6.0
+    volumes:
+    - ..:/workspace:cached
+    - bashhistory:/commandhistory
+    - ${HOME}/.codex:/home/node/.codex
+
+    labels:
+      io.devcontainer.exec-target: "codex"
+
+  mistral-vibe:
+    !!merge <<: *common-service
+    build:
+      target: base
+    volumes:
+    - ..:/workspace:cached
+    - bashhistory:/commandhistory
+    - ${HOME}/.vibe:/home/node/.vibe
+
+    labels:
+      io.devcontainer.exec-target: "mistral-vibe"
+
+volumes:
+  bashhistory:
