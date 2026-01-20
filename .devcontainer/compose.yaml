@@ -30,7 +30,7 @@ services:
       target: claude-code
       args:
         CLAUDE_CODE_VERSION: latest
-        CLAUDE_CODE_ACP_VERSION: v0.10.9
+        CLAUDE_CODE_ACP_VERSION: v0.13.1
     volumes:
     - ..:/workspace:cached
     - bashhistory:/commandhistory
@@ -49,8 +49,8 @@ services:
     build:
       target: codex
       args:
-        CODEX_VERSION: 0.65.0
-        CODEX_ACP_VERSION: 0.6.0
+        CODEX_VERSION: 0.87.0
+        CODEX_ACP_VERSION: 0.8.2
     volumes:
     - ..:/workspace:cached
     - bashhistory:/commandhistory
