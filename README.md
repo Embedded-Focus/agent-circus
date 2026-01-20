@@ -94,10 +94,10 @@ devcontainer build --workspace-folder .
 # Create containers
 devcontainer up --workspace-folder .
 
-# Execute commands inside containers (both zsh as well as bash are available)
-devcontainer exec --workspace-folder . --id-label io.devcontainer.exec-target=claude-code zsh
-devcontainer exec --workspace-folder . --id-label io.devcontainer.exec-target=codex bash
-devcontainer exec --workspace-folder . --id-label io.devcontainer.exec-target=mistral-vibe bash
+# Execute agent UIs inside containers (both zsh as well as bash are available as well)
+devcontainer exec --workspace-folder . --id-label io.devcontainer.exec-target=claude-code claude
+devcontainer exec --workspace-folder . --id-label io.devcontainer.exec-target=codex codex
+devcontainer exec --workspace-folder . --id-label io.devcontainer.exec-target=mistral-vibe vibe
 
 # Remove all related containers
 remove-containers  # after installing it with `uv tool install .` (see above)

@@ -72,7 +72,8 @@ USER node
 
 # Install global packages
 ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
-ENV PATH=$PATH:/usr/local/share/npm-global/bin
+ENV UV_PROJECT_ENVIRONMENT=/usr/local/share/venv
+ENV PATH=${PATH}:${NPM_CONFIG_PREFIX}/bin:${UV_PROJECT_ENVIRONMENT}/bin
 
 # Set the default shell to zsh rather than sh
 ENV SHELL=/bin/zsh
@@ -93,6 +94,7 @@ RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/
 
 # Copy and set up firewall script
 COPY init-firewall.sh /usr/local/bin/
+COPY docker-entrypoint.sh /
 USER root
 RUN chmod +x /usr/local/bin/init-firewall.sh && \
   echo "node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" > /etc/sudoers.d/node-firewall && \
@@ -107,6 +109,9 @@ USER node
 
 RUN npm install -g \
     @modelcontextprotocol/inspector@${MCP_INSPECTOR_VERSION}
+
+ENTRYPOINT [ "/docker-entrypoint.sh" ]
+CMD [ "sleep", "infinity" ]
 
 FROM base AS claude-code
 

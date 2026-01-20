@@ -49,9 +49,6 @@
     "PATH": "${containerWorkspaceFolder}/.venv/bin:${containerEnv:PATH}:${containerEnv:HOME}/.local/bin",
     "UV_LINK_MODE": "copy"
   },
-  "postAttachCommand": "bash .devcontainer/postAttachCommand.sh",
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
-  "workspaceFolder": "/workspace",
-  "postStartCommand": "sudo /usr/local/bin/init-firewall.sh",
-  "waitFor": "postStartCommand"
+  "workspaceFolder": "/workspace"
 }
