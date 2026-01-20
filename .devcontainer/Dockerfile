@@ -73,6 +73,7 @@ USER node
 # Install global packages
 ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
 ENV UV_PROJECT_ENVIRONMENT=/usr/local/share/venv
+ENV UV_LINK_MODE=copy
 ENV PATH=${PATH}:${NPM_CONFIG_PREFIX}/bin:${UV_PROJECT_ENVIRONMENT}/bin
 
 # Set the default shell to zsh rather than sh
@@ -97,7 +98,11 @@ COPY init-firewall.sh /usr/local/bin/
 COPY docker-entrypoint.sh /
 USER root
 RUN chmod +x /usr/local/bin/init-firewall.sh && \
-  echo "node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" > /etc/sudoers.d/node-firewall && \
+  { \
+    echo 'Defaults env_keep += "AGENT_TYPE"'; \
+    echo 'Defaults secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"'; \
+    echo 'node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh'; \
+  } > /etc/sudoers.d/node-firewall && \
   chmod 0440 /etc/sudoers.d/node-firewall
 
 # install additional tools

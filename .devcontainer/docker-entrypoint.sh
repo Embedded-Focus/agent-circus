@@ -2,7 +2,7 @@
 
 set -Eeuo pipefail
 
-sudo /usr/local/bin/init-firewall.sh
+sudo AGENT_TYPE="${AGENT_TYPE:-unknown}" /usr/local/bin/init-firewall.sh
 
 # This script must run and is run in the ${containerWorkspaceFolder} by default
 # It installs the required libraries and other live dependencies that are not checked in.

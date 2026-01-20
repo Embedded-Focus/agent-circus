@@ -104,12 +104,21 @@ echo "Host network detected as: $HOST_NETWORK"
 iptables -A INPUT -s "$HOST_NETWORK" -j ACCEPT
 iptables -A OUTPUT -d "$HOST_NETWORK" -j ACCEPT
 
-# Set default policies to DROP first
-iptables -P INPUT ACCEPT
-iptables -P FORWARD ACCEPT
-iptables -P OUTPUT ACCEPT
+# Apply strict firewall only for claude-code agent
+if [[ "${AGENT_TYPE:-unknown}" != "claude-code" ]]; then
+    echo "Agent type '${AGENT_TYPE:-unknown}' - applying permissive firewall"
+    iptables -P INPUT ACCEPT
+    iptables -P FORWARD ACCEPT
+    iptables -P OUTPUT ACCEPT
+    exit 0
+fi
 
-exit 0
+echo "Agent type 'claude-code' - applying strict firewall"
+
+# Set default policies to DROP first
+iptables -P INPUT DROP
+iptables -P FORWARD DROP
+iptables -P OUTPUT DROP
 
 # First allow established connections for already approved traffic
 iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
