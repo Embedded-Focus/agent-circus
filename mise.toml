@@ -38,6 +38,8 @@ _.file = { path = ".secrets.yaml", redact = true }
 # node = 'path:~/.nodes/14' # BYO – specify a non-mise managed installation
 
 [tools]
+node = "24"
+npm = "11"
 age = "latest"
 sops = "latest"
 usage = "latest"
