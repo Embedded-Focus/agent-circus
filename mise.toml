@@ -91,5 +91,14 @@ uv run ruff check
 uv run ty check
 """
 
+[tasks.up]
+run = """devcontainer up --workspace-folder ."""
+
+[tasks.build]
+run = """devcontainer build --workspace-folder ."""
+
+[tasks.clean]
+run = """remove-containers"""
+
 [hooks]
 enter = "uv sync"
