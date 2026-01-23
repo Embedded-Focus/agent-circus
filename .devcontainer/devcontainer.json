@@ -46,7 +46,7 @@
     "source=${localEnv:HOME}/.ssh/known_hosts,target=/home/node/.ssh/known_hosts,type=bind,readonly"
   ],
   "remoteEnv": {
-    "PATH": "${containerWorkspaceFolder}/.venv/bin:${containerEnv:PATH}:${containerEnv:HOME}/.local/bin",
+    "PATH": "${containerEnv:PATH}:${containerWorkspaceFolder}/.venv/bin",
     "UV_LINK_MODE": "copy"
   },
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
