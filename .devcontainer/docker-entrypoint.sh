@@ -14,6 +14,9 @@ if [[ -f ".env" ]]; then
   set +a
 fi
 
-uv sync
+if [[ "${AGENT_TYPE:-unknown}" != "claude-code" ]]; then
+    # firewall settings of the Claude Code service currently prohibit access to the PyPI
+    uv sync
+fi
 
 exec "${@}"
