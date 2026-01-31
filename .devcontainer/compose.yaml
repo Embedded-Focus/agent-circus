@@ -7,7 +7,7 @@ x-common-service: &common-service
     args:
       TZ: ${TZ:-America/Los_Angeles}
       GIT_DELTA_VERSION: 0.18.2
-      ZSH_IN_DOCKER_VERSION: 1.2.0
+      ZSH_IN_DOCKER_VERSION: 1.2.1
 
   cap_add:
   - NET_ADMIN
@@ -30,7 +30,7 @@ services:
       target: claude-code
       args:
         CLAUDE_CODE_VERSION: latest
-        CLAUDE_CODE_ACP_VERSION: v0.13.1
+        CLAUDE_CODE_ACP_VERSION: v0.13.2
     volumes:
     - ..:/workspace:cached
     - bashhistory:/commandhistory
@@ -50,8 +50,8 @@ services:
     build:
       target: codex
       args:
-        CODEX_VERSION: 0.87.0
-        CODEX_ACP_VERSION: 0.8.2
+        CODEX_VERSION: 0.93.0
+        CODEX_ACP_VERSION: 0.9.0
     volumes:
     - ..:/workspace:cached
     - bashhistory:/commandhistory
