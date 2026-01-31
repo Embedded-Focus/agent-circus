@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "acp-reference"
+name = "agent-circus"
 version = "0.1.0"
-description = "ACP Reference Configurations and Utilities"
+description = "AI Agent Circus Setup"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
