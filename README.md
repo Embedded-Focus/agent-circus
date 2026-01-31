@@ -1,4 +1,8 @@
-# ACP Reference Implementation
+# AI Agents Circus
+
+This repository contains my AI agents setup. Each agent is running in its respective service.
+
+IDEs interface with agents via the [Agent Client Protocol](https://agentclientprotocol.com/) (ACP).
 
 ## Configuring the Environment
 
