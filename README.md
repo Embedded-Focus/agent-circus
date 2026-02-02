@@ -111,5 +111,5 @@ remove-containers  # after installing it with `uv tool install .` (see above)
 
 ``` shell
 # this will uninstall `remove-containers`
-uv tool uninstall acp-reference
+uv tool uninstall agent-circus
 ```
