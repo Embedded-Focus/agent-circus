@@ -135,3 +135,25 @@ ARG CODEX_ACP_VERSION=0.8.0
 RUN npm install -g \
     @openai/codex@${CODEX_VERSION} \
     @zed-industries/codex-acp@${CODEX_ACP_VERSION}
+
+FROM base AS mistral-vibe
+
+ENV UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1 \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_PROJECT_ENVIRONMENT=/app \
+    PATH=/app/bin:${PATH}
+
+USER root
+
+RUN --mount=type=cache,target=/root/.cache \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    uv sync \
+        --locked \
+        --no-dev \
+        --no-install-project
+
+ENV UV_PYTHON=/app/bin/python
+
+USER node

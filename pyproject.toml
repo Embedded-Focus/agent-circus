@@ -9,7 +9,6 @@ description = "AI Agent Circus Setup"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "mistral-vibe>=2.0.2",
     "docker>=7.0.0",
 ]
 
