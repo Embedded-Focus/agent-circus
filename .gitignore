@@ -124,6 +124,7 @@ celerybeat.pid
 
 # Environments
 .env
+.envrc
 .venv
 env/
 venv/
@@ -162,4 +163,11 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
+# AI
 .agent-shell/
+
+# others
+.direnv/
+
+# Node
+node_modules/
