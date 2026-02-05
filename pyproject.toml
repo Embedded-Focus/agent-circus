@@ -10,13 +10,14 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "docker>=7.0.0",
+    "typer>=0.21.1",
 ]
 
 [project.scripts]
-remove-containers = "remove_containers.cli:run_cli"
+agent-circus = "agent_circus.cli:run_cli"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/remove_containers"]
+packages = ["src/agent_circus"]
 
 [dependency-groups]
 dev = [
