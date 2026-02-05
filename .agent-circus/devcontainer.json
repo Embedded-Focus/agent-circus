@@ -1,6 +1,6 @@
 {
   "name": "AI Agents Sandbox",
-  "dockerComposeFile": "compose.yaml",
+  "dockerComposeFile": "${localWorkspaceFolder}/.agent-circus/compose.yaml",
   "service": "claude-code",
   "runArgs": [
     "--name",
