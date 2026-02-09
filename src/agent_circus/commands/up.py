@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from agent_circus.compose import compose_up
 from agent_circus.config import AVAILABLE_SERVICES, config_exists, get_workspace_path
+from agent_circus.devcontainer import devcontainer_up
 from agent_circus.exceptions import AgentCircusError
 
 logger = logging.getLogger(__name__)
@@ -38,14 +38,6 @@ def up(
             help="Build images before starting containers.",
         ),
     ] = False,
-    attach: Annotated[
-        bool,
-        typer.Option(
-            "--attach",
-            "-a",
-            help="Attach to container output (foreground mode).",
-        ),
-    ] = False,
 ) -> None:
     """Start agent containers.
 
@@ -59,7 +51,6 @@ def up(
         agent-circus up                      # Start all services
         agent-circus up claude-code          # Start only claude-code
         agent-circus up --build              # Build and start all
-        agent-circus up codex --attach       # Start codex in foreground
     """
     workspace = workspace or get_workspace_path()
 
@@ -71,7 +62,6 @@ def up(
         raise typer.Exit(code=1)
 
     services_to_start = services or []
-    detach = not attach
 
     try:
         if services_to_start:
@@ -79,11 +69,7 @@ def up(
         else:
             typer.echo("Starting all services...")
 
-        compose_up(workspace, services_to_start, detach=detach, build=build)
-
-        if detach:
-            typer.echo("Services started successfully.")
-            typer.echo("Use 'docker compose ps' to see running containers.")
+        devcontainer_up(workspace)
 
     except AgentCircusError as e:
         typer.echo(f"Error: {e}", err=True)

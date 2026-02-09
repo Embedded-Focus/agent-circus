@@ -27,3 +27,7 @@ class BuildError(AgentCircusError):
 
 class ComposeError(AgentCircusError):
     """Raised when Docker Compose operations fail."""
+
+
+class DevContainerError(AgentCircusError):
+    """Raised when DevContainer operations fail."""
