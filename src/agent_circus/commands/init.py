@@ -13,6 +13,7 @@ from agent_circus.config import (
     get_dockerfile,
     get_workspace_path,
 )
+from agent_circus.templates import deploy_templates
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,22 @@ def init(
             help="Only check if configuration exists, don't create.",
         ),
     ] = False,
+    deploy: Annotated[
+        bool,
+        typer.Option(
+            "--deploy",
+            "-d",
+            help="Deploy template files to workspace.",
+        ),
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            "-f",
+            help="Overwrite existing files when deploying.",
+        ),
+    ] = False,
 ) -> None:
     """Initialize or verify agent container configuration.
 
@@ -44,13 +61,35 @@ def init(
     configuration files (compose.yaml, Dockerfile).
 
     Use --check to verify configuration without making changes.
+    Use --deploy to deploy template files to the workspace.
     """
     workspace = workspace or get_workspace_path()
 
-    if check:
+    if deploy:
+        _deploy_templates(workspace, force)
+    elif check:
         _check_config(workspace)
     else:
         _init_config(workspace)
+
+
+def _deploy_templates(workspace: Path, force: bool) -> None:
+    """Deploy template files to workspace.
+
+    :param workspace: Workspace path.
+    :type workspace: Path
+    :param force: Overwrite existing files if True.
+    :type force: bool
+    """
+    deployed = deploy_templates(workspace, force=force)
+
+    if not deployed:
+        typer.echo("No files deployed (all already exist). Use --force to overwrite.")
+        return
+
+    typer.echo(f"Deployed {len(deployed)} file(s) to {workspace}:")
+    for path in deployed:
+        typer.echo(f"  {path.relative_to(workspace)}")
 
 
 def _check_config(workspace: Path) -> None:
