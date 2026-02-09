@@ -32,7 +32,8 @@ def _run_devcontainer(
         raise ConfigurationError(f"Compose file not found: {devcontainer_json}")
 
     cmd = [
-        "devcontainer",
+        "npx",
+        "@devcontainers/cli@0.83.0",
         *commands,
         "--workspace-folder",
         str(workspace),
@@ -54,9 +55,7 @@ def _run_devcontainer(
             raise DevContainerError(f"devcontainer failed: {error_msg}")
         return result
     except FileNotFoundError as e:
-        raise DevContainerError(
-            "DevContainer not found. Is the DevContainer CLI installed?"
-        ) from e
+        raise DevContainerError("npx not found. Is Node.js installed?") from e
     except subprocess.SubprocessError as e:
         raise DevContainerError(f"Failed to run devcontainer: {e}") from e
 

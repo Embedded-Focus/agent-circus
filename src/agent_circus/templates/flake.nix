@@ -33,13 +33,6 @@
           ];
 
           shellHook = ''
-            export PATH="$PWD/node_modules/.bin:$PATH"
-
-            # Install devcontainer CLI if not present
-            if ! command -v devcontainer &> /dev/null; then
-              npm install @devcontainers/cli
-            fi
-
             # Auto-sync Python dependencies
             uv sync --python $(command -v python)
             export PATH="$PWD/.venv/bin:$PATH"
