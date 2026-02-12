@@ -171,3 +171,9 @@ cython_debug/
 
 # Node
 node_modules/
+
+# agent-circus
+.agent-circus/
+.envrc
+flake.lock
+flake.nix
