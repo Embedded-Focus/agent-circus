@@ -34,8 +34,10 @@
 
           shellHook = ''
             # Auto-sync Python dependencies
-            uv sync --python $(command -v python)
-            export PATH="$PWD/.venv/bin:$PATH"
+            if [ -f pyproject.toml ]; then
+              uv sync --python $(command -v python)
+              export PATH="$PWD/.venv/bin:$PATH"
+            fi
           '';
         };
       }
