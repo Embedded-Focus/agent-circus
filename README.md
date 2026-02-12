@@ -6,13 +6,13 @@ IDEs interface with agents via the [Agent Client Protocol](https://agentclientpr
 
 ## Configuring the Environment
 
-### Installing the `remove-containers` Tool
+### Installing the `agent-circus` Tool
 
 ``` shell
 uv tool install .
 ```
 
-You can then remove containers of a DevContainer environment by issuing `remove-containers`.
+You can then remove containers of a DevContainer environment by issuing `agent-circus`.
 
 See the [uv tool documentation](https://docs.astral.sh/uv/concepts/tools/) on how to work with tools in general.
 
@@ -92,24 +92,23 @@ Examples:
 ## Working with the Environment
 
 ``` shell
+# Install agent configuration/environment files
+agent-circus init --deploy
+
 # Generate container images
-devcontainer build --workspace-folder .
+agent-circus build
 
 # Create containers
-devcontainer up --workspace-folder .
+agent-circus up
 
-# Execute agent UIs inside containers (both zsh as well as bash are available as well)
-devcontainer exec --workspace-folder . --id-label io.devcontainer.exec-target=claude-code claude
-devcontainer exec --workspace-folder . --id-label io.devcontainer.exec-target=codex codex
-devcontainer exec --workspace-folder . --id-label io.devcontainer.exec-target=mistral-vibe vibe
-
-# Remove all related containers
-remove-containers  # after installing it with `uv tool install .` (see above)
+# Remove all related resources
+agent-circus remove                     # just remove containers
+agent-circus remove --destroy           # also remove agent configuration/environment files
+agent-circus remove --destroy  --force  # don't ask for permission
 ```
 
 ## Uninstalling
 
 ``` shell
-# this will uninstall `remove-containers`
 uv tool uninstall agent-circus
 ```
