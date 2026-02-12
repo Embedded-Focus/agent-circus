@@ -1,5 +1,5 @@
 {
-  description = "Development environment for agent-circus";
+  description = "Development environment for $${WORKSPACE}";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";

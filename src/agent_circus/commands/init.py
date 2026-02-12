@@ -81,7 +81,9 @@ def _deploy_templates(workspace: Path, force: bool) -> None:
     :param force: Overwrite existing files if True.
     :type force: bool
     """
-    deployed = deploy_templates(workspace, force=force)
+    deployed = deploy_templates(
+        workspace, force=force, variables={"WORKSPACE": workspace.name}
+    )
 
     if not deployed:
         typer.echo("No files deployed (all already exist). Use --force to overwrite.")

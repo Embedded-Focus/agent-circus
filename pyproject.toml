@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "docker>=7.0.0",
+    "pyyaml>=6.0",
     "typer>=0.21.1",
 ]
 
@@ -23,6 +24,12 @@ packages = ["src/agent_circus"]
 dev = [
     "hatchling>=1.28.0",
     "pre-commit>=4.5.1",
+    "pytest>=9.0",
     "ruff>=0.14.14",
     "ty>=0.0.15",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]

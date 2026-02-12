@@ -1,5 +1,5 @@
 ---
-name: agent-circus
+name: $${WORKSPACE}
 
 # Common configuration for claude-code and codex services
 x-common-service: &common-service
