@@ -1,14 +1,10 @@
 """Template file access utilities."""
 
-import json
 import re
 import shutil
 from importlib.resources import as_file, files
 from importlib.resources.abc import Traversable
 from pathlib import Path
-from typing import Any
-
-import yaml
 
 TEMPLATES = files("agent_circus.templates")
 
@@ -35,65 +31,9 @@ def substitute_variables_str(value: str, variables: dict[str, str]) -> str:
     return re.sub(r"\$\$([A-Za-z_][A-Za-z0-9_]*)", replace_unbraced, value)
 
 
-def substitute_variables(data: Any, variables: dict[str, str]) -> Any:
-    """Recursively substitute ${VAR} and $VAR patterns in string values.
-
-    Supports both ${VAR} (braced) and $VAR (unbraced) syntax.
-    Unbraced variables match the longest valid variable name (letters, digits, underscores).
-    Unknown variables are replaced with empty strings.
-
-    :param data: Data structure to process.
-    :type data: Any
-    :param variables: Mapping of variable names to values.
-    :type variables: dict[str, str]
-    :returns: Data structure with substitutions applied.
-    :rtype: Any
-    """
-    if isinstance(data, str):
-        return substitute_variables_str(data, variables)
-    elif isinstance(data, dict):
-        return {k: substitute_variables(v, variables) for k, v in data.items()}
-    elif isinstance(data, list):
-        return [substitute_variables(item, variables) for item in data]
-    return data
-
-
-def _handle_yaml(src_path: Path, dst_path: Path, variables: dict[str, str]) -> None:
-    """Load YAML, apply variable substitution, write to destination."""
-    with open(src_path) as f:
-        data = yaml.safe_load(f)
-    data = substitute_variables(data, variables)
-    with open(dst_path, "w") as f:
-        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
-
-
-def _handle_json(src_path: Path, dst_path: Path, variables: dict[str, str]) -> None:
-    """Load JSON, apply variable substitution, write to destination."""
-    with open(src_path) as f:
-        data = json.load(f)
-    data = substitute_variables(data, variables)
-    with open(dst_path, "w") as f:
-        json.dump(data, f, indent=2)
-
-
-def _handle_json_copy(
-    src_path: Path, dst_path: Path, variables: dict[str, str]
-) -> None:
-    del variables  # unused
-    shutil.copy2(src_path, dst_path)
-
-
 def _handle_others(src_path: Path, dst_path: Path, variables: dict[str, str]) -> None:
     dst_path.write_text(substitute_variables_str(src_path.read_text(), variables))
     shutil.copymode(src_path, dst_path)
-
-
-# Inline hook registry mapping file extensions to handlers
-FILETYPE_HANDLERS = {
-    ".yaml": _handle_yaml,
-    ".yml": _handle_yaml,
-    ".json": _handle_json,
-}
 
 
 def _deploy_dir(
@@ -142,12 +82,8 @@ def _deploy_file(
     :param variables: Mapping of variable names to values for substitution.
     :type variables: dict[str, str]
     """
-    handler = FILETYPE_HANDLERS.get(src_path.suffix)
-    if handler:
-        dst_path.parent.mkdir(parents=True, exist_ok=True)
-        handler(src_path, dst_path, variables)
-    else:
-        _handle_others(src_path, dst_path, variables)
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    _handle_others(src_path, dst_path, variables)
 
 
 def get_template_path(name: str) -> Traversable:
