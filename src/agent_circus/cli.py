@@ -1,6 +1,7 @@
 """Main CLI entry point for Agent Circus."""
 
 import typer
+
 from agent_circus.commands import build, init, remove, up
 
 app = typer.Typer(

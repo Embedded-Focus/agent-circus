@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+
 from agent_circus.config import (
     CONFIG_DIR_NAME,
     config_exists,

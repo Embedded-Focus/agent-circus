@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+
 from agent_circus.compose import compose_down
 from agent_circus.config import config_exists, get_workspace_path
 from agent_circus.exceptions import AgentCircusError
