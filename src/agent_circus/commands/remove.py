@@ -123,7 +123,12 @@ def remove(
 
     try:
         typer.echo("Removing containers...")
-        compose_down(workspace, volumes=volumes, remove_orphans=remove_orphans)
+        compose_down(
+            workspace,
+            volumes=volumes,
+            remove_orphans=remove_orphans,
+            timeout=0 if force else None,
+        )
         typer.echo("Containers removed successfully.")
 
         if destroy:

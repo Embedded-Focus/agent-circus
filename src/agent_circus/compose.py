@@ -132,6 +132,7 @@ def compose_down(
     workspace: Path,
     volumes: bool = False,
     remove_orphans: bool = False,
+    timeout: int | None = None,
 ) -> None:
     """Stop and remove containers using docker compose.
 
@@ -141,9 +142,14 @@ def compose_down(
     :type volumes: bool
     :param remove_orphans: Remove orphan containers.
     :type remove_orphans: bool
+    :param timeout: Seconds to wait for containers to stop (``-t``).
+        Use ``0`` to skip graceful shutdown and kill immediately.
+    :type timeout: int | None
     :raises ComposeError: If down fails.
     """
     args = ["down"]
+    if timeout is not None:
+        args.extend(["-t", str(timeout)])
     if volumes:
         args.append("-v")
     if remove_orphans:
