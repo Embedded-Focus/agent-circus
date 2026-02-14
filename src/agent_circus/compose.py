@@ -31,7 +31,15 @@ def _run_compose(
     if not compose_file.is_file():
         raise ConfigurationError(f"Compose file not found: {compose_file}")
 
-    cmd = ["docker", "compose", "-f", str(compose_file), *args]
+    cmd = [
+        "docker",
+        "compose",
+        "-p",
+        workspace.name,
+        "-f",
+        str(compose_file),
+        *args,
+    ]
     logger.debug("Running: %s", " ".join(cmd))
 
     try:
