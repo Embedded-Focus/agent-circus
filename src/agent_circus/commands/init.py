@@ -6,6 +6,7 @@ from typing import Annotated
 
 import typer
 
+from agent_circus.commands.up import up as up_command
 from agent_circus.config import (
     CONFIG_DIR_NAME,
     config_exists,
@@ -55,6 +56,14 @@ def init(
             help="Overwrite existing files when deploying.",
         ),
     ] = False,
+    up: Annotated[
+        bool,
+        typer.Option(
+            "--up",
+            "-u",
+            help="Start containers after initialization.",
+        ),
+    ] = False,
 ) -> None:
     """Initialize or verify agent container configuration.
 
@@ -72,6 +81,9 @@ def init(
         _check_config(workspace)
     else:
         _init_config(workspace)
+
+    if up:
+        up_command(workspace=workspace)
 
 
 def _deploy_templates(workspace: Path, force: bool) -> None:

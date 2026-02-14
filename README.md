@@ -80,7 +80,8 @@ selects the matching `docker compose exec` service, defaulting to
 
 ``` shell
 # Install agent configuration/environment files
-agent-circus init --deploy
+agent-circus init --deploy              # just deploy configuration files
+agent-circus init --deploy --up         # start containers right away
 
 # Generate container images
 agent-circus build
