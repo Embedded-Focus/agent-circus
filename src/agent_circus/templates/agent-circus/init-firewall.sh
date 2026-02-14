@@ -104,8 +104,8 @@ echo "Host network detected as: $HOST_NETWORK"
 iptables -A INPUT -s "$HOST_NETWORK" -j ACCEPT
 iptables -A OUTPUT -d "$HOST_NETWORK" -j ACCEPT
 
-# Apply strict firewall only for claude-code agent
-if [[ "${AGENT_TYPE:-unknown}" != "claude-code" ]]; then
+# Apply strict firewall only for "special" agent
+if [[ "${AGENT_TYPE:-unknown}" != "special" ]]; then
     echo "Agent type '${AGENT_TYPE:-unknown}' - applying permissive firewall"
     iptables -P INPUT ACCEPT
     iptables -P FORWARD ACCEPT
