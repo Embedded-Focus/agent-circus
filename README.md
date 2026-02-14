@@ -21,54 +21,49 @@ See the [uv tool documentation](https://docs.astral.sh/uv/concepts/tools/) on ho
 This is my current `agent-shell` configuration:
 
 ``` emacs-lisp
-(defun rpo/agent-shell-get-devcontainer-workspace-path (cwd)
-  "Return devcontainer workspaceFolder for CWD, or default value if none found.
+(defconst rpo/agent-shell--container-workspace-path "/workspace/"
+  "The workspace path inside agent containers.")
 
-If .devcontainer/devcontainer.json is missing, fall back to
-\"/workspaces/<project-name>\".
+(defun rpo/agent-shell--resolve-container-path (path)
+  "Resolve PATH between local filesystem and container workspace.
 
-See https://containers.dev for more information on devcontainers."
-  (let* ((devcontainer-config-file-name
-          (expand-file-name ".devcontainer/devcontainer.json" cwd))
-         (default-workspace-folder
-          (concat "/workspaces/"
-                  (file-name-nondirectory (directory-file-name cwd)))))
-    (condition-case _err
-        (map-elt (json-read-file devcontainer-config-file-name)
-                 'workspaceFolder
-                 default-workspace-folder)
-      ;; Missing file => just use default.
-      (file-missing default-workspace-folder)
-      ;; Other problems => still hard errors.
-      (permission-denied
-       (error "Not readable: %s" devcontainer-config-file-name))
-      (json-string-format
-       (error "No valid JSON: %s" devcontainer-config-file-name)))))
-
-(defun rpo/agent-shell-resolve-devcontainer-path (path)
-  "Resolve PATH between local filesystem and devcontainer workspace.
-
-Examples:
+For example:
 
 - /workspace/README.md
     => /home/xenodium/projects/kitchen-sink/README.md
 - /home/xenodium/projects/kitchen-sink/README.md
     => /workspace/README.md"
-  (let* ((cwd (agent-shell-cwd))
-         (devcontainer-path (rpo/agent-shell-get-devcontainer-workspace-path cwd)))
+  (let ((cwd (agent-shell-cwd)))
     (if (string-prefix-p cwd path)
-        ;; Local -> devcontainer
-        (string-replace cwd devcontainer-path path)
-      ;; Devcontainer -> local (with safety checks)
+        ;; Local -> container
+        (string-replace cwd rpo/agent-shell--container-workspace-path path)
+      ;; Container -> local
       (if agent-shell-text-file-capabilities
-          (if-let* ((is-dev-container (string-prefix-p devcontainer-path path))
+          (if-let* ((_ (string-prefix-p rpo/agent-shell--container-workspace-path path))
                     (local-path (expand-file-name
-                                 (string-replace devcontainer-path cwd path))))
+                                 (string-replace rpo/agent-shell--container-workspace-path cwd path))))
               (or
                (and (file-in-directory-p local-path cwd) local-path)
                (error "Resolves to path outside of working directory: %s" path))
             (error "Unexpected path outside of workspace folder: %s" path))
         (error "Refuse to resolve to local filesystem with text file capabilities disabled: %s" path)))))
+
+(defun rpo/agent-shell-compose-runner-multi (buffer)
+  "Return the docker compose command prefix to run for BUFFER's agent.
+
+Looks up the agent identifier in BUFFER's `agent-shell' config and
+selects the matching `docker compose exec` service, defaulting to
+\"claude-code\" when no identifier-specific override is found."
+  (let* ((cfg (agent-shell-get-config buffer))
+         (id  (map-elt cfg :identifier))
+         (service
+          (pcase id
+            ('claude-code "claude-code")
+            ('codex "codex")
+            ('mistral-vibe "mistral-vibe")
+            (_ "claude-code")))
+         (prefix '("docker" "compose" "-f" ".agent-circus/compose.yaml" "exec" "-ti")))
+    (append prefix (list service))))
 
 (use-package agent-shell
   :ensure t
@@ -76,16 +71,8 @@ Examples:
   (setq agent-shell-mistral-authentication
         (agent-shell-mistral-make-authentication :api-key "ignored"))
   (setq acp-logging-enabled t)
-  (setq agent-shell-container-command-runner
-        (lambda (buffer)
-          "Return devcontainer command prefix."
-          (let ((config (agent-shell-get-config buffer)))
-            (pcase (map-elt config :identifier)
-              ('claue-code '("devcontainer" "exec" "--workspace-folder" "." "--id-label" "io.devcontainer.exec-target=claude-code"))
-              ('codex '("devcontainer" "exec" "--workspace-folder" "." "--id-label" "io.devcontainer.exec-target=codex"))
-              ('mistral-vibe '("devcontainer" "exec" "--workspace-folder" "." "--id-label" "io.devcontainer.exec-target=mistral-vibe"))
-              (_ '("devcontainer" "exec" "--workspace-folder" "."))))))
-  (setq agent-shell-path-resolver-function #'rpo/agent-shell-resolve-devcontainer-path)
+  (setq agent-shell-container-command-runner #'rpo/agent-shell-compose-runner-multi)
+  (setq agent-shell-path-resolver-function #'rpo/agent-shell--resolve-container-path)
   (setq agent-shell-file-completion-enabled t))
 ```
 

@@ -11,9 +11,6 @@ TEMPLATES = files("agent_circus.templates")
 # Mapping: template name -> target name (to restore dot prefixes)
 TEMPLATE_MAPPINGS = [
     ("agent-circus", ".agent-circus"),
-    ("envrc", ".envrc"),
-    ("flake.nix", "flake.nix"),
-    ("flake.lock", "flake.lock"),
 ]
 
 

@@ -38,9 +38,6 @@ services:
     - bashhistory:/commandhistory
     - ${HOME}/.claude:/home/node/.claude
 
-    labels:
-      io.devcontainer.exec-target: "claude-code"
-
     environment:
       AGENT_TYPE: claude-code
       NODE_OPTIONS: --max-old-space-size=4096
@@ -59,9 +56,6 @@ services:
     - bashhistory:/commandhistory
     - ${HOME}/.codex:/home/node/.codex
 
-    labels:
-      io.devcontainer.exec-target: "codex"
-
     environment:
       AGENT_TYPE: codex
 
@@ -73,9 +67,6 @@ services:
     - ..:/workspace:cached
     - bashhistory:/commandhistory
     - ${HOME}/.vibe:/home/node/.vibe
-
-    labels:
-      io.devcontainer.exec-target: "mistral-vibe"
 
     environment:
       AGENT_TYPE: mistral-vibe

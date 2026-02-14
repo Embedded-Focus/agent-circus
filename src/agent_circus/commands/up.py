@@ -6,8 +6,8 @@ from typing import Annotated
 
 import typer
 
+from agent_circus.compose import compose_up
 from agent_circus.config import AVAILABLE_SERVICES, config_exists, get_workspace_path
-from agent_circus.devcontainer import devcontainer_up
 from agent_circus.exceptions import AgentCircusError
 
 logger = logging.getLogger(__name__)
@@ -70,7 +70,7 @@ def up(
         else:
             typer.echo("Starting all services...")
 
-        devcontainer_up(workspace)
+        compose_up(workspace, services_to_start or None, build=build)
 
     except AgentCircusError as e:
         typer.echo(f"Error: {e}", err=True)
