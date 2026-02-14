@@ -15,6 +15,7 @@ app.command()(build.build)
 app.command()(up.up)
 app.command()(ps.ps)
 app.command()(remove.remove)
+app.command(name="rm", hidden=True)(remove.remove)
 
 
 def run_cli() -> None:
