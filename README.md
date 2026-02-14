@@ -89,6 +89,9 @@ agent-circus build
 # Create containers
 agent-circus up
 
+# Show status of agent containers
+agent-circus ps
+
 # Remove all related resources
 agent-circus remove                     # just remove containers
 agent-circus remove --destroy           # also remove agent configuration/environment files

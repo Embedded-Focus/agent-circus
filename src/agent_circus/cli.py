@@ -2,7 +2,7 @@
 
 import typer
 
-from agent_circus.commands import build, init, remove, up
+from agent_circus.commands import build, init, ps, remove, up
 
 app = typer.Typer(
     name="agent-circus",
@@ -13,6 +13,7 @@ app = typer.Typer(
 app.command()(init.init)
 app.command()(build.build)
 app.command()(up.up)
+app.command()(ps.ps)
 app.command()(remove.remove)
 
 
