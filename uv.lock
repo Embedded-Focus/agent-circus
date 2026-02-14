@@ -8,7 +8,6 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "docker" },
-    { name = "pyyaml" },
     { name = "typer" },
 ]
 
@@ -24,7 +23,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "docker", specifier = ">=7.0.0" },
-    { name = "pyyaml", specifier = ">=6.0" },
     { name = "typer", specifier = ">=0.21.1" },
 ]
 

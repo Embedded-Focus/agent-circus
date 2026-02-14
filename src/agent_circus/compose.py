@@ -192,32 +192,3 @@ def compose_ps(
 
     result = _run_compose(args, workspace, capture_output=True)
     return result.stdout
-
-
-def compose_logs(
-    workspace: Path,
-    services: list[str] | None = None,
-    follow: bool = False,
-    tail: int | None = None,
-) -> None:
-    """Show logs from containers.
-
-    :param workspace: Workspace path.
-    :type workspace: Path
-    :param services: Services to show logs for, or None for all.
-    :type services: list[str] | None
-    :param follow: Follow log output.
-    :type follow: bool
-    :param tail: Number of lines to show from end.
-    :type tail: int | None
-    :raises ComposeError: If logs fails.
-    """
-    services = validate_services(services or [])
-    args = ["logs"]
-    if follow:
-        args.append("-f")
-    if tail is not None:
-        args.extend(["--tail", str(tail)])
-    args.extend(services)
-
-    _run_compose(args, workspace)
