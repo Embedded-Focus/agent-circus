@@ -4,7 +4,7 @@ This repository contains my AI agents setup. Each agent is running in its respec
 
 IDEs interface with agents via the [Agent Client Protocol](https://agentclientprotocol.com/) (ACP).
 
-## Configuring the Environment
+## Getting Started
 
 ### Installing the `agent-circus` Tool
 
@@ -12,69 +12,20 @@ IDEs interface with agents via the [Agent Client Protocol](https://agentclientpr
 uv tool install .
 ```
 
-You can then remove containers of a DevContainer environment by issuing `agent-circus`.
-
 See the [uv tool documentation](https://docs.astral.sh/uv/concepts/tools/) on how to work with tools in general.
 
-### Setting up Editors to Work with ACP: Emacs
+After installing the environment you can start right away firing up some agent containers in one of your projects ([instant mode](#instant-mode)):
 
-This is my current `agent-shell` configuration:
+``` shell
+agent-circus up
+```
 
-``` emacs-lisp
-(defconst rpo/agent-shell--container-workspace-path "/workspace/"
-  "The workspace path inside agent containers.")
+### Uninstalling
 
-(defun rpo/agent-shell--resolve-container-path (path)
-  "Resolve PATH between local filesystem and container workspace.
+In case you want to get rid of it:
 
-For example:
-
-- /workspace/README.md
-    => /home/xenodium/projects/kitchen-sink/README.md
-- /home/xenodium/projects/kitchen-sink/README.md
-    => /workspace/README.md"
-  (let ((cwd (agent-shell-cwd)))
-    (if (string-prefix-p cwd path)
-        ;; Local -> container
-        (string-replace cwd rpo/agent-shell--container-workspace-path path)
-      ;; Container -> local
-      (if agent-shell-text-file-capabilities
-          (if-let* ((_ (string-prefix-p rpo/agent-shell--container-workspace-path path))
-                    (local-path (expand-file-name
-                                 (string-replace rpo/agent-shell--container-workspace-path cwd path))))
-              (or
-               (and (file-in-directory-p local-path cwd) local-path)
-               (error "Resolves to path outside of working directory: %s" path))
-            (error "Unexpected path outside of workspace folder: %s" path))
-        (error "Refuse to resolve to local filesystem with text file capabilities disabled: %s" path)))))
-
-(defun rpo/agent-shell-circus-runner-multi (buffer)
-  "Return the docker compose command prefix to run for BUFFER's agent.
-
-Looks up the agent identifier in BUFFER's `agent-shell' config and
-selects the matching service using `agent-circus exec`, defaulting to
-\"claude-code\" when no identifier-specific override is found.
-
-Works in both instant mode and deploy mode."
-  (let* ((cfg (agent-shell-get-config buffer))
-         (id  (map-elt cfg :identifier))
-         (service
-          (pcase id
-            ('claude-code "claude-code")
-            ('codex "codex")
-            ('mistral-vibe "mistral-vibe")
-            (_ "claude-code"))))
-    (list "agent-circus" "exec" service "--")))
-
-(use-package agent-shell
-  :ensure t
-  :config
-  (setq agent-shell-mistral-authentication
-        (agent-shell-mistral-make-authentication :api-key "ignored"))
-  (setq acp-logging-enabled t)
-  (setq agent-shell-container-command-runner #'rpo/agent-shell-circus-runner-multi)
-  (setq agent-shell-path-resolver-function #'rpo/agent-shell--resolve-container-path)
-  (setq agent-shell-file-completion-enabled t))
+``` shell
+uv tool uninstall agent-circus
 ```
 
 ## Working with the Environment
@@ -133,8 +84,65 @@ agent-circus remove --destroy --force     # don't ask for permission
 When both a deployed `.agent-circus/` directory and instant mode are
 available, deploy mode takes priority.
 
-## Uninstalling
+## Setting up Editors to Work with ACP
 
-``` shell
-uv tool uninstall agent-circus
+### Emacs
+
+This is a working [agent-shell](https://github.com/xenodium/agent-shell) configuration based `agent-circus`:
+
+``` emacs-lisp
+(defconst rpo/agent-shell--container-workspace-path "/workspace/"
+  "The workspace path inside agent containers.")
+
+(defun rpo/agent-shell--resolve-container-path (path)
+  "Resolve PATH between local filesystem and container workspace.
+
+For example:
+
+- /workspace/README.md
+    => /home/xenodium/projects/kitchen-sink/README.md
+- /home/xenodium/projects/kitchen-sink/README.md
+    => /workspace/README.md"
+  (let ((cwd (agent-shell-cwd)))
+    (if (string-prefix-p cwd path)
+        ;; Local -> container
+        (string-replace cwd rpo/agent-shell--container-workspace-path path)
+      ;; Container -> local
+      (if agent-shell-text-file-capabilities
+          (if-let* ((_ (string-prefix-p rpo/agent-shell--container-workspace-path path))
+                    (local-path (expand-file-name
+                                 (string-replace rpo/agent-shell--container-workspace-path cwd path))))
+              (or
+               (and (file-in-directory-p local-path cwd) local-path)
+               (error "Resolves to path outside of working directory: %s" path))
+            (error "Unexpected path outside of workspace folder: %s" path))
+        (error "Refuse to resolve to local filesystem with text file capabilities disabled: %s" path)))))
+
+(defun rpo/agent-shell-circus-runner-multi (buffer)
+  "Return the docker compose command prefix to run for BUFFER's agent.
+
+Looks up the agent identifier in BUFFER's `agent-shell' config and
+selects the matching service using `agent-circus exec`, defaulting to
+\"claude-code\" when no identifier-specific override is found.
+
+Works in both instant mode and deploy mode."
+  (let* ((cfg (agent-shell-get-config buffer))
+         (id  (map-elt cfg :identifier))
+         (service
+          (pcase id
+            ('claude-code "claude-code")
+            ('codex "codex")
+            ('mistral-vibe "mistral-vibe")
+            (_ "claude-code"))))
+    (list "agent-circus" "exec" service "--")))
+
+(use-package agent-shell
+  :ensure t
+  :config
+  (setq agent-shell-mistral-authentication
+        (agent-shell-mistral-make-authentication :api-key "ignored"))
+  (setq acp-logging-enabled t)
+  (setq agent-shell-container-command-runner #'rpo/agent-shell-circus-runner-multi)
+  (setq agent-shell-path-resolver-function #'rpo/agent-shell--resolve-container-path)
+  (setq agent-shell-file-completion-enabled t))
 ```
