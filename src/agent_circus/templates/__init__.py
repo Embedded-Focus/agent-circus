@@ -1,9 +1,11 @@
 """Template file access utilities."""
 
 import shutil
+from contextlib import AbstractContextManager
 from importlib.resources import as_file, files
 from importlib.resources.abc import Traversable
 from pathlib import Path
+from typing import Literal
 
 TEMPLATES = files("agent_circus.templates")
 
@@ -40,6 +42,18 @@ def _deploy_dir(
         else:
             shutil.copy2(item, dst_item)
             deployed.append(dst_item)
+
+
+def template_dir_context() -> AbstractContextManager[Path, Literal[False]]:
+    """Return a context manager providing a real filesystem Path to the bundled template directory.
+
+    Used by instant mode to point docker compose at the package's
+    embedded templates without copying them to the workspace.
+
+    :returns: Context manager yielding the template directory path.
+    :rtype: AbstractContextManager[Path]
+    """
+    return as_file(TEMPLATES.joinpath("agent-circus"))
 
 
 def get_template_path(name: str) -> Traversable:

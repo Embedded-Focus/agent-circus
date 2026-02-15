@@ -2,7 +2,7 @@
 
 import typer
 
-from agent_circus.commands import build, init, ps, remove, up
+from agent_circus.commands import build, exec_, init, ps, remove, up
 
 app = typer.Typer(
     name="agent-circus",
@@ -14,6 +14,7 @@ app.command()(init.init)
 app.command()(build.build)
 app.command()(up.up)
 app.command()(ps.ps)
+app.command(name="exec")(exec_.exec_cmd)
 app.command()(remove.remove)
 app.command(name="rm", hidden=True)(remove.remove)
 

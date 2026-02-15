@@ -48,12 +48,14 @@ For example:
             (error "Unexpected path outside of workspace folder: %s" path))
         (error "Refuse to resolve to local filesystem with text file capabilities disabled: %s" path)))))
 
-(defun rpo/agent-shell-compose-runner-multi (buffer)
+(defun rpo/agent-shell-circus-runner-multi (buffer)
   "Return the docker compose command prefix to run for BUFFER's agent.
 
 Looks up the agent identifier in BUFFER's `agent-shell' config and
-selects the matching `docker compose exec` service, defaulting to
-\"claude-code\" when no identifier-specific override is found."
+selects the matching service using `agent-circus exec`, defaulting to
+\"claude-code\" when no identifier-specific override is found.
+
+Works in both instant mode and deploy mode."
   (let* ((cfg (agent-shell-get-config buffer))
          (id  (map-elt cfg :identifier))
          (service
@@ -61,9 +63,8 @@ selects the matching `docker compose exec` service, defaulting to
             ('claude-code "claude-code")
             ('codex "codex")
             ('mistral-vibe "mistral-vibe")
-            (_ "claude-code")))
-         (prefix '("docker" "compose" "-f" ".agent-circus/compose.yaml" "exec" "-ti")))
-    (append prefix (list service))))
+            (_ "claude-code"))))
+    (list "agent-circus" "exec" service "--")))
 
 (use-package agent-shell
   :ensure t
@@ -71,32 +72,66 @@ selects the matching `docker compose exec` service, defaulting to
   (setq agent-shell-mistral-authentication
         (agent-shell-mistral-make-authentication :api-key "ignored"))
   (setq acp-logging-enabled t)
-  (setq agent-shell-container-command-runner #'rpo/agent-shell-compose-runner-multi)
+  (setq agent-shell-container-command-runner #'rpo/agent-shell-circus-runner-multi)
   (setq agent-shell-path-resolver-function #'rpo/agent-shell--resolve-container-path)
   (setq agent-shell-file-completion-enabled t))
 ```
 
 ## Working with the Environment
 
-``` shell
-# Install agent configuration/environment files
-agent-circus init --deploy              # just deploy configuration files
-agent-circus init --deploy --up         # start containers right away
+There are two modes of operation:
 
-# Generate container images
+### Instant Mode
+
+Instant mode uses the templates bundled in the `agent-circus` package
+directly. No files are written to your project directory. Just run
+commands against any workspace:
+
+``` shell
+# Build container images
 agent-circus build
 
-# Create containers
+# Start containers
 agent-circus up
 
 # Show status of agent containers
 agent-circus ps
 
+# Execute a command in a running container
+agent-circus exec claude-code -- claude-code-acp
+agent-circus exec codex -- codex-acp
+agent-circus exec -T claude-code -- echo hello   # non-interactive
+
 # Remove all related resources
-agent-circus remove                     # just remove containers
-agent-circus remove --destroy           # also remove agent configuration/environment files
-agent-circus remove --destroy  --force  # don't ask for permission
+agent-circus remove
+agent-circus remove --volumes             # also remove named volumes
+agent-circus remove --force               # don't ask for permission
 ```
+
+### Deploy Mode
+
+Deploy mode copies configuration files into a `.agent-circus/`
+directory inside your project. Use this if you need to customize the
+`Dockerfile` or `compose.yaml` per project.
+
+``` shell
+# Deploy configuration files to the workspace
+agent-circus init --deploy
+agent-circus init --deploy --up           # start containers right away
+
+# All other commands work the same — deploy mode is auto-detected
+agent-circus build
+agent-circus up
+agent-circus ps
+agent-circus exec claude-code -- claude-code-acp
+
+# Remove containers and deployed files
+agent-circus remove --destroy             # remove containers + .agent-circus/
+agent-circus remove --destroy --force     # don't ask for permission
+```
+
+When both a deployed `.agent-circus/` directory and instant mode are
+available, deploy mode takes priority.
 
 ## Uninstalling
 

@@ -7,7 +7,7 @@ from typing import Annotated
 import typer
 
 from agent_circus.compose import compose_ps
-from agent_circus.config import AVAILABLE_SERVICES, config_exists, get_workspace_path
+from agent_circus.config import AVAILABLE_SERVICES, get_workspace_path
 from agent_circus.exceptions import AgentCircusError
 
 logger = logging.getLogger(__name__)
@@ -51,13 +51,6 @@ def ps(
         agent-circus ps --all                # Include stopped containers
     """
     workspace = workspace or get_workspace_path()
-
-    if not config_exists(workspace):
-        typer.echo(
-            "Error: Configuration not found. Run 'agent-circus init' first.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
 
     try:
         output = compose_ps(workspace, services or None, all_containers=all_containers)

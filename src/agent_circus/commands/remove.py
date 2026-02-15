@@ -18,11 +18,15 @@ logger = logging.getLogger(__name__)
 def destroy_deployed_files(workspace: Path) -> list[Path]:
     """Remove all files/directories deployed by 'init --deploy'.
 
+    Only applicable in deploy mode.  In instant mode there are no
+    deployed files to remove.
+
     :param workspace: Workspace directory.
     :type workspace: Path
     :returns: List of removed paths.
     :rtype: list[Path]
     """
+
     removed = []
     for _, dst_name in TEMPLATE_MAPPINGS:
         path = workspace / dst_name
@@ -97,13 +101,6 @@ def remove(
     if destroy:
         volumes = True
 
-    if not config_exists(workspace):
-        typer.echo(
-            "Error: Configuration not found. Run 'agent-circus init' first.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
-
     # Confirm removal unless --force is specified
     if not force:
         if destroy:
@@ -132,11 +129,14 @@ def remove(
         typer.echo("Containers removed successfully.")
 
         if destroy:
-            typer.echo("Removing deployed files...")
-            removed = destroy_deployed_files(workspace)
-            for path in removed:
-                typer.echo(f"  Removed: {path}")
-            typer.echo("Deployed files removed successfully.")
+            if config_exists(workspace):
+                typer.echo("Removing deployed files...")
+                removed = destroy_deployed_files(workspace)
+                for path in removed:
+                    typer.echo(f"  Removed: {path}")
+                typer.echo("Deployed files removed successfully.")
+            else:
+                typer.echo("No deployed files to remove (running in instant mode).")
 
     except AgentCircusError as e:
         typer.echo(f"Error: {e}", err=True)

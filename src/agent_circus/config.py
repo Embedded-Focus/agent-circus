@@ -66,3 +66,22 @@ def config_exists(workspace: Path | None = None) -> bool:
     config_dir = get_config_dir(workspace)
     compose_file = get_compose_file(workspace)
     return config_dir.is_dir() and compose_file.is_file()
+
+
+def resolve_config(workspace: Path) -> Path | None:
+    """Resolve the effective configuration directory.
+
+    Checks whether a deployed ``.agent-circus/`` directory exists in the
+    workspace.  Returns the config directory path when found, or ``None``
+    to indicate that the caller should use :func:`template_dir_context`
+    from the templates module instead (instant mode).
+
+    :param workspace: Workspace path.
+    :type workspace: Path
+    :returns: Path to the deployed config directory, or ``None``.
+    :rtype: Path | None
+    """
+    config_dir = workspace / CONFIG_DIR_NAME
+    if config_dir.is_dir() and (config_dir / COMPOSE_FILE_NAME).is_file():
+        return config_dir
+    return None

@@ -7,7 +7,7 @@ from typing import Annotated
 import typer
 
 from agent_circus.compose import compose_build
-from agent_circus.config import AVAILABLE_SERVICES, config_exists, get_workspace_path
+from agent_circus.config import AVAILABLE_SERVICES, get_workspace_path
 from agent_circus.exceptions import AgentCircusError
 
 logger = logging.getLogger(__name__)
@@ -51,13 +51,6 @@ def build(
         agent-circus build --no-cache         # Build without cache
     """
     workspace = workspace or get_workspace_path()
-
-    if not config_exists(workspace):
-        typer.echo(
-            "Error: Configuration not found. Run 'agent-circus init' first.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
 
     services_to_build = services or []
 

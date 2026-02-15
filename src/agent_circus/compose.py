@@ -1,36 +1,44 @@
 """Docker Compose operations for Agent Circus."""
 
 import logging
+import os
 import subprocess
 from pathlib import Path
 
-from .config import AVAILABLE_SERVICES, get_compose_file, get_config_dir
+from .config import AVAILABLE_SERVICES, COMPOSE_FILE_NAME, resolve_config
 from .exceptions import ComposeError, ConfigurationError
+from .templates import template_dir_context
 
 logger = logging.getLogger(__name__)
 
 
-def _run_compose(
+def _exec_compose(
     args: list[str],
     workspace: Path,
+    compose_file: Path,
+    cwd: Path,
     capture_output: bool = False,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run a docker compose command.
+    """Execute a docker compose command.
 
-    :param args: Arguments to pass to docker compose.
+    :param args: Arguments to pass after ``docker compose -p ... -f ...``.
     :type args: list[str]
-    :param workspace: Workspace path.
+    :param workspace: Workspace path (used to derive the project name).
     :type workspace: Path
+    :param compose_file: Absolute path to the compose file.
+    :type compose_file: Path
+    :param cwd: Working directory for the subprocess.
+    :type cwd: Path
     :param capture_output: Capture stdout/stderr instead of streaming.
     :type capture_output: bool
+    :param env: Environment variables for the subprocess, or None to
+        inherit the current environment.
+    :type env: dict[str, str] | None
     :returns: Completed process result.
     :rtype: subprocess.CompletedProcess[str]
     :raises ComposeError: If command fails.
     """
-    compose_file = get_compose_file(workspace)
-    if not compose_file.is_file():
-        raise ConfigurationError(f"Compose file not found: {compose_file}")
-
     cmd = [
         "docker",
         "compose",
@@ -45,10 +53,11 @@ def _run_compose(
     try:
         result = subprocess.run(
             cmd,
-            cwd=str(get_config_dir(workspace)),
+            cwd=str(cwd),
             capture_output=capture_output,
             text=True,
             check=False,
+            env=env,
         )
         if result.returncode != 0:
             error_msg = result.stderr if capture_output else "Command failed"
@@ -58,6 +67,38 @@ def _run_compose(
         raise ComposeError("docker compose not found. Is Docker installed?") from e
     except subprocess.SubprocessError as e:
         raise ComposeError(f"Failed to run docker compose: {e}") from e
+
+
+def _run_compose(
+    args: list[str],
+    workspace: Path,
+    capture_output: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    """Run a docker compose command, auto-detecting deploy or instant mode.
+
+    :param args: Arguments to pass to docker compose.
+    :type args: list[str]
+    :param workspace: Workspace path.
+    :type workspace: Path
+    :param capture_output: Capture stdout/stderr instead of streaming.
+    :type capture_output: bool
+    :returns: Completed process result.
+    :rtype: subprocess.CompletedProcess[str]
+    :raises ComposeError: If command fails.
+    """
+    config_dir = resolve_config(workspace)
+
+    if config_dir is not None:
+        compose_file = config_dir / COMPOSE_FILE_NAME
+        return _exec_compose(args, workspace, compose_file, config_dir, capture_output)
+
+    with template_dir_context() as template_dir:
+        compose_file = template_dir / COMPOSE_FILE_NAME
+        env = os.environ.copy()
+        env["AGENT_CIRCUS_WORKSPACE"] = str(workspace)
+        return _exec_compose(
+            args, workspace, compose_file, template_dir, capture_output, env=env
+        )
 
 
 def validate_services(services: list[str]) -> list[str]:
@@ -192,3 +233,31 @@ def compose_ps(
 
     result = _run_compose(args, workspace, capture_output=True)
     return result.stdout
+
+
+def compose_exec(
+    workspace: Path,
+    service: str,
+    command: list[str],
+    no_tty: bool = False,
+) -> None:
+    """Execute a command in a running service container.
+
+    :param workspace: Workspace path.
+    :type workspace: Path
+    :param service: Service name to exec into.
+    :type service: str
+    :param command: Command and arguments to run.
+    :type command: list[str]
+    :param no_tty: Disable pseudo-TTY allocation.
+    :type no_tty: bool
+    :raises ComposeError: If exec fails.
+    """
+    validate_services([service])
+    args = ["exec"]
+    if no_tty:
+        args.append("-T")
+    args.append(service)
+    args.extend(command)
+
+    _run_compose(args, workspace)
