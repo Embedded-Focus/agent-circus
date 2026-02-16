@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -10,6 +11,19 @@ from .exceptions import ComposeError, ConfigurationError
 from .templates import template_dir_context
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_project_name(name: str) -> str:
+    """Sanitize a name for use as a Docker Compose project name.
+
+    Docker Compose requires project names to consist only of lowercase
+    alphanumeric characters, hyphens, and underscores, and to start with
+    a letter or number.
+    """
+    name = name.lower()
+    name = re.sub(r"[^a-z0-9_-]", "-", name)
+    name = re.sub(r"^[^a-z0-9]+", "", name)
+    return name or "project"
 
 
 def _exec_compose(
@@ -43,7 +57,7 @@ def _exec_compose(
         "docker",
         "compose",
         "-p",
-        workspace.name,
+        _sanitize_project_name(workspace.name),
         "-f",
         str(compose_file),
         *args,
