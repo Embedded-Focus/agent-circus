@@ -249,6 +249,26 @@ def compose_ps(
     return result.stdout
 
 
+def compose_is_service_running(workspace: Path, service: str) -> bool:
+    """Check if a service container is currently running.
+
+    :param workspace: Workspace path.
+    :type workspace: Path
+    :param service: Service name to check.
+    :type service: str
+    :returns: True if the service has a running container.
+    :rtype: bool
+    """
+    validate_services([service])
+    args = ["ps", "--status", "running", "--format", "json", service]
+    try:
+        result = _run_compose(args, workspace, capture_output=True)
+    except ComposeError:
+        return False
+    output = result.stdout.strip()
+    return len(output) > 0 and output != "[]"
+
+
 def compose_exec(
     workspace: Path,
     service: str,

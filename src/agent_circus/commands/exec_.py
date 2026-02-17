@@ -9,7 +9,7 @@ from typing import Annotated
 
 import typer
 
-from agent_circus.compose import compose_exec
+from agent_circus.compose import compose_exec, compose_is_service_running, compose_up
 from agent_circus.config import AVAILABLE_SERVICES, get_workspace_path
 from agent_circus.exceptions import AgentCircusError
 
@@ -49,10 +49,11 @@ def exec_cmd(
         ),
     ] = False,
 ) -> None:
-    """Execute a command in a running agent container.
+    """Execute a command in an agent container.
 
     Runs a command inside the specified service container using
-    docker compose exec. Works in both deploy and instant mode.
+    docker compose exec. If the container is not running, it is
+    started automatically. Works in both deploy and instant mode.
 
     Examples:
         agent-circus exec claude-code                          # Interactive shell
@@ -64,6 +65,10 @@ def exec_cmd(
     cmd = command or []
 
     try:
+        if not compose_is_service_running(workspace, service):
+            typer.echo(f"Service {service} is not running. Starting it...")
+            compose_up(workspace, [service])
+
         compose_exec(workspace, service, cmd, no_tty=no_tty)
     except AgentCircusError as e:
         typer.echo(f"Error: {e}", err=True)

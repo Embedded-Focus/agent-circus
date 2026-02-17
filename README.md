@@ -14,11 +14,20 @@ uv tool install .
 
 See the [uv tool documentation](https://docs.astral.sh/uv/concepts/tools/) on how to work with tools in general.
 
-After installing the environment you can start right away firing up some agent containers in one of your projects ([instant mode](#instant-mode)):
+After installing you can start right away in one of your projects
+([instant mode](#instant-mode)):
 
 ``` shell
-agent-circus up
+agent-circus build
+agent-circus exec claude-code -- claude-code-acp
 ```
+
+The `exec` command automatically starts the container if it is not
+running yet. There is no separate `up` step needed.
+
+**Note:** Auto-started containers are not automatically removed when
+they are no longer in use. Run `agent-circus remove` to clean up idle
+containers.
 
 ### Uninstalling
 
@@ -42,16 +51,17 @@ commands against any workspace:
 # Build container images
 agent-circus build
 
-# Start containers
-agent-circus up
-
-# Show status of agent containers
-agent-circus ps
-
-# Execute a command in a running container
+# Execute a command in a container (starts it automatically)
 agent-circus exec claude-code -- claude-code-acp
 agent-circus exec codex -- codex-acp
 agent-circus exec -T claude-code -- echo hello   # non-interactive
+
+# Optionally start containers ahead of time
+agent-circus up                           # start all services
+agent-circus up claude-code               # start a single service
+
+# Show status of agent containers
+agent-circus ps
 
 # Remove all related resources
 agent-circus remove
@@ -68,12 +78,9 @@ directory inside your project. Use this if you need to customize the
 ``` shell
 # Deploy configuration files to the workspace
 agent-circus init --deploy
-agent-circus init --deploy --up           # start containers right away
 
-# All other commands work the same — deploy mode is auto-detected
+# All other commands work the same; deploy mode is auto-detected
 agent-circus build
-agent-circus up
-agent-circus ps
 agent-circus exec claude-code -- claude-code-acp
 
 # Remove containers and deployed files
