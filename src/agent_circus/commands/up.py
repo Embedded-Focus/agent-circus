@@ -45,8 +45,7 @@ def up(
     Starts the specified services using docker compose. If no services
     are specified, all services will be started.
 
-    By default, containers run in detached mode. Use --attach to run
-    in the foreground and see container output.
+    All containers run in detached mode.
 
     Examples:
         agent-circus up                      # Start all services
