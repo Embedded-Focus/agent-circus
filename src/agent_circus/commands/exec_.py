@@ -9,9 +9,15 @@ from typing import Annotated
 
 import typer
 
-from agent_circus.compose import compose_exec, compose_is_service_running, compose_up
+from agent_circus.compose import (
+    compose_down,
+    compose_exec,
+    compose_is_service_running,
+    compose_up,
+)
 from agent_circus.config import AVAILABLE_SERVICES, get_workspace_path
 from agent_circus.exceptions import AgentCircusError
+from agent_circus.state import acquire, release
 
 logger = logging.getLogger(__name__)
 
@@ -65,11 +71,18 @@ def exec_cmd(
     cmd = command or []
 
     try:
-        if not compose_is_service_running(workspace, service):
-            typer.echo(f"Service {service} is not running. Starting it...")
-            compose_up(workspace, [service])
+        acquire(workspace, service)
+        try:
+            if not compose_is_service_running(workspace, service):
+                typer.echo(f"Service {service} is not running. Starting it...")
+                compose_up(workspace, [service])
 
-        compose_exec(workspace, service, cmd, no_tty=no_tty)
+            compose_exec(workspace, service, cmd, no_tty=no_tty)
+        finally:
+            refs = release(workspace, service)
+            if refs == 0:
+                logger.info("Last reference released, stopping %s", service)
+                compose_down(workspace, timeout=0)
     except AgentCircusError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e

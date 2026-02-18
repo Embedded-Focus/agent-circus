@@ -1,29 +1,43 @@
 """Docker Compose operations for Agent Circus."""
 
+import json
 import logging
 import os
-import re
 import subprocess
 from pathlib import Path
 
-from .config import AVAILABLE_SERVICES, COMPOSE_FILE_NAME, resolve_config
+from .config import (
+    AVAILABLE_SERVICES,
+    COMPOSE_FILE_NAME,
+    load_config,
+    resolve_config,
+    sanitize_project_name,
+)
 from .exceptions import ComposeError, ConfigurationError
+from .state import get_shadow_override_path
 from .templates import template_dir_context
 
 logger = logging.getLogger(__name__)
 
 
-def _sanitize_project_name(name: str) -> str:
-    """Sanitize a name for use as a Docker Compose project name.
+def _build_shadow_override(shadow: list[str]) -> str:
+    """Build a Docker Compose override YAML that shadows paths with /dev/null.
 
-    Docker Compose requires project names to consist only of lowercase
-    alphanumeric characters, hyphens, and underscores, and to start with
-    a letter or number.
+    For each path in *shadow*, every service gets a read-only bind mount
+    of ``/dev/null`` over ``/workspace/<path>``.  When merged with the
+    base compose file via ``-f``, these mounts take precedence over the
+    workspace volume, effectively hiding the host files from the
+    container.
+
+    :param shadow: Workspace-relative paths to shadow.
+    :type shadow: list[str]
+    :returns: Compose override YAML string.
+    :rtype: str
     """
-    name = name.lower()
-    name = re.sub(r"[^a-z0-9_-]", "-", name)
-    name = re.sub(r"^[^a-z0-9]+", "", name)
-    return name or "project"
+    volumes = [f"/dev/null:/workspace/{p}:ro" for p in shadow]
+    services = {name: {"volumes": volumes} for name in AVAILABLE_SERVICES}
+    # Use JSON as a subset of YAML — avoids a PyYAML dependency.
+    return json.dumps({"services": services})
 
 
 def _exec_compose(
@@ -33,6 +47,7 @@ def _exec_compose(
     cwd: Path,
     capture_output: bool = False,
     env: dict[str, str] | None = None,
+    shadow: list[str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Execute a docker compose command.
 
@@ -49,6 +64,13 @@ def _exec_compose(
     :param env: Environment variables for the subprocess, or None to
         inherit the current environment.
     :type env: dict[str, str] | None
+    :param shadow: Workspace-relative paths to shadow with ``/dev/null``
+        bind mounts.  A compose override file is written to the
+        runtime state directory and passed as an additional ``-f``
+        flag.  The file uses a deterministic path so that every
+        ``docker compose`` invocation for the same workspace sees a
+        consistent set of ``-f`` paths.
+    :type shadow: list[str] | None
     :returns: Completed process result.
     :rtype: subprocess.CompletedProcess[str]
     :raises ComposeError: If command fails.
@@ -57,11 +79,23 @@ def _exec_compose(
         "docker",
         "compose",
         "-p",
-        _sanitize_project_name(workspace.name),
+        sanitize_project_name(workspace.name),
         "-f",
         str(compose_file),
-        *args,
     ]
+
+    shadow_path = get_shadow_override_path(workspace)
+    if shadow:
+        override_content = _build_shadow_override(shadow)
+        shadow_path.write_text(override_content)
+        cmd.extend(["-f", str(shadow_path)])
+        logger.debug("Shadow override: %s", shadow_path)
+    else:
+        # Remove a stale override from a previous run so Compose
+        # does not accidentally pick it up.
+        shadow_path.unlink(missing_ok=True)
+
+    cmd.extend(args)
     logger.debug("Running: %s", " ".join(cmd))
 
     try:
@@ -90,6 +124,9 @@ def _run_compose(
 ) -> subprocess.CompletedProcess[str]:
     """Run a docker compose command, auto-detecting deploy or instant mode.
 
+    Loads the merged configuration (user-global + project-local) and
+    applies any ``shadow`` paths as ``/dev/null`` bind-mount overrides.
+
     :param args: Arguments to pass to docker compose.
     :type args: list[str]
     :param workspace: Workspace path.
@@ -100,18 +137,29 @@ def _run_compose(
     :rtype: subprocess.CompletedProcess[str]
     :raises ComposeError: If command fails.
     """
+    config = load_config(workspace)
+    shadow = config.get("shadow", [])
+
     config_dir = resolve_config(workspace)
 
     if config_dir is not None:
         compose_file = config_dir / COMPOSE_FILE_NAME
-        return _exec_compose(args, workspace, compose_file, config_dir, capture_output)
+        return _exec_compose(
+            args, workspace, compose_file, config_dir, capture_output, shadow=shadow
+        )
 
     with template_dir_context() as template_dir:
         compose_file = template_dir / COMPOSE_FILE_NAME
         env = os.environ.copy()
         env["AGENT_CIRCUS_WORKSPACE"] = str(workspace)
         return _exec_compose(
-            args, workspace, compose_file, template_dir, capture_output, env=env
+            args,
+            workspace,
+            compose_file,
+            template_dir,
+            capture_output,
+            env=env,
+            shadow=shadow,
         )
 
 

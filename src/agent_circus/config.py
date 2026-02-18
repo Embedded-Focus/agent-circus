@@ -1,14 +1,49 @@
 """Configuration management for Agent Circus CLI."""
 
+import logging
+import os
+import re
+import tomllib
 from pathlib import Path
+from typing import Any
+
+from .exceptions import ConfigurationError
 
 CONFIG_DIR_NAME = ".agent-circus"
 
 COMPOSE_FILE_NAME = "compose.yaml"
 
+COMPOSE_SHADOW_FILE_NAME = "compose.shadow.json"
+
+CONFIG_FILE_NAME = "config.toml"
+
 DOCKERFILE_NAME = "Dockerfile"
 
 AVAILABLE_SERVICES = ["claude-code", "codex", "mistral-vibe"]
+
+DEFAULT_CONFIG: dict[str, Any] = {
+    "shadow": [],
+}
+
+logger = logging.getLogger(__name__)
+
+
+def sanitize_project_name(name: str) -> str:
+    """Sanitize a name for use as a Docker Compose project name.
+
+    Docker Compose requires project names to consist only of lowercase
+    alphanumeric characters, hyphens, and underscores, and to start with
+    a letter or number.
+
+    :param name: Raw project name (typically ``workspace.name``).
+    :type name: str
+    :returns: Sanitized project name.
+    :rtype: str
+    """
+    name = name.lower()
+    name = re.sub(r"[^a-z0-9_-]", "-", name)
+    name = re.sub(r"^[^a-z0-9]+", "", name)
+    return name or "project"
 
 
 def get_workspace_path() -> Path:
@@ -85,3 +120,75 @@ def resolve_config(workspace: Path) -> Path | None:
     if config_dir.is_dir() and (config_dir / COMPOSE_FILE_NAME).is_file():
         return config_dir
     return None
+
+
+def get_user_config_path() -> Path:
+    """Get the path to the user-global configuration file.
+
+    Follows the XDG Base Directory Specification: uses
+    ``$XDG_CONFIG_HOME/agent-circus/config.toml``, falling back to
+    ``~/.config/agent-circus/config.toml`` when the environment
+    variable is unset or empty.
+
+    :returns: Path to the user-global config file.
+    :rtype: Path
+    """
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".config"
+    return base / "agent-circus" / CONFIG_FILE_NAME
+
+
+def get_project_config_path(workspace: Path) -> Path:
+    """Get the path to the project-local configuration file.
+
+    :param workspace: Workspace path.
+    :type workspace: Path
+    :returns: Path to the project-local config file.
+    :rtype: Path
+    """
+    return workspace / CONFIG_DIR_NAME / CONFIG_FILE_NAME
+
+
+def _load_toml(path: Path) -> dict[str, Any]:
+    """Load and parse a TOML file.
+
+    :param path: Path to the TOML file.
+    :type path: Path
+    :returns: Parsed TOML contents.
+    :rtype: dict[str, Any]
+    :raises ConfigurationError: If the file contains invalid TOML.
+    """
+    try:
+        with open(path, "rb") as f:
+            return tomllib.load(f)
+    except tomllib.TOMLDecodeError as e:
+        raise ConfigurationError(f"Invalid TOML in {path}: {e}") from e
+
+
+def load_config(workspace: Path) -> dict[str, Any]:
+    """Load and merge configuration from user-global and project-local files.
+
+    Resolution order (last wins):
+
+    1. Built-in defaults
+    2. User-global: ``$XDG_CONFIG_HOME/agent-circus/config.toml``
+    3. Project-local: ``<workspace>/.agent-circus/config.toml``
+
+    Missing files are silently skipped.  Project-local values override
+    user-global values at the top level (shallow merge).
+
+    :param workspace: Workspace path.
+    :type workspace: Path
+    :returns: Merged configuration dictionary.
+    :rtype: dict[str, Any]
+    :raises ConfigurationError: If a config file contains invalid TOML.
+    """
+    config = DEFAULT_CONFIG.copy()
+
+    for path in (get_user_config_path(), get_project_config_path(workspace)):
+        if path.is_file():
+            logger.debug("Loading config from %s", path)
+            layer = _load_toml(path)
+            config.update(layer)
+
+    return config
