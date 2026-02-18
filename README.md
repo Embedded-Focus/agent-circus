@@ -91,6 +91,29 @@ agent-circus remove --destroy --force     # don't ask for permission
 When both a deployed `.agent-circus/` directory and instant mode are
 available, deploy mode takes priority.
 
+## Configuration
+
+Agent Circus can be configured via TOML files. Settings are resolved
+in this order (last wins):
+
+1. **User-global** — `$XDG_CONFIG_HOME/agent-circus/config.toml`
+   (default: `~/.config/agent-circus/config.toml`)
+2. **Project-local** — `.agent-circus/config.toml` in the workspace
+
+CLI flags override both.
+
+### Shadowing Files
+
+The `shadow` setting prevents host files from leaking into containers
+by overlaying them with `/dev/null` bind mounts:
+
+``` toml
+shadow = [".env", ".env.local"]
+```
+
+This is useful for keeping API keys and other secrets in `.env` files
+out of agent containers.
+
 ## Setting up Editors to Work with ACP
 
 ### Emacs
