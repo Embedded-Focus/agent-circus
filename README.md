@@ -1,8 +1,42 @@
 # AI Agents Circus
 
-This repository contains my AI agents setup. Each agent is running in its respective service.
+Run AI coding agents in sandboxed containers with full control over
+what they can see and reach.
+
+Agent Circus wraps each agent in its own Docker container, giving you
+a reproducible, isolated environment that works across machines and
+projects. You decide which files agents can access, secrets stay on
+the host, and a built-in firewall restricts outbound network access to
+known-good destinations.
+
+Getting started takes two commands. No files are written to your
+project, no manual Docker setup required. Customize per-project only
+when you need to.
+
+Currently supported agents:
+
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Anthropic)
+- [Codex](https://openai.com/codex/) (OpenAI)
+- [Vibe CLI](https://docs.mistral.ai/mistral-vibe/introduction) (Mistral)
 
 IDEs interface with agents via the [Agent Client Protocol](https://agentclientprotocol.com/) (ACP).
+
+## Authentication
+
+Each agent authenticates against its vendor's API using the
+credentials already present on the host. Agent Circus bind-mounts the
+vendor-specific configuration directory from the host into the
+corresponding container:
+
+| Agent       | Host directory | Container path         |
+|-------------|----------------|------------------------|
+| Claude Code | `~/.claude`    | `/home/node/.claude`   |
+| Codex       | `~/.codex`     | `/home/node/.codex`    |
+| Vibe CLI    | `~/.vibe`      | `/home/node/.vibe`     |
+
+This means you only need to authenticate once on the host (e.g. by
+running `claude` or `codex` locally) and the containerized agents will
+pick up the same session and API keys automatically.
 
 ## Getting Started
 
