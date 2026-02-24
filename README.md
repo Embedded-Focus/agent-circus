@@ -148,6 +148,26 @@ shadow = [".env", ".env.local"]
 This is useful for keeping API keys and other secrets in `.env` files
 out of agent containers.
 
+### MCP Servers
+
+[MCP](https://modelcontextprotocol.io/) servers run as sidecar
+containers. Agent Circus starts them automatically and injects the
+server URLs into every agent's native configuration.
+
+Add entries to `config.toml`:
+
+``` toml
+[[mcp_servers]]
+name = "filesystem"
+image = "mcp/filesystem:latest"
+```
+
+Optional fields: `port` (default `8080`), `transport` (default
+`streamable-http`), `path` (default `/mcp`), `env`, `command`,
+`volumes`.
+
+Check running sidecars with `agent-circus ps --mcp`.
+
 ## Setting up Editors to Work with ACP
 
 ### Emacs

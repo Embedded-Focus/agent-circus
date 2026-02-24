@@ -33,7 +33,7 @@ def test_load_config_no_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     # Point XDG to a directory with no config file.
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     config = load_config(tmp_path)
-    assert config == {"shadow": []}
+    assert config == {"shadow": [], "mcp_servers": []}
 
 
 def test_load_config_user_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

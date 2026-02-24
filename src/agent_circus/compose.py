@@ -16,9 +16,11 @@ from .config import (
     sanitize_project_name,
 )
 from .exceptions import ComposeError, ConfigurationError
+from .mcp import build_compose_override as build_mcp_compose_override
 from .state import (
     get_agent_configs_dir,
     get_agent_configs_override_path,
+    get_mcp_override_path,
     get_shadow_override_path,
 )
 from .templates import template_dir_context
@@ -55,6 +57,7 @@ def _exec_compose(
     env: dict[str, str] | None = None,
     shadow: list[str] | None = None,
     agent_config_additions: dict[str, dict] | None = None,
+    mcp_servers: list[dict] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Execute a docker compose command.
 
@@ -83,6 +86,10 @@ def _exec_compose(
         configs are written to the state directory and bind-mounted
         into agent containers via a compose override.
     :type agent_config_additions: dict[str, dict] | None
+    :param mcp_servers: MCP server definitions from config.  When
+        present, a compose override is written that adds MCP sidecar
+        services to the Docker Compose project.
+    :type mcp_servers: list[dict] | None
     :returns: Completed process result.
     :rtype: subprocess.CompletedProcess[str]
     :raises ComposeError: If command fails.
@@ -118,6 +125,15 @@ def _exec_compose(
         logger.debug("Agent configs override: %s", agent_configs_path)
     else:
         agent_configs_path.unlink(missing_ok=True)
+
+    mcp_path = get_mcp_override_path(workspace)
+    if mcp_servers:
+        mcp_override = build_mcp_compose_override(mcp_servers, AVAILABLE_SERVICES)
+        mcp_path.write_text(mcp_override)
+        cmd.extend(["-f", str(mcp_path)])
+        logger.debug("MCP sidecar override: %s", mcp_path)
+    else:
+        mcp_path.unlink(missing_ok=True)
 
     cmd.extend(args)
     logger.debug("Running: %s", " ".join(cmd))
@@ -163,6 +179,7 @@ def _run_compose(
     """
     config = load_config(workspace)
     shadow = config.get("shadow", [])
+    mcp_servers = config.get("mcp_servers", [])
     agent_config_additions = build_agent_config_additions(config)
 
     config_dir = resolve_config(workspace)
@@ -177,6 +194,7 @@ def _run_compose(
             capture_output,
             shadow=shadow,
             agent_config_additions=agent_config_additions,
+            mcp_servers=mcp_servers,
         )
 
     with template_dir_context() as template_dir:
@@ -192,6 +210,7 @@ def _run_compose(
             env=env,
             shadow=shadow,
             agent_config_additions=agent_config_additions,
+            mcp_servers=mcp_servers,
         )
 
 
@@ -309,9 +328,15 @@ def compose_ps(
 ) -> str:
     """List containers using docker compose.
 
+    When *services* is ``None`` or empty, all services in the Compose
+    project are shown — including MCP sidecar containers.
+
+    Service names are passed through to ``docker compose ps`` without
+    validation so that both agent and MCP sidecar names are accepted.
+
     :param workspace: Workspace path.
     :type workspace: Path
-    :param services: Services to list, or None for all.
+    :param services: Service names to list, or ``None`` for all.
     :type services: list[str] | None
     :param all_containers: Show all containers (including stopped).
     :type all_containers: bool
@@ -319,11 +344,11 @@ def compose_ps(
     :rtype: str
     :raises ComposeError: If ps fails.
     """
-    services = validate_services(services or [])
     args = ["ps"]
     if all_containers:
         args.append("-a")
-    args.extend(services)
+    if services:
+        args.extend(services)
 
     result = _run_compose(args, workspace, capture_output=True)
     return result.stdout

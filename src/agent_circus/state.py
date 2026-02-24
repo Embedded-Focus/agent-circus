@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .config import (
     COMPOSE_AGENT_CONFIGS_FILE_NAME,
+    COMPOSE_MCP_FILE_NAME,
     COMPOSE_SHADOW_FILE_NAME,
     sanitize_project_name,
 )
@@ -71,3 +72,14 @@ def get_agent_configs_dir(workspace: Path) -> Path:
     configs_dir = get_state_dir(workspace) / "agent-configs"
     configs_dir.mkdir(parents=True, exist_ok=True)
     return configs_dir
+
+
+def get_mcp_override_path(workspace: Path) -> Path:
+    """Get the path for the MCP compose override file.
+
+    :param workspace: Workspace path.
+    :type workspace: Path
+    :returns: Path to ``compose.mcp.json`` in the state directory.
+    :rtype: Path
+    """
+    return get_state_dir(workspace) / COMPOSE_MCP_FILE_NAME

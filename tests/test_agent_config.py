@@ -375,9 +375,9 @@ class TestBuildAgentConfigsOverride:
         assert "codex" in result["services"]
         # Verify volume mounts point to correct container paths.
         cc_vols = result["services"]["claude-code"]["volumes"]
-        assert any("/home/node/.claude.json:ro" in v for v in cc_vols)
+        assert any("/home/node/.claude/.claude.json" in v for v in cc_vols)
         codex_vols = result["services"]["codex"]["volumes"]
-        assert any("/home/node/.codex/config.toml:ro" in v for v in codex_vols)
+        assert any("/home/node/.codex/config.toml" in v for v in codex_vols)
 
     def test_skips_agents_with_empty_additions(self, tmp_path: Path) -> None:
         additions = {
@@ -435,16 +435,16 @@ class TestBuildAgentConfigAdditions:
         }
         result = build_agent_config_additions(config)
 
-        # Claude Code format
+        # Claude Code format — "streamable-http" is mapped to "http"
         cc = result["claude-code"]["mcpServers"]["grafana"]
-        assert cc["type"] == "streamable-http"
+        assert cc["type"] == "http"
         assert cc["url"] == "http://mcp-grafana:8000/mcp"
 
         # Codex format (map keyed by server name, url only)
         codex_srv = result["codex"]["mcp_servers"]["grafana"]
         assert codex_srv["url"] == "http://mcp-grafana:8000/mcp"
 
-        # Vibe format
+        # Vibe format — keeps original transport
         vibe_srv = result["mistral-vibe"]["mcp_servers"][0]
         assert vibe_srv["name"] == "grafana"
         assert vibe_srv["transport"] == "streamable-http"
@@ -454,6 +454,10 @@ class TestBuildAgentConfigAdditions:
 
         config = {"mcp_servers": [{"name": "minimal", "image": "img:latest"}]}
         result = build_agent_config_additions(config)
+        # Default transport is "streamable-http", mapped to "http" for Claude Code.
         cc = result["claude-code"]["mcpServers"]["minimal"]
-        assert cc["type"] == "streamable-http"
+        assert cc["type"] == "http"
         assert cc["url"] == "http://mcp-minimal:8080/mcp"
+        # Vibe keeps the original default transport.
+        vibe_srv = result["mistral-vibe"]["mcp_servers"][0]
+        assert vibe_srv["transport"] == "streamable-http"

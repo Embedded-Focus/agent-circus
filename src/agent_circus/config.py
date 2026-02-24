@@ -17,6 +17,8 @@ COMPOSE_SHADOW_FILE_NAME = "compose.shadow.json"
 
 COMPOSE_AGENT_CONFIGS_FILE_NAME = "compose.agent-configs.json"
 
+COMPOSE_MCP_FILE_NAME = "compose.mcp.json"
+
 CONFIG_FILE_NAME = "config.toml"
 
 DOCKERFILE_NAME = "Dockerfile"
@@ -25,6 +27,7 @@ AVAILABLE_SERVICES = ["claude-code", "codex", "mistral-vibe"]
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "shadow": [],
+    "mcp_servers": [],
 }
 
 logger = logging.getLogger(__name__)
@@ -196,12 +199,54 @@ def load_config(workspace: Path) -> dict[str, Any]:
     return config
 
 
+def _mcp_server_url(name: str, server: dict) -> str:
+    """Build the Docker-network URL for an MCP sidecar server.
+
+    :param name: MCP server name.
+    :param server: Server definition from config.
+    :returns: URL reachable from agent containers.
+    """
+    port = server.get("port", 8080)
+    path = server.get("path", "/mcp")
+    return f"http://mcp-{name}:{port}{path}"
+
+
 def build_agent_config_additions(
     config: dict,
 ) -> dict[str, dict]:
     """Build per-agent config additions from Agent Circus configuration.
 
+    Translates the ``mcp_servers`` list from ``config.toml`` into
+    per-agent additions dicts with the correct key names and formats.
+
     :param config: Merged Agent Circus configuration.
     :returns: Per-agent additions, keyed by agent service name.
     """
-    return {}
+    mcp_servers = config.get("mcp_servers", [])
+    if not mcp_servers:
+        return {}
+
+    # Claude Code: {"mcpServers": {"name": {"type": ..., "url": ...}}}
+    claude_mcp: dict[str, dict] = {}
+    # Codex: {"mcp_servers": {"name": {"url": ...}}}
+    codex_mcp: dict[str, dict] = {}
+    # Vibe: {"mcp_servers": [{"name": ..., "transport": ..., "url": ...}]}
+    vibe_mcp: list[dict] = []
+
+    for server in mcp_servers:
+        name = server["name"]
+        transport = server.get("transport", "streamable-http")
+        url = _mcp_server_url(name, server)
+
+        # Claude Code requires "http" transport; other agents use the
+        # configured transport (defaulting to "streamable-http").
+        claude_transport = "http" if transport == "streamable-http" else transport
+        claude_mcp[name] = {"type": claude_transport, "url": url}
+        codex_mcp[name] = {"url": url}
+        vibe_mcp.append({"name": name, "transport": transport, "url": url})
+
+    return {
+        "claude-code": {"mcpServers": claude_mcp},
+        "codex": {"mcp_servers": codex_mcp},
+        "mistral-vibe": {"mcp_servers": vibe_mcp},
+    }

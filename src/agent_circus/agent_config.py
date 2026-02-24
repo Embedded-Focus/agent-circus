@@ -90,11 +90,11 @@ class ClaudeCodeConfigHandler:
     """Handler for Claude Code configuration (JSON)."""
 
     agent_name = "claude-code"
-    container_config_path = "/home/node/.claude.json"
+    container_config_path = "/home/node/.claude/.claude.json"
     output_filename = "claude-code.json"
 
     def __init__(self) -> None:
-        self.host_config_path = Path.home() / ".claude.json"
+        self.host_config_path = Path.home() / ".claude" / ".claude.json"
 
     def read(self) -> dict[str, Any]:
         if not self.host_config_path.is_file():
