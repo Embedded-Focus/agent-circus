@@ -9,7 +9,11 @@ generated compose overrides (shadow bind mounts).
 import os
 from pathlib import Path
 
-from .config import COMPOSE_SHADOW_FILE_NAME, sanitize_project_name
+from .config import (
+    COMPOSE_AGENT_CONFIGS_FILE_NAME,
+    COMPOSE_SHADOW_FILE_NAME,
+    sanitize_project_name,
+)
 
 
 def get_state_dir(workspace: Path) -> Path:
@@ -43,3 +47,27 @@ def get_shadow_override_path(workspace: Path) -> Path:
     :rtype: Path
     """
     return get_state_dir(workspace) / COMPOSE_SHADOW_FILE_NAME
+
+
+def get_agent_configs_override_path(workspace: Path) -> Path:
+    """Get the path for the agent configs compose override file.
+
+    :param workspace: Workspace path.
+    :type workspace: Path
+    :returns: Path to ``compose.agent-configs.json`` in the state directory.
+    :rtype: Path
+    """
+    return get_state_dir(workspace) / COMPOSE_AGENT_CONFIGS_FILE_NAME
+
+
+def get_agent_configs_dir(workspace: Path) -> Path:
+    """Get the directory for generated agent configuration files.
+
+    :param workspace: Workspace path.
+    :type workspace: Path
+    :returns: Path to the ``agent-configs/`` subdirectory in the state directory.
+    :rtype: Path
+    """
+    configs_dir = get_state_dir(workspace) / "agent-configs"
+    configs_dir.mkdir(parents=True, exist_ok=True)
+    return configs_dir

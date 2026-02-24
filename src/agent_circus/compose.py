@@ -6,15 +6,21 @@ import os
 import subprocess
 from pathlib import Path
 
+from .agent_config import build_agent_configs_override
 from .config import (
     AVAILABLE_SERVICES,
     COMPOSE_FILE_NAME,
+    build_agent_config_additions,
     load_config,
     resolve_config,
     sanitize_project_name,
 )
 from .exceptions import ComposeError, ConfigurationError
-from .state import get_shadow_override_path
+from .state import (
+    get_agent_configs_dir,
+    get_agent_configs_override_path,
+    get_shadow_override_path,
+)
 from .templates import template_dir_context
 
 logger = logging.getLogger(__name__)
@@ -48,6 +54,7 @@ def _exec_compose(
     capture_output: bool = False,
     env: dict[str, str] | None = None,
     shadow: list[str] | None = None,
+    agent_config_additions: dict[str, dict] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Execute a docker compose command.
 
@@ -71,6 +78,11 @@ def _exec_compose(
         ``docker compose`` invocation for the same workspace sees a
         consistent set of ``-f`` paths.
     :type shadow: list[str] | None
+    :param agent_config_additions: Per-agent config additions to merge
+        into each agent's original config file.  When present, merged
+        configs are written to the state directory and bind-mounted
+        into agent containers via a compose override.
+    :type agent_config_additions: dict[str, dict] | None
     :returns: Completed process result.
     :rtype: subprocess.CompletedProcess[str]
     :raises ComposeError: If command fails.
@@ -94,6 +106,18 @@ def _exec_compose(
         # Remove a stale override from a previous run so Compose
         # does not accidentally pick it up.
         shadow_path.unlink(missing_ok=True)
+
+    agent_configs_path = get_agent_configs_override_path(workspace)
+    if agent_config_additions and any(agent_config_additions.values()):
+        configs_dir = get_agent_configs_dir(workspace)
+        override_content = build_agent_configs_override(
+            agent_config_additions, configs_dir
+        )
+        agent_configs_path.write_text(override_content)
+        cmd.extend(["-f", str(agent_configs_path)])
+        logger.debug("Agent configs override: %s", agent_configs_path)
+    else:
+        agent_configs_path.unlink(missing_ok=True)
 
     cmd.extend(args)
     logger.debug("Running: %s", " ".join(cmd))
@@ -139,13 +163,20 @@ def _run_compose(
     """
     config = load_config(workspace)
     shadow = config.get("shadow", [])
+    agent_config_additions = build_agent_config_additions(config)
 
     config_dir = resolve_config(workspace)
 
     if config_dir is not None:
         compose_file = config_dir / COMPOSE_FILE_NAME
         return _exec_compose(
-            args, workspace, compose_file, config_dir, capture_output, shadow=shadow
+            args,
+            workspace,
+            compose_file,
+            config_dir,
+            capture_output,
+            shadow=shadow,
+            agent_config_additions=agent_config_additions,
         )
 
     with template_dir_context() as template_dir:
@@ -160,6 +191,7 @@ def _run_compose(
             capture_output,
             env=env,
             shadow=shadow,
+            agent_config_additions=agent_config_additions,
         )
 
 

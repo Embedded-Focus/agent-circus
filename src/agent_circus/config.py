@@ -15,6 +15,8 @@ COMPOSE_FILE_NAME = "compose.yaml"
 
 COMPOSE_SHADOW_FILE_NAME = "compose.shadow.json"
 
+COMPOSE_AGENT_CONFIGS_FILE_NAME = "compose.agent-configs.json"
+
 CONFIG_FILE_NAME = "config.toml"
 
 DOCKERFILE_NAME = "Dockerfile"
@@ -192,3 +194,14 @@ def load_config(workspace: Path) -> dict[str, Any]:
             config.update(layer)
 
     return config
+
+
+def build_agent_config_additions(
+    config: dict,
+) -> dict[str, dict]:
+    """Build per-agent config additions from Agent Circus configuration.
+
+    :param config: Merged Agent Circus configuration.
+    :returns: Per-agent additions, keyed by agent service name.
+    """
+    return {}
