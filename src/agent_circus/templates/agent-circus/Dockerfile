@@ -31,6 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   locales \
   rsync \
   ripgrep \
+  strace \
   && sed -i 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen \
   && locale-gen \
   && apt-get clean \
