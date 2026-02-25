@@ -61,7 +61,7 @@ RUN mkdir -p /workspace /home/node/.claude && \
 
 WORKDIR /workspace
 
-ARG GIT_DELTA_VERSION=0.18.2
+ARG GIT_DELTA_VERSION
 RUN ARCH=$(dpkg --print-architecture) && \
   wget "https://github.com/dandavison/delta/releases/download/${GIT_DELTA_VERSION}/git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" && \
   sudo dpkg -i "git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" && \
@@ -84,7 +84,7 @@ ENV EDITOR=nano
 ENV VISUAL=nano
 
 # Default powerline10k theme
-ARG ZSH_IN_DOCKER_VERSION=1.2.0
+ARG ZSH_IN_DOCKER_VERSION
 RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/v${ZSH_IN_DOCKER_VERSION}/zsh-in-docker.sh)" -- \
   -p git \
   -p fzf \
@@ -120,8 +120,8 @@ CMD [ "sleep", "infinity" ]
 
 FROM base AS claude-code
 
-ARG CLAUDE_CODE_VERSION=latest
-ARG CLAUDE_CODE_ACP_VERSION=v0.12.6
+ARG CLAUDE_CODE_VERSION
+ARG CLAUDE_CODE_ACP_VERSION
 
 RUN npm install -g \
     @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
@@ -129,8 +129,8 @@ RUN npm install -g \
 
 FROM base AS codex
 
-ARG CODEX_VERSION=0.77.0
-ARG CODEX_ACP_VERSION=0.8.0
+ARG CODEX_VERSION
+ARG CODEX_ACP_VERSION
 
 RUN npm install -g \
     @openai/codex@${CODEX_VERSION} \

@@ -1,34 +1,36 @@
 ---
-# Common configuration for claude-code and codex services
+x-common-build-args: &common-build-args
+  TZ: ${TZ:-America/Los_Angeles}
+  GIT_DELTA_VERSION: 0.18.2
+  ZSH_IN_DOCKER_VERSION: 1.2.1
+
+x-common-build: &common-build
+  context: .
+  dockerfile: Dockerfile
+  args:
+    <<: *common-build-args
+
 x-common-service: &common-service
   build:
-    context: .
-    dockerfile: Dockerfile
-    args:
-      TZ: ${TZ:-America/Los_Angeles}
-      GIT_DELTA_VERSION: 0.18.2
-      ZSH_IN_DOCKER_VERSION: 1.2.1
-
+    <<: *common-build
   cap_add:
   - NET_ADMIN
   - NET_RAW
-
   environment:
     NODE_OPTIONS: --max-old-space-size=4096
     POWERLEVEL9K_DISABLE_GITSTATUS: "true"
-
   command: tail -f /dev/null
-
   user: node
-
   working_dir: /workspace
 
 services:
   claude-code:
-    !!merge <<: *common-service
+    <<: *common-service
     build:
+      <<: *common-build
       target: claude-code
       args:
+        <<: *common-build-args
         CLAUDE_CODE_VERSION: latest
         CLAUDE_CODE_ACP_VERSION: v0.16.1
     volumes:
@@ -36,7 +38,6 @@ services:
     - bashhistory:/commandhistory
     - ${HOME}/.cache:/home/node/.cache
     - ${HOME}/.claude:/home/node/.claude
-
     environment:
       AGENT_TYPE: claude-code
       NODE_OPTIONS: --max-old-space-size=4096
@@ -44,10 +45,12 @@ services:
       POWERLEVEL9K_DISABLE_GITSTATUS: "true"
 
   codex:
-    !!merge <<: *common-service
+    <<: *common-service
     build:
+      <<: *common-build
       target: codex
       args:
+        <<: *common-build-args
         CODEX_VERSION: 0.101.0
         CODEX_ACP_VERSION: 0.9.2
     volumes:
@@ -55,20 +58,21 @@ services:
     - bashhistory:/commandhistory
     - ${HOME}/.cache:/home/node/.cache
     - ${HOME}/.codex:/home/node/.codex
-
     environment:
       AGENT_TYPE: codex
 
   mistral-vibe:
-    !!merge <<: *common-service
+    <<: *common-service
     build:
+      <<: *common-build
       target: mistral-vibe
+      args:
+        <<: *common-build-args
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
     - bashhistory:/commandhistory
     - ${HOME}/.cache:/home/node/.cache
     - ${HOME}/.vibe:/home/node/.vibe
-
     environment:
       AGENT_TYPE: mistral-vibe
 
