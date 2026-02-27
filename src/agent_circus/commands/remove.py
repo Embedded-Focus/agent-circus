@@ -9,6 +9,7 @@ import typer
 
 from agent_circus.compose import compose_down
 from agent_circus.config import config_exists, get_workspace_path
+from agent_circus.context import build_compose_context
 from agent_circus.exceptions import AgentCircusError
 from agent_circus.templates import TEMPLATE_MAPPINGS
 
@@ -120,12 +121,13 @@ def remove(
 
     try:
         typer.echo("Removing containers...")
-        compose_down(
-            workspace,
-            volumes=volumes,
-            remove_orphans=remove_orphans,
-            timeout=0 if force else None,
-        )
+        with build_compose_context(workspace) as ctx:
+            compose_down(
+                ctx,
+                volumes=volumes,
+                remove_orphans=remove_orphans,
+                timeout=0 if force else None,
+            )
         typer.echo("Containers removed successfully.")
 
         if destroy:

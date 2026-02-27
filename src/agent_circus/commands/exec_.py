@@ -10,7 +10,12 @@ from typing import Annotated
 import typer
 
 from agent_circus.compose import compose_exec, compose_is_service_running, compose_up
-from agent_circus.config import AVAILABLE_SERVICES, get_workspace_path
+from agent_circus.config import (
+    AVAILABLE_SERVICES,
+    get_workspace_path,
+    validate_services,
+)
+from agent_circus.context import build_compose_context
 from agent_circus.exceptions import AgentCircusError
 
 logger = logging.getLogger(__name__)
@@ -62,14 +67,16 @@ def exec_cmd(
     """
     workspace = workspace or get_workspace_path()
 
-    cmd = command or []
-
     try:
-        if not compose_is_service_running(workspace, service):
-            typer.echo(f"Service {service} is not running. Starting it...")
-            compose_up(workspace, [service])
+        validate_services([service])
+        cmd = command or []
 
-        compose_exec(workspace, service, cmd, no_tty=no_tty)
+        with build_compose_context(workspace) as ctx:
+            if not compose_is_service_running(ctx, service):
+                typer.echo(f"Service {service} is not running. Starting it...")
+                compose_up(ctx, [service])
+
+            compose_exec(ctx, service, cmd, no_tty=no_tty)
     except AgentCircusError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e

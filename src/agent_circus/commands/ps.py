@@ -8,6 +8,7 @@ import typer
 
 from agent_circus.compose import compose_ps
 from agent_circus.config import AVAILABLE_SERVICES, get_workspace_path, load_config
+from agent_circus.context import build_compose_context
 from agent_circus.exceptions import AgentCircusError
 from agent_circus.mcp import SERVICE_PREFIX
 
@@ -96,7 +97,8 @@ def ps(
             return
 
     try:
-        output = compose_ps(workspace, filter_services, all_containers=all_containers)
+        with build_compose_context(workspace) as ctx:
+            output = compose_ps(ctx, filter_services, all_containers=all_containers)
         typer.echo(output, nl=False)
     except AgentCircusError as e:
         typer.echo(f"Error: {e}", err=True)

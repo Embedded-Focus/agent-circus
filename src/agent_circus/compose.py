@@ -1,135 +1,99 @@
-"""Docker Compose operations for Agent Circus."""
+"""Docker Compose operations for Agent Circus.
 
-import json
+This is a low-level module that executes ``docker compose`` commands.
+All configuration assembly (loading config, building overrides,
+resolving deploy vs instant mode) happens in higher-level modules
+and is passed in via :class:`ComposeContext`.
+"""
+
+import dataclasses
 import logging
-import os
 import subprocess
 from pathlib import Path
 
-from .agent_config import build_agent_configs_override
-from .config import (
-    AVAILABLE_SERVICES,
-    COMPOSE_FILE_NAME,
-    build_agent_config_additions,
-    load_config,
-    resolve_config,
-    sanitize_project_name,
-)
-from .exceptions import ComposeError, ConfigurationError
-from .mcp import build_compose_override as build_mcp_compose_override
+from .exceptions import ComposeError
 from .state import (
-    get_agent_configs_dir,
     get_agent_configs_override_path,
     get_mcp_override_path,
     get_shadow_override_path,
 )
-from .templates import template_dir_context
 
 logger = logging.getLogger(__name__)
 
 
-def _build_shadow_override(shadow: list[str]) -> str:
-    """Build a Docker Compose override YAML that shadows paths with /dev/null.
+@dataclasses.dataclass(frozen=True)
+class ComposeContext:
+    """Pre-assembled context for running docker compose commands.
 
-    For each path in *shadow*, every service gets a read-only bind mount
-    of ``/dev/null`` over ``/workspace/<path>``.  When merged with the
-    base compose file via ``-f``, these mounts take precedence over the
-    workspace volume, effectively hiding the host files from the
-    container.
+    Built by :func:`agent_circus.context.build_compose_context` from
+    higher-level configuration.  Contains everything ``compose``
+    functions need without reaching into config, MCP, or template
+    modules.
 
-    :param shadow: Workspace-relative paths to shadow.
-    :type shadow: list[str]
-    :returns: Compose override YAML string.
-    :rtype: str
+    :param workspace: Workspace path.
+    :param project_name: Sanitized Docker Compose project name.
+    :param compose_file: Absolute path to the base compose file.
+    :param cwd: Working directory for the subprocess.
+    :param env: Extra environment variables, or ``None`` to inherit.
+    :param shadow_override: JSON string for shadow bind mounts, or ``None``.
+    :param agent_configs_override: JSON string for agent config mounts, or ``None``.
+    :param mcp_override: JSON string for MCP sidecar services, or ``None``.
     """
-    volumes = [f"/dev/null:/workspace/{p}:ro" for p in shadow]
-    services = {name: {"volumes": volumes} for name in AVAILABLE_SERVICES}
-    # Use JSON as a subset of YAML — avoids a PyYAML dependency.
-    return json.dumps({"services": services})
+
+    workspace: Path
+    project_name: str
+    compose_file: Path
+    cwd: Path
+    env: dict[str, str] | None = None
+    shadow_override: str | None = None
+    agent_configs_override: str | None = None
+    mcp_override: str | None = None
 
 
 def _exec_compose(
     args: list[str],
-    workspace: Path,
-    compose_file: Path,
-    cwd: Path,
+    ctx: ComposeContext,
     capture_output: bool = False,
-    env: dict[str, str] | None = None,
-    shadow: list[str] | None = None,
-    agent_config_additions: dict[str, dict] | None = None,
-    mcp_servers: list[dict] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Execute a docker compose command.
 
+    Writes any override strings from *ctx* to the runtime state
+    directory and passes them as additional ``-f`` flags.
+
     :param args: Arguments to pass after ``docker compose -p ... -f ...``.
-    :type args: list[str]
-    :param workspace: Workspace path (used to derive the project name).
-    :type workspace: Path
-    :param compose_file: Absolute path to the compose file.
-    :type compose_file: Path
-    :param cwd: Working directory for the subprocess.
-    :type cwd: Path
+    :param ctx: Pre-assembled compose context.
     :param capture_output: Capture stdout/stderr instead of streaming.
-    :type capture_output: bool
-    :param env: Environment variables for the subprocess, or None to
-        inherit the current environment.
-    :type env: dict[str, str] | None
-    :param shadow: Workspace-relative paths to shadow with ``/dev/null``
-        bind mounts.  A compose override file is written to the
-        runtime state directory and passed as an additional ``-f``
-        flag.  The file uses a deterministic path so that every
-        ``docker compose`` invocation for the same workspace sees a
-        consistent set of ``-f`` paths.
-    :type shadow: list[str] | None
-    :param agent_config_additions: Per-agent config additions to merge
-        into each agent's original config file.  When present, merged
-        configs are written to the state directory and bind-mounted
-        into agent containers via a compose override.
-    :type agent_config_additions: dict[str, dict] | None
-    :param mcp_servers: MCP server definitions from config.  When
-        present, a compose override is written that adds MCP sidecar
-        services to the Docker Compose project.
-    :type mcp_servers: list[dict] | None
     :returns: Completed process result.
-    :rtype: subprocess.CompletedProcess[str]
     :raises ComposeError: If command fails.
     """
     cmd = [
         "docker",
         "compose",
         "-p",
-        sanitize_project_name(workspace.name),
+        ctx.project_name,
         "-f",
-        str(compose_file),
+        str(ctx.compose_file),
     ]
 
-    shadow_path = get_shadow_override_path(workspace)
-    if shadow:
-        override_content = _build_shadow_override(shadow)
-        shadow_path.write_text(override_content)
+    shadow_path = get_shadow_override_path(ctx.workspace)
+    if ctx.shadow_override:
+        shadow_path.write_text(ctx.shadow_override)
         cmd.extend(["-f", str(shadow_path)])
         logger.debug("Shadow override: %s", shadow_path)
     else:
-        # Remove a stale override from a previous run so Compose
-        # does not accidentally pick it up.
         shadow_path.unlink(missing_ok=True)
 
-    agent_configs_path = get_agent_configs_override_path(workspace)
-    if agent_config_additions and any(agent_config_additions.values()):
-        configs_dir = get_agent_configs_dir(workspace)
-        override_content = build_agent_configs_override(
-            agent_config_additions, configs_dir
-        )
-        agent_configs_path.write_text(override_content)
+    agent_configs_path = get_agent_configs_override_path(ctx.workspace)
+    if ctx.agent_configs_override:
+        agent_configs_path.write_text(ctx.agent_configs_override)
         cmd.extend(["-f", str(agent_configs_path)])
         logger.debug("Agent configs override: %s", agent_configs_path)
     else:
         agent_configs_path.unlink(missing_ok=True)
 
-    mcp_path = get_mcp_override_path(workspace)
-    if mcp_servers:
-        mcp_override = build_mcp_compose_override(mcp_servers, AVAILABLE_SERVICES)
-        mcp_path.write_text(mcp_override)
+    mcp_path = get_mcp_override_path(ctx.workspace)
+    if ctx.mcp_override:
+        mcp_path.write_text(ctx.mcp_override)
         cmd.extend(["-f", str(mcp_path)])
         logger.debug("MCP sidecar override: %s", mcp_path)
     else:
@@ -141,11 +105,11 @@ def _exec_compose(
     try:
         result = subprocess.run(
             cmd,
-            cwd=str(cwd),
+            cwd=str(ctx.cwd),
             capture_output=capture_output,
             text=True,
             check=False,
-            env=env,
+            env=ctx.env,
         )
         if result.returncode != 0:
             error_msg = result.stderr if capture_output else "Command failed"
@@ -157,156 +121,66 @@ def _exec_compose(
         raise ComposeError(f"Failed to run docker compose: {e}") from e
 
 
-def _run_compose(
-    args: list[str],
-    workspace: Path,
-    capture_output: bool = False,
-) -> subprocess.CompletedProcess[str]:
-    """Run a docker compose command, auto-detecting deploy or instant mode.
-
-    Loads the merged configuration (user-global + project-local) and
-    applies any ``shadow`` paths as ``/dev/null`` bind-mount overrides.
-
-    :param args: Arguments to pass to docker compose.
-    :type args: list[str]
-    :param workspace: Workspace path.
-    :type workspace: Path
-    :param capture_output: Capture stdout/stderr instead of streaming.
-    :type capture_output: bool
-    :returns: Completed process result.
-    :rtype: subprocess.CompletedProcess[str]
-    :raises ComposeError: If command fails.
-    """
-    config = load_config(workspace)
-    shadow = config.get("shadow", [])
-    mcp_servers = config.get("mcp_servers", [])
-    agent_config_additions = build_agent_config_additions(config)
-
-    config_dir = resolve_config(workspace)
-
-    if config_dir is not None:
-        compose_file = config_dir / COMPOSE_FILE_NAME
-        return _exec_compose(
-            args,
-            workspace,
-            compose_file,
-            config_dir,
-            capture_output,
-            shadow=shadow,
-            agent_config_additions=agent_config_additions,
-            mcp_servers=mcp_servers,
-        )
-
-    with template_dir_context() as template_dir:
-        compose_file = template_dir / COMPOSE_FILE_NAME
-        env = os.environ.copy()
-        env["AGENT_CIRCUS_WORKSPACE"] = str(workspace)
-        return _exec_compose(
-            args,
-            workspace,
-            compose_file,
-            template_dir,
-            capture_output,
-            env=env,
-            shadow=shadow,
-            agent_config_additions=agent_config_additions,
-            mcp_servers=mcp_servers,
-        )
-
-
-def validate_services(services: list[str]) -> list[str]:
-    """Validate and return service names.
-
-    :param services: List of service names to validate.
-    :type services: list[str]
-    :returns: Validated list of services.
-    :rtype: list[str]
-    :raises ConfigurationError: If invalid service name provided.
-    """
-    if not services:
-        return AVAILABLE_SERVICES.copy()
-
-    invalid = set(services) - set(AVAILABLE_SERVICES)
-    if invalid:
-        raise ConfigurationError(
-            f"Invalid service(s): {', '.join(invalid)}. "
-            f"Available: {', '.join(AVAILABLE_SERVICES)}"
-        )
-    return services
-
-
 def compose_build(
-    workspace: Path,
+    ctx: ComposeContext,
     services: list[str] | None = None,
     no_cache: bool = False,
 ) -> None:
     """Build service images using docker compose.
 
-    :param workspace: Workspace path.
-    :type workspace: Path
-    :param services: Services to build, or None for all.
-    :type services: list[str] | None
+    :param ctx: Pre-assembled compose context.
+    :param services: Services to build, or ``None`` for all.
     :param no_cache: Disable build cache.
-    :type no_cache: bool
     :raises ComposeError: If build fails.
     """
-    services = validate_services(services or [])
     args = ["build"]
     if no_cache:
         args.append("--no-cache")
-    args.extend(services)
+    if services:
+        args.extend(services)
 
-    logger.info("Building services: %s", ", ".join(services))
-    _run_compose(args, workspace)
+    logger.info("Building services: %s", ", ".join(services or ["all"]))
+    _exec_compose(args, ctx)
 
 
 def compose_up(
-    workspace: Path,
+    ctx: ComposeContext,
     services: list[str] | None = None,
     detach: bool = True,
     build: bool = False,
 ) -> None:
     """Start services using docker compose.
 
-    :param workspace: Workspace path.
-    :type workspace: Path
-    :param services: Services to start, or None for all.
-    :type services: list[str] | None
+    :param ctx: Pre-assembled compose context.
+    :param services: Services to start, or ``None`` for all.
     :param detach: Run in detached mode.
-    :type detach: bool
     :param build: Build images before starting.
-    :type build: bool
     :raises ComposeError: If up fails.
     """
-    services = validate_services(services or [])
     args = ["up"]
     if detach:
         args.append("-d")
     if build:
         args.append("--build")
-    args.extend(services)
+    if services:
+        args.extend(services)
 
-    logger.info("Starting services: %s", ", ".join(services))
-    _run_compose(args, workspace)
+    logger.info("Starting services: %s", ", ".join(services or ["all"]))
+    _exec_compose(args, ctx)
 
 
 def compose_down(
-    workspace: Path,
+    ctx: ComposeContext,
     volumes: bool = False,
     remove_orphans: bool = False,
     timeout: int | None = None,
 ) -> None:
     """Stop and remove containers using docker compose.
 
-    :param workspace: Workspace path.
-    :type workspace: Path
+    :param ctx: Pre-assembled compose context.
     :param volumes: Remove named volumes.
-    :type volumes: bool
     :param remove_orphans: Remove orphan containers.
-    :type remove_orphans: bool
     :param timeout: Seconds to wait for containers to stop (``-t``).
-        Use ``0`` to skip graceful shutdown and kill immediately.
-    :type timeout: int | None
     :raises ComposeError: If down fails.
     """
     args = ["down"]
@@ -318,11 +192,11 @@ def compose_down(
         args.append("--remove-orphans")
 
     logger.info("Stopping and removing containers")
-    _run_compose(args, workspace)
+    _exec_compose(args, ctx)
 
 
 def compose_ps(
-    workspace: Path,
+    ctx: ComposeContext,
     services: list[str] | None = None,
     all_containers: bool = False,
 ) -> str:
@@ -331,17 +205,10 @@ def compose_ps(
     When *services* is ``None`` or empty, all services in the Compose
     project are shown — including MCP sidecar containers.
 
-    Service names are passed through to ``docker compose ps`` without
-    validation so that both agent and MCP sidecar names are accepted.
-
-    :param workspace: Workspace path.
-    :type workspace: Path
+    :param ctx: Pre-assembled compose context.
     :param services: Service names to list, or ``None`` for all.
-    :type services: list[str] | None
     :param all_containers: Show all containers (including stopped).
-    :type all_containers: bool
     :returns: Command output.
-    :rtype: str
     :raises ComposeError: If ps fails.
     """
     args = ["ps"]
@@ -350,24 +217,20 @@ def compose_ps(
     if services:
         args.extend(services)
 
-    result = _run_compose(args, workspace, capture_output=True)
+    result = _exec_compose(args, ctx, capture_output=True)
     return result.stdout
 
 
-def compose_is_service_running(workspace: Path, service: str) -> bool:
+def compose_is_service_running(ctx: ComposeContext, service: str) -> bool:
     """Check if a service container is currently running.
 
-    :param workspace: Workspace path.
-    :type workspace: Path
+    :param ctx: Pre-assembled compose context.
     :param service: Service name to check.
-    :type service: str
-    :returns: True if the service has a running container.
-    :rtype: bool
+    :returns: ``True`` if the service has a running container.
     """
-    validate_services([service])
     args = ["ps", "--status", "running", "--format", "json", service]
     try:
-        result = _run_compose(args, workspace, capture_output=True)
+        result = _exec_compose(args, ctx, capture_output=True)
     except ComposeError:
         return False
     output = result.stdout.strip()
@@ -375,28 +238,23 @@ def compose_is_service_running(workspace: Path, service: str) -> bool:
 
 
 def compose_exec(
-    workspace: Path,
+    ctx: ComposeContext,
     service: str,
     command: list[str],
     no_tty: bool = False,
 ) -> None:
     """Execute a command in a running service container.
 
-    :param workspace: Workspace path.
-    :type workspace: Path
+    :param ctx: Pre-assembled compose context.
     :param service: Service name to exec into.
-    :type service: str
     :param command: Command and arguments to run.
-    :type command: list[str]
     :param no_tty: Disable pseudo-TTY allocation.
-    :type no_tty: bool
     :raises ComposeError: If exec fails.
     """
-    validate_services([service])
     args = ["exec"]
     if no_tty:
         args.append("-T")
     args.append(service)
     args.extend(command)
 
-    _run_compose(args, workspace)
+    _exec_compose(args, ctx)

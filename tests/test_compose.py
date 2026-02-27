@@ -1,57 +1,68 @@
-"""Tests for compose helper functions."""
+"""Tests for low-level compose functions."""
 
 import json
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from agent_circus.compose import _build_shadow_override, compose_is_service_running
+from agent_circus.compose import ComposeContext, compose_is_service_running
+from agent_circus.config import build_shadow_override
 from agent_circus.exceptions import ComposeError
 
 
-@patch("agent_circus.compose._run_compose")
+def _make_ctx(tmp_path: Path) -> ComposeContext:
+    """Create a minimal ComposeContext for testing."""
+    return ComposeContext(
+        workspace=tmp_path,
+        project_name="test-project",
+        compose_file=tmp_path / "compose.yaml",
+        cwd=tmp_path,
+    )
+
+
+@patch("agent_circus.compose._exec_compose")
 def test_is_service_running_returns_true_on_json_output(
-    mock_run: MagicMock,
+    mock_exec: MagicMock,
     tmp_path: Path,
 ) -> None:
-    mock_run.return_value = subprocess.CompletedProcess(
+    mock_exec.return_value = subprocess.CompletedProcess(
         args=[], returncode=0, stdout='{"Name":"claude-code-1","State":"running"}\n'
     )
-    assert compose_is_service_running(tmp_path, "claude-code") is True
+    assert compose_is_service_running(_make_ctx(tmp_path), "claude-code") is True
 
 
-@patch("agent_circus.compose._run_compose")
+@patch("agent_circus.compose._exec_compose")
 def test_is_service_running_returns_false_on_empty_output(
-    mock_run: MagicMock,
+    mock_exec: MagicMock,
     tmp_path: Path,
 ) -> None:
-    mock_run.return_value = subprocess.CompletedProcess(
+    mock_exec.return_value = subprocess.CompletedProcess(
         args=[], returncode=0, stdout=""
     )
-    assert compose_is_service_running(tmp_path, "claude-code") is False
+    assert compose_is_service_running(_make_ctx(tmp_path), "claude-code") is False
 
 
-@patch("agent_circus.compose._run_compose")
+@patch("agent_circus.compose._exec_compose")
 def test_is_service_running_returns_false_on_empty_json_array(
-    mock_run: MagicMock,
+    mock_exec: MagicMock,
     tmp_path: Path,
 ) -> None:
-    mock_run.return_value = subprocess.CompletedProcess(
+    mock_exec.return_value = subprocess.CompletedProcess(
         args=[], returncode=0, stdout="[]"
     )
-    assert compose_is_service_running(tmp_path, "claude-code") is False
+    assert compose_is_service_running(_make_ctx(tmp_path), "claude-code") is False
 
 
-@patch("agent_circus.compose._run_compose", side_effect=ComposeError("fail"))
+@patch("agent_circus.compose._exec_compose", side_effect=ComposeError("fail"))
 def test_is_service_running_returns_false_on_compose_error(
-    mock_run: MagicMock,
+    mock_exec: MagicMock,
     tmp_path: Path,
 ) -> None:
-    assert compose_is_service_running(tmp_path, "claude-code") is False
+    assert compose_is_service_running(_make_ctx(tmp_path), "claude-code") is False
 
 
 def test_build_shadow_override_produces_valid_json() -> None:
-    result = _build_shadow_override([".env", ".env.local"])
+    result = build_shadow_override([".env", ".env.local"])
     data = json.loads(result)
 
     assert "services" in data
@@ -62,49 +73,8 @@ def test_build_shadow_override_produces_valid_json() -> None:
 
 
 def test_build_shadow_override_empty_list() -> None:
-    result = _build_shadow_override([])
+    result = build_shadow_override([])
     data = json.loads(result)
 
     for service in ("claude-code", "codex", "mistral-vibe"):
         assert data["services"][service]["volumes"] == []
-
-
-@patch("agent_circus.compose._exec_compose")
-@patch(
-    "agent_circus.compose.load_config",
-    return_value={"shadow": [".env"]},
-)
-@patch("agent_circus.compose.resolve_config", return_value=None)
-def test_run_compose_passes_shadow_to_exec(
-    mock_resolve: MagicMock,
-    mock_load: MagicMock,
-    mock_exec: MagicMock,
-    tmp_path: Path,
-) -> None:
-    from agent_circus.compose import _run_compose
-
-    _run_compose(["ps"], tmp_path, capture_output=True)
-
-    mock_load.assert_called_once_with(tmp_path)
-    _, kwargs = mock_exec.call_args
-    assert kwargs["shadow"] == [".env"]
-
-
-@patch("agent_circus.compose._exec_compose")
-@patch(
-    "agent_circus.compose.load_config",
-    return_value={"shadow": []},
-)
-@patch("agent_circus.compose.resolve_config", return_value=None)
-def test_run_compose_passes_empty_shadow(
-    mock_resolve: MagicMock,
-    mock_load: MagicMock,
-    mock_exec: MagicMock,
-    tmp_path: Path,
-) -> None:
-    from agent_circus.compose import _run_compose
-
-    _run_compose(["ps"], tmp_path, capture_output=True)
-
-    _, kwargs = mock_exec.call_args
-    assert kwargs["shadow"] == []

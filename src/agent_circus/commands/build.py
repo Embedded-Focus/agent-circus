@@ -7,7 +7,12 @@ from typing import Annotated
 import typer
 
 from agent_circus.compose import compose_build
-from agent_circus.config import AVAILABLE_SERVICES, get_workspace_path
+from agent_circus.config import (
+    AVAILABLE_SERVICES,
+    get_workspace_path,
+    validate_services,
+)
+from agent_circus.context import build_compose_context
 from agent_circus.exceptions import AgentCircusError
 
 logger = logging.getLogger(__name__)
@@ -52,15 +57,16 @@ def build(
     """
     workspace = workspace or get_workspace_path()
 
-    services_to_build = services or []
-
     try:
-        if services_to_build:
+        services_to_build = validate_services(services or [])
+
+        if services:
             typer.echo(f"Building services: {', '.join(services_to_build)}")
         else:
             typer.echo("Building all services...")
 
-        compose_build(workspace, services_to_build, no_cache=no_cache)
+        with build_compose_context(workspace) as ctx:
+            compose_build(ctx, services_to_build, no_cache=no_cache)
         typer.echo("Build completed successfully.")
 
     except AgentCircusError as e:

@@ -7,7 +7,12 @@ from typing import Annotated
 import typer
 
 from agent_circus.compose import compose_up
-from agent_circus.config import AVAILABLE_SERVICES, get_workspace_path
+from agent_circus.config import (
+    AVAILABLE_SERVICES,
+    get_workspace_path,
+    validate_services,
+)
+from agent_circus.context import build_compose_context
 from agent_circus.exceptions import AgentCircusError
 
 logger = logging.getLogger(__name__)
@@ -54,15 +59,16 @@ def up(
     """
     workspace = workspace or get_workspace_path()
 
-    services_to_start = services or []
-
     try:
-        if services_to_start:
+        services_to_start = validate_services(services or [])
+
+        if services:
             typer.echo(f"Starting services: {', '.join(services_to_start)}")
         else:
             typer.echo("Starting all services...")
 
-        compose_up(workspace, services_to_start or None, build=build)
+        with build_compose_context(workspace) as ctx:
+            compose_up(ctx, services_to_start, build=build)
 
     except AgentCircusError as e:
         typer.echo(f"Error: {e}", err=True)

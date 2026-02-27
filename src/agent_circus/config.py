@@ -1,5 +1,6 @@
 """Configuration management for Agent Circus CLI."""
 
+import json
 import logging
 import os
 import re
@@ -250,3 +251,36 @@ def build_agent_config_additions(
         "codex": {"mcp_servers": codex_mcp},
         "mistral-vibe": {"mcp_servers": vibe_mcp},
     }
+
+
+def validate_services(services: list[str]) -> list[str]:
+    """Validate and return service names.
+
+    :param services: List of service names to validate.
+    :returns: Validated list of services.
+    :raises ConfigurationError: If invalid service name provided.
+    """
+    if not services:
+        return AVAILABLE_SERVICES.copy()
+
+    invalid = set(services) - set(AVAILABLE_SERVICES)
+    if invalid:
+        raise ConfigurationError(
+            f"Invalid service(s): {', '.join(invalid)}. "
+            f"Available: {', '.join(AVAILABLE_SERVICES)}"
+        )
+    return services
+
+
+def build_shadow_override(shadow: list[str]) -> str:
+    """Build a Docker Compose override that shadows paths with ``/dev/null``.
+
+    For each path in *shadow*, every service gets a read-only bind mount
+    of ``/dev/null`` over ``/workspace/<path>``.
+
+    :param shadow: Workspace-relative paths to shadow.
+    :returns: Compose override as a JSON string.
+    """
+    volumes = [f"/dev/null:/workspace/{p}:ro" for p in shadow]
+    services = {name: {"volumes": volumes} for name in AVAILABLE_SERVICES}
+    return json.dumps({"services": services})
