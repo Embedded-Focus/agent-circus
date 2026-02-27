@@ -26,6 +26,25 @@ DOCKERFILE_NAME = "Dockerfile"
 
 AVAILABLE_SERVICES = ["claude-code", "codex", "mistral-vibe"]
 
+VCS_MARKERS: tuple[str, ...] = (".git", ".hg", ".svn", ".bzr", "_darcs")
+
+PROJECT_FILE_MARKERS: tuple[str, ...] = (
+    ".projectile",
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "Pipfile",
+    "package.json",
+    "Cargo.toml",
+    "go.mod",
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    "Gemfile",
+    "mix.exs",
+    "composer.json",
+)
+
 DEFAULT_CONFIG: dict[str, Any] = {
     "shadow": [],
     "mcp_servers": [],
@@ -52,13 +71,42 @@ def sanitize_project_name(name: str) -> str:
     return name or "project"
 
 
+def find_project_root(start: Path) -> Path:
+    """Walk up from *start* and return the nearest project root.
+
+    A directory is considered a project root when it contains at least one
+    VCS directory or known project-file marker (see :data:`VCS_MARKERS` and
+    :data:`PROJECT_FILE_MARKERS`).  Falls back to *start* when no marker is
+    found anywhere in the ancestor chain.
+
+    :param start: Directory to begin the upward search from.
+    :type start: Path
+    :returns: Nearest ancestor directory recognised as a project root,
+              or *start* if none is found.
+    :rtype: Path
+    """
+    current = start.resolve()
+    all_markers = VCS_MARKERS + PROJECT_FILE_MARKERS
+    while True:
+        if any((current / m).exists() for m in all_markers):
+            return current
+        parent = current.parent
+        if parent == current:  # reached filesystem root
+            return start
+        current = parent
+
+
 def get_workspace_path() -> Path:
     """Get the current workspace path.
+
+    Discovers the project root by walking up from the current working
+    directory, using the same marker-based heuristic as Emacs Projectile.
+    Falls back to the current directory when no marker is found.
 
     :returns: Absolute path to workspace directory.
     :rtype: Path
     """
-    return Path.cwd().resolve()
+    return find_project_root(Path.cwd().resolve())
 
 
 def get_config_dir(workspace: Path | None = None) -> Path:

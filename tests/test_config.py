@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from agent_circus.config import (
+    find_project_root,
     get_project_config_path,
     get_user_config_path,
     load_config,
@@ -84,3 +85,49 @@ def test_load_config_invalid_toml(
 
     with pytest.raises(ConfigurationError, match="Invalid TOML"):
         load_config(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# find_project_root
+# ---------------------------------------------------------------------------
+
+
+def test_find_project_root_git_marker(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    assert find_project_root(tmp_path) == tmp_path
+
+
+def test_find_project_root_pyproject_marker(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").touch()
+    assert find_project_root(tmp_path) == tmp_path
+
+
+def test_find_project_root_projectile_marker(tmp_path: Path) -> None:
+    (tmp_path / ".projectile").touch()
+    assert find_project_root(tmp_path) == tmp_path
+
+
+def test_find_project_root_walks_up(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    subdir = tmp_path / "src" / "pkg"
+    subdir.mkdir(parents=True)
+    assert find_project_root(subdir) == tmp_path
+
+
+def test_find_project_root_stops_at_nearest(tmp_path: Path) -> None:
+    # Marker at two levels; inner (nearest to start) should win.
+    (tmp_path / ".git").mkdir()
+    inner = tmp_path / "sub"
+    inner.mkdir()
+    (inner / "pyproject.toml").touch()
+    assert find_project_root(inner) == inner
+
+
+def test_find_project_root_no_marker_falls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Patch Path.exists to always return False so no marker is ever detected,
+    # forcing the walk to reach the filesystem root and fall back to start.
+    monkeypatch.setattr(Path, "exists", lambda self: False)
+    result = find_project_root(tmp_path)
+    assert result == tmp_path
