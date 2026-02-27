@@ -122,11 +122,11 @@ CMD [ "sleep", "infinity" ]
 FROM base AS claude-code
 
 ARG CLAUDE_CODE_VERSION
-ARG CLAUDE_CODE_ACP_VERSION
+ARG CLAUDE_AGENT_ACP_VERSION
 
 RUN npm install -g \
     @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
-    @zed-industries/claude-code-acp@${CLAUDE_CODE_ACP_VERSION}
+    @zed-industries/claude-agent-acp@${CLAUDE_AGENT_ACP_VERSION}
 
 FROM base AS codex
 
