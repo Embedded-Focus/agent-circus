@@ -278,7 +278,7 @@ def build_agent_configs_override(
         output_path = build_handler(handler, agent_additions, output_dir)
         services[handler.agent_name] = {
             "volumes": [
-                f"{output_path}:{handler.container_config_path}:ro",
+                f"{output_path}:{handler.container_config_path}",
             ],
         }
 
