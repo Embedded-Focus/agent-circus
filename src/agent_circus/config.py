@@ -24,6 +24,8 @@ CONFIG_FILE_NAME = "config.toml"
 
 DOCKERFILE_NAME = "Dockerfile"
 
+HOOKS_DIR_NAME = "hooks"
+
 AVAILABLE_SERVICES = ["claude-code", "codex", "mistral-vibe"]
 
 VCS_MARKERS: tuple[str, ...] = (".git", ".hg", ".svn", ".bzr", "_darcs")

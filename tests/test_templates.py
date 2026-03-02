@@ -23,3 +23,12 @@ def test_deploy_templates_force_overwrites(tmp_path: Path) -> None:
     second = deploy_templates(tmp_path, force=True)
 
     assert len(second) == len(first)
+
+
+def test_deploy_templates_includes_hooks_dir(tmp_path: Path) -> None:
+    deploy_templates(tmp_path)
+
+    hooks_dir = tmp_path / ".agent-circus" / "hooks"
+    assert hooks_dir.is_dir()
+    assert (hooks_dir / "base-root.sh").is_file()
+    assert (hooks_dir / "base-user.sh").is_file()

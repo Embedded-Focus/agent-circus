@@ -3,7 +3,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from agent_circus.context import build_compose_context
+from agent_circus.context import _copy_project_hooks, build_compose_context
 
 
 @patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
@@ -67,3 +67,154 @@ def test_context_deploy_mode(
         assert ctx.compose_file == compose_file
         assert ctx.cwd == config_dir
         assert ctx.env is None
+
+
+# ---------------------------------------------------------------------------
+# Hook script copying (instant mode)
+# ---------------------------------------------------------------------------
+
+
+def _make_template_dir(base: Path) -> Path:
+    """Create a minimal fake template directory with placeholder hook scripts."""
+    template_dir = base / "template"
+    template_dir.mkdir()
+    hooks_dir = template_dir / "hooks"
+    hooks_dir.mkdir()
+    (hooks_dir / "base-root.sh").write_text("")
+    (hooks_dir / "base-user.sh").write_text("")
+    return template_dir
+
+
+@patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
+@patch("agent_circus.context.build_agent_configs_override", return_value="{}")
+@patch(
+    "agent_circus.context.load_config",
+    return_value={"shadow": [], "mcp_servers": []},
+)
+@patch("agent_circus.context.resolve_config", return_value=None)
+@patch("agent_circus.context.template_dir_context")
+def test_context_instant_mode_copies_root_hook(
+    mock_tdc: MagicMock,
+    mock_resolve: MagicMock,
+    mock_load: MagicMock,
+    mock_agent_configs: MagicMock,
+    mock_mcp: MagicMock,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    template_dir = _make_template_dir(tmp_path)
+    mock_tdc.return_value.__enter__ = MagicMock(return_value=template_dir)
+    mock_tdc.return_value.__exit__ = MagicMock(return_value=False)
+
+    hook_content = "apt-get install -y tree\n"
+    hooks_src = workspace / ".agent-circus" / "hooks"
+    hooks_src.mkdir(parents=True)
+    (hooks_src / "base-root.sh").write_text(hook_content)
+
+    with build_compose_context(workspace):
+        pass
+
+    assert (template_dir / "hooks" / "base-root.sh").read_text() == hook_content
+
+
+@patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
+@patch("agent_circus.context.build_agent_configs_override", return_value="{}")
+@patch(
+    "agent_circus.context.load_config",
+    return_value={"shadow": [], "mcp_servers": []},
+)
+@patch("agent_circus.context.resolve_config", return_value=None)
+@patch("agent_circus.context.template_dir_context")
+def test_context_instant_mode_copies_user_hook(
+    mock_tdc: MagicMock,
+    mock_resolve: MagicMock,
+    mock_load: MagicMock,
+    mock_agent_configs: MagicMock,
+    mock_mcp: MagicMock,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    template_dir = _make_template_dir(tmp_path)
+    mock_tdc.return_value.__enter__ = MagicMock(return_value=template_dir)
+    mock_tdc.return_value.__exit__ = MagicMock(return_value=False)
+
+    hook_content = "npm install -g @anthropic-ai/sdk\n"
+    hooks_src = workspace / ".agent-circus" / "hooks"
+    hooks_src.mkdir(parents=True)
+    (hooks_src / "base-user.sh").write_text(hook_content)
+
+    with build_compose_context(workspace):
+        pass
+
+    assert (template_dir / "hooks" / "base-user.sh").read_text() == hook_content
+
+
+@patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
+@patch("agent_circus.context.build_agent_configs_override", return_value="{}")
+@patch(
+    "agent_circus.context.load_config",
+    return_value={"shadow": [], "mcp_servers": []},
+)
+@patch("agent_circus.context.resolve_config", return_value=None)
+@patch("agent_circus.context.template_dir_context")
+def test_context_instant_mode_missing_hooks_dir_is_noop(
+    mock_tdc: MagicMock,
+    mock_resolve: MagicMock,
+    mock_load: MagicMock,
+    mock_agent_configs: MagicMock,
+    mock_mcp: MagicMock,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    template_dir = _make_template_dir(tmp_path)
+    mock_tdc.return_value.__enter__ = MagicMock(return_value=template_dir)
+    mock_tdc.return_value.__exit__ = MagicMock(return_value=False)
+
+    # No .agent-circus/hooks/ directory exists in the workspace.
+    with build_compose_context(workspace) as ctx:
+        assert ctx is not None
+
+    # Placeholder scripts remain unchanged (empty).
+    assert (template_dir / "hooks" / "base-root.sh").read_text() == ""
+    assert (template_dir / "hooks" / "base-user.sh").read_text() == ""
+
+
+# ---------------------------------------------------------------------------
+# _copy_project_hooks unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_copy_project_hooks_copies_existing_scripts(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    build_context = tmp_path / "build"
+    build_context.mkdir()
+    (build_context / "hooks").mkdir()
+
+    hooks_src = workspace / ".agent-circus" / "hooks"
+    hooks_src.mkdir(parents=True)
+    (hooks_src / "base-root.sh").write_text("apt-get install -y tree\n")
+
+    _copy_project_hooks(workspace, build_context)
+
+    assert (
+        build_context / "hooks" / "base-root.sh"
+    ).read_text() == "apt-get install -y tree\n"
+    # base-user.sh was not provided (should not be created)
+    assert not (build_context / "hooks" / "base-user.sh").exists()
+
+
+def test_copy_project_hooks_no_hooks_dir(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    build_context = tmp_path / "build"
+    build_context.mkdir()
+    (build_context / "hooks").mkdir()
+
+    # No .agent-circus/hooks/ (should be a no-op with no error).
+    _copy_project_hooks(workspace, build_context)
+
+    assert list((build_context / "hooks").iterdir()) == []

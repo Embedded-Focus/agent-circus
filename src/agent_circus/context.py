@@ -9,6 +9,7 @@ into the low-level compose functions.
 import contextlib
 import logging
 import os
+import shutil
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -17,6 +18,8 @@ from .compose import ComposeContext
 from .config import (
     AVAILABLE_SERVICES,
     COMPOSE_FILE_NAME,
+    CONFIG_DIR_NAME,
+    HOOKS_DIR_NAME,
     build_agent_config_additions,
     build_shadow_override,
     load_config,
@@ -28,6 +31,29 @@ from .state import get_agent_configs_dir
 from .templates import template_dir_context
 
 logger = logging.getLogger(__name__)
+
+_HOOK_SCRIPTS = ("base-root.sh", "base-user.sh")
+
+
+def _copy_project_hooks(workspace: Path, build_context: Path) -> None:
+    """Copy project-level hook scripts into the Docker build context.
+
+    Overwrites the empty placeholder scripts bundled with the template.
+    Only scripts that exist in the project's hooks directory are copied;
+    missing ones are left as the bundled placeholders so ``COPY`` never
+    fails during ``docker build``.
+
+    :param workspace: Project workspace root.
+    :param build_context: Target build context directory (temp dir in instant mode).
+    """
+    hooks_src = workspace / CONFIG_DIR_NAME / HOOKS_DIR_NAME
+    if not hooks_src.is_dir():
+        return
+    hooks_dst = build_context / HOOKS_DIR_NAME
+    for hook_name in _HOOK_SCRIPTS:
+        src = hooks_src / hook_name
+        if src.is_file():
+            shutil.copy2(src, hooks_dst / hook_name)
 
 
 @contextlib.contextmanager
@@ -79,6 +105,7 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
     else:
         # Instant mode: use bundled templates (temporary directory).
         with template_dir_context() as template_dir:
+            _copy_project_hooks(workspace, template_dir)
             env = os.environ.copy()
             env["AGENT_CIRCUS_WORKSPACE"] = str(workspace)
             yield ComposeContext(

@@ -38,6 +38,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && rm -rf /var/lib/apt/lists/* \
   && update-ca-certificates
 
+# Hook: root-level customization (e.g. additional apt packages, system configuration)
+COPY hooks/base-root.sh /tmp/hook-base-root.sh
+RUN if [ -s /tmp/hook-base-root.sh ]; then bash /tmp/hook-base-root.sh; fi \
+    && rm -f /tmp/hook-base-root.sh
+
 ENV LANG=en_US.UTF-8 \
     LC_ALL=en_US.UTF-8
 
@@ -115,6 +120,11 @@ USER node
 
 RUN npm install -g \
     @modelcontextprotocol/inspector@${MCP_INSPECTOR_VERSION}
+
+# Hook: user-level customization (e.g. npm packages, uv/pip tools)
+COPY --chown=node:node hooks/base-user.sh /tmp/hook-base-user.sh
+RUN if [ -s /tmp/hook-base-user.sh ]; then bash /tmp/hook-base-user.sh; fi \
+    && rm -f /tmp/hook-base-user.sh
 
 ENTRYPOINT [ "/docker-entrypoint.sh" ]
 CMD [ "sleep", "infinity" ]
