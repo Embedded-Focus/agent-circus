@@ -21,6 +21,17 @@ Currently supported agents:
 
 IDEs interface with agents via the [Agent Client Protocol](https://agentclientprotocol.com/) (ACP).
 
+## Open Protocols
+
+Agent Circus is built around open interfaces instead of editor- or
+vendor-specific integrations. ACP provides a common protocol layer
+between editors and coding agents, while MCP provides a standard way
+to connect tools and services into agent workflows.
+
+<p align="center">
+  <img src="./open_protocols.svg" alt="Open protocols map showing ACP and MCP relationships" width="680" />
+</p>
+
 ## Authentication
 
 Each agent authenticates against its vendor's API using the
