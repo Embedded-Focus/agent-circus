@@ -62,7 +62,7 @@ def exec_cmd(
 
     Examples:
         agent-circus exec claude-code                          # Interactive shell
-        agent-circus exec claude-code -- claude-code-acp --acp # Run ACP server
+        agent-circus exec claude-code -- claude-agent-acp --acp # Run ACP server
         agent-circus exec -T claude-code -- echo hello         # Non-interactive
     """
     workspace = workspace or get_workspace_path()

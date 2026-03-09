@@ -64,7 +64,7 @@ After installing you can start right away in one of your projects
 
 ``` shell
 agent-circus build
-agent-circus exec claude-code -- claude-code-acp
+agent-circus exec claude-code -- claude-agent-acp
 ```
 
 The `exec` command automatically starts the container if it is not
@@ -97,7 +97,7 @@ commands against any workspace:
 agent-circus build
 
 # Execute a command in a container (starts it automatically)
-agent-circus exec claude-code -- claude-code-acp
+agent-circus exec claude-code -- claude-agent-acp
 agent-circus exec codex -- codex-acp
 agent-circus exec -T claude-code -- echo hello   # non-interactive
 
@@ -126,7 +126,7 @@ agent-circus init --deploy
 
 # All other commands work the same; deploy mode is auto-detected
 agent-circus build
-agent-circus exec claude-code -- claude-code-acp
+agent-circus exec claude-code -- claude-agent-acp
 
 # Remove containers and deployed files
 agent-circus remove --destroy             # remove containers + .agent-circus/
