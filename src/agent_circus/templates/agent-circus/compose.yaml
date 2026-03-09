@@ -32,7 +32,7 @@ services:
       args:
         <<: *common-build-args
         CLAUDE_CODE_VERSION: latest
-        CLAUDE_AGENT_ACP_VERSION: 0.19.2
+        CLAUDE_AGENT_ACP_VERSION: 0.21.0
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
     - bashhistory:/commandhistory
@@ -51,8 +51,8 @@ services:
       target: codex
       args:
         <<: *common-build-args
-        CODEX_VERSION: 0.104.0
-        CODEX_ACP_VERSION: 0.9.4
+        CODEX_VERSION: 0.112.0
+        CODEX_ACP_VERSION: 0.9.5
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
     - bashhistory:/commandhistory
