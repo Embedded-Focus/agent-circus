@@ -179,6 +179,34 @@ Optional fields: `port` (default `8080`), `transport` (default
 
 Check running sidecars with `agent-circus ps --mcp`.
 
+## Hooks
+
+Hooks let you inject custom shell commands into the Docker image build,
+without modifying the shared `Dockerfile`. They only apply in
+[deploy mode](#deploy-mode) and are placed under
+`.agent-circus/hooks/`:
+
+| Script | Runs as | Typical use |
+|---|---|---|
+| `base-root.sh` | `root` | Install apt packages, system-level configuration |
+| `base-user.sh` | `node` | Install npm/uv/pip packages, user-level tooling |
+
+Both scripts are optional. A script is executed only if it exists and
+is non-empty; it is removed from the image after execution.
+
+Example — add `ripgrep` at the system level and a global npm package
+at the user level:
+
+``` shell
+# .agent-circus/hooks/base-root.sh
+apt-get install -y ripgrep
+```
+
+``` shell
+# .agent-circus/hooks/base-user.sh
+npm install -g @myorg/custom-tool
+```
+
 ## Setting up Editors to Work with ACP
 
 ### Emacs
