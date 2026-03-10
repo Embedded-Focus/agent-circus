@@ -10,6 +10,7 @@ import contextlib
 import logging
 import os
 import shutil
+import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -132,19 +133,26 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
             mcp_override=mcp_override,
         )
     else:
-        # Instant mode: use bundled templates (temporary directory).
-        with template_dir_context() as template_dir:
-            _copy_project_hooks(workspace, template_dir)
-            _inject_env_into_dockerfile(template_dir, env_vars)
-            env = os.environ.copy()
-            env["AGENT_CIRCUS_WORKSPACE"] = str(workspace)
-            yield ComposeContext(
-                workspace=workspace,
-                project_name=project_name,
-                compose_file=template_dir / COMPOSE_FILE_NAME,
-                cwd=template_dir,
-                env=env,
-                shadow_override=shadow_override,
-                agent_configs_override=agent_configs_override,
-                mcp_override=mcp_override,
-            )
+        # Instant mode: copy bundled templates into a fresh temp directory so
+        # that project-specific mutations (hook scripts, ENV injection) never
+        # touch the installed package files.
+        with template_dir_context() as src_dir:
+            with tempfile.TemporaryDirectory() as _tmp:
+                build_context = Path(_tmp)
+                shutil.copytree(
+                    src_dir, build_context, symlinks=True, dirs_exist_ok=True
+                )
+                _copy_project_hooks(workspace, build_context)
+                _inject_env_into_dockerfile(build_context, env_vars)
+                env = os.environ.copy()
+                env["AGENT_CIRCUS_WORKSPACE"] = str(workspace)
+                yield ComposeContext(
+                    workspace=workspace,
+                    project_name=project_name,
+                    compose_file=build_context / COMPOSE_FILE_NAME,
+                    cwd=build_context,
+                    env=env,
+                    shadow_override=shadow_override,
+                    agent_configs_override=agent_configs_override,
+                    mcp_override=mcp_override,
+                )

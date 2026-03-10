@@ -120,10 +120,9 @@ def test_context_instant_mode_copies_root_hook(
     hooks_src.mkdir(parents=True)
     (hooks_src / "base-root.sh").write_text(hook_content)
 
-    with build_compose_context(workspace):
-        pass
-
-    assert (template_dir / "hooks" / "base-root.sh").read_text() == hook_content
+    with build_compose_context(workspace) as ctx:
+        # Check inside the with-block so the temp build context is still alive.
+        assert (ctx.cwd / "hooks" / "base-root.sh").read_text() == hook_content
 
 
 @patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
@@ -153,10 +152,8 @@ def test_context_instant_mode_copies_user_hook(
     hooks_src.mkdir(parents=True)
     (hooks_src / "base-user.sh").write_text(hook_content)
 
-    with build_compose_context(workspace):
-        pass
-
-    assert (template_dir / "hooks" / "base-user.sh").read_text() == hook_content
+    with build_compose_context(workspace) as ctx:
+        assert (ctx.cwd / "hooks" / "base-user.sh").read_text() == hook_content
 
 
 @patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
@@ -183,11 +180,9 @@ def test_context_instant_mode_missing_hooks_dir_is_noop(
 
     # No .agent-circus/hooks/ directory exists in the workspace.
     with build_compose_context(workspace) as ctx:
-        assert ctx is not None
-
-    # Placeholder scripts remain unchanged (empty).
-    assert (template_dir / "hooks" / "base-root.sh").read_text() == ""
-    assert (template_dir / "hooks" / "base-user.sh").read_text() == ""
+        # Placeholder scripts in the build context remain empty.
+        assert (ctx.cwd / "hooks" / "base-root.sh").read_text() == ""
+        assert (ctx.cwd / "hooks" / "base-user.sh").read_text() == ""
 
 
 # ---------------------------------------------------------------------------
@@ -294,9 +289,7 @@ def test_context_instant_mode_injects_env(
     mock_tdc.return_value.__enter__ = MagicMock(return_value=template_dir)
     mock_tdc.return_value.__exit__ = MagicMock(return_value=False)
 
-    with build_compose_context(workspace):
-        pass
-
-    content = (template_dir / "Dockerfile").read_text()
-    assert "ENV PATH=/usr/local/go/bin:$PATH" in content
-    assert content.index("ENV PATH") < content.index("ENTRYPOINT")
+    with build_compose_context(workspace) as ctx:
+        content = (ctx.cwd / "Dockerfile").read_text()
+        assert "ENV PATH=/usr/local/go/bin:$PATH" in content
+        assert content.index("ENV PATH") < content.index("ENTRYPOINT")
