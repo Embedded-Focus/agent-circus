@@ -207,6 +207,25 @@ apt-get install -y ripgrep
 npm install -g @myorg/custom-tool
 ```
 
+### Environment Variables
+
+Use the `[env]` table in `config.toml` to bake extra environment
+variables into the image. Each entry is injected as a Docker `ENV`
+instruction at the end of the base build stage, so `$VARNAME` is
+expanded relative to the image's current value — not the host shell.
+
+This is the correct way to extend `PATH` after installing a tool in a
+hook script:
+
+``` toml
+[env]
+GOPATH = "/home/node/go"
+PATH = "/usr/local/go/bin:$PATH"
+```
+
+This only affects **instant mode**. In deploy mode you can add `ENV`
+lines directly to `.agent-circus/Dockerfile`.
+
 ## Setting up Editors to Work with ACP
 
 ### Emacs

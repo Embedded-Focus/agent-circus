@@ -50,6 +50,7 @@ PROJECT_FILE_MARKERS: tuple[str, ...] = (
 DEFAULT_CONFIG: dict[str, Any] = {
     "shadow": [],
     "mcp_servers": [],
+    "env": {},
 }
 
 logger = logging.getLogger(__name__)
@@ -320,6 +321,21 @@ def validate_services(services: list[str]) -> list[str]:
             f"Available: {', '.join(AVAILABLE_SERVICES)}"
         )
     return services
+
+
+def build_env_dockerfile_lines(env: dict[str, str]) -> list[str]:
+    """Build Dockerfile ``ENV`` instruction lines from an env mapping.
+
+    Each entry is emitted as a separate ``ENV key=value`` line so that
+    Docker treats each variable as an independent layer, which is
+    important for ``$VARNAME`` expansion (e.g. ``PATH=/foo:$PATH``
+    expands ``$PATH`` from the previous layer's value).
+
+    :param env: Mapping of environment variable names to values.
+    :returns: List of Dockerfile ``ENV`` instruction strings, one per variable.
+    :rtype: list[str]
+    """
+    return [f"ENV {key}={value}" for key, value in env.items()]
 
 
 def build_shadow_override(shadow: list[str]) -> str:
