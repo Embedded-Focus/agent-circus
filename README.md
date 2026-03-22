@@ -261,10 +261,10 @@ For example:
         (error "Refuse to resolve to local filesystem with text file capabilities disabled: %s" path)))))
 
 (defun rpo/agent-shell-circus-runner-multi (buffer)
-  "Return the docker compose command prefix to run for BUFFER's agent.
+  "Return the agent-circus exec command prefix to run for BUFFER's agent.
 
 Looks up the agent identifier in BUFFER's `agent-shell' config and
-selects the matching service using `agent-circus exec`, defaulting to
+selects the matching `agent-circus exec` service, defaulting to
 \"claude-code\" when no identifier-specific override is found.
 
 Works in both instant mode and deploy mode."
@@ -276,7 +276,7 @@ Works in both instant mode and deploy mode."
             ('codex "codex")
             ('mistral-vibe "mistral-vibe")
             (_ "claude-code"))))
-    (list "agent-circus" "exec" service "--")))
+    (list "agent-circus" "--log-level" "DEBUG" "--log-file" "/tmp/agent-circus.log" "exec" service "--")))
 
 (use-package agent-shell
   :ensure t
@@ -284,7 +284,7 @@ Works in both instant mode and deploy mode."
   (setq agent-shell-mistral-authentication
         (agent-shell-mistral-make-authentication :api-key "ignored"))
   (setq acp-logging-enabled t)
-  (setq agent-shell-container-command-runner #'rpo/agent-shell-circus-runner-multi)
+  (setq agent-shell-command-prefix #'rpo/agent-shell-circus-runner-multi)
   (setq agent-shell-path-resolver-function #'rpo/agent-shell--resolve-container-path)
   (setq agent-shell-file-completion-enabled t))
 ```
