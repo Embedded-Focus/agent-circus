@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .exceptions import ComposeError
 from .state import (
+    get_additional_dirs_override_path,
     get_agent_configs_override_path,
     get_mcp_override_path,
     get_shadow_override_path,
@@ -38,6 +39,7 @@ class ComposeContext:
     :param shadow_override: JSON string for shadow bind mounts, or ``None``.
     :param agent_configs_override: JSON string for agent config mounts, or ``None``.
     :param mcp_override: JSON string for MCP sidecar services, or ``None``.
+    :param additional_dirs_override: JSON string for extra directory mounts, or ``None``.
     """
 
     workspace: Path
@@ -48,6 +50,7 @@ class ComposeContext:
     shadow_override: str | None = None
     agent_configs_override: str | None = None
     mcp_override: str | None = None
+    additional_dirs_override: str | None = None
 
 
 def _exec_compose(
@@ -98,6 +101,14 @@ def _exec_compose(
         logger.debug("MCP sidecar override: %s", mcp_path)
     else:
         mcp_path.unlink(missing_ok=True)
+
+    additional_dirs_path = get_additional_dirs_override_path(ctx.workspace)
+    if ctx.additional_dirs_override:
+        additional_dirs_path.write_text(ctx.additional_dirs_override)
+        cmd.extend(["-f", str(additional_dirs_path)])
+        logger.debug("Additional dirs override: %s", additional_dirs_path)
+    else:
+        additional_dirs_path.unlink(missing_ok=True)
 
     cmd.extend(args)
     logger.debug("Running: %s", " ".join(cmd))

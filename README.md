@@ -179,6 +179,32 @@ Optional fields: `port` (default `8080`), `transport` (default
 
 Check running sidecars with `agent-circus ps --mcp`.
 
+### Additional Directories
+
+Use the `[[additional_dirs]]` array to mount extra host directories into
+every agent container. Directories appear under `/workspaces/<name>` alongside
+the primary project at `/workspace`.
+
+``` toml
+[[additional_dirs]]
+path = "/home/user/shared-libs"
+readonly = true
+
+[[additional_dirs]]
+path = "/home/user/other-project"
+# readonly defaults to false
+# name defaults to the basename of path
+name = "other-project"
+```
+
+Fields:
+
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `path` | yes | — | Absolute path on the host |
+| `readonly` | no | `false` | Mount read-only when `true` |
+| `name` | no | basename of `path` | Container mount name (`/workspaces/<name>`) |
+
 ### Environment Variables
 
 Use the `[env]` table to bake extra environment variables into the

@@ -20,6 +20,8 @@ COMPOSE_AGENT_CONFIGS_FILE_NAME = "compose.agent-configs.json"
 
 COMPOSE_MCP_FILE_NAME = "compose.mcp.json"
 
+COMPOSE_ADDITIONAL_DIRS_FILE_NAME = "compose.additional-dirs.json"
+
 CONFIG_FILE_NAME = "config.toml"
 
 DOCKERFILE_NAME = "Dockerfile"
@@ -51,6 +53,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "shadow": [],
     "mcp_servers": [],
     "env": {},
+    "additional_dirs": [],
 }
 
 logger = logging.getLogger(__name__)
@@ -336,6 +339,28 @@ def build_env_dockerfile_lines(env: dict[str, str]) -> list[str]:
     :rtype: list[str]
     """
     return [f"ENV {key}={value}" for key, value in env.items()]
+
+
+def build_additional_dirs_override(additional_dirs: list[dict]) -> str:
+    """Build a Docker Compose override that bind-mounts extra host directories.
+
+    Each entry is mounted at ``/workspaces/<name>`` inside every agent
+    container, where *name* defaults to the basename of the host path.
+
+    :param additional_dirs: List of directory entries from ``config.toml``.
+        Each entry must have a ``path`` key (absolute host path) and may
+        optionally have ``readonly`` (bool, default ``False``) and ``name``
+        (str, default basename of *path*).
+    :returns: Compose override as a JSON string.
+    """
+    volumes = []
+    for entry in additional_dirs:
+        host_path = entry["path"]
+        name = entry.get("name") or Path(host_path).name
+        mode = "ro" if entry.get("readonly", False) else "cached"
+        volumes.append(f"{host_path}:/workspaces/{name}:{mode}")
+    services = {svc: {"volumes": volumes} for svc in AVAILABLE_SERVICES}
+    return json.dumps({"services": services})
 
 
 def build_shadow_override(shadow: list[str]) -> str:

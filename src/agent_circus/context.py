@@ -22,6 +22,7 @@ from .config import (
     CONFIG_DIR_NAME,
     DOCKERFILE_NAME,
     HOOKS_DIR_NAME,
+    build_additional_dirs_override,
     build_agent_config_additions,
     build_env_dockerfile_lines,
     build_shadow_override,
@@ -101,10 +102,14 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
     shadow = config.get("shadow", [])
     mcp_servers = config.get("mcp_servers", [])
     env_vars: dict[str, str] = config.get("env", {})
+    additional_dirs: list[dict] = config.get("additional_dirs", [])
     agent_config_additions = build_agent_config_additions(config)
 
     # Build override strings (None when not needed).
     shadow_override = build_shadow_override(shadow) if shadow else None
+    additional_dirs_override = (
+        build_additional_dirs_override(additional_dirs) if additional_dirs else None
+    )
 
     agent_configs_override: str | None = None
     if agent_config_additions and any(agent_config_additions.values()):
@@ -131,6 +136,7 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
             shadow_override=shadow_override,
             agent_configs_override=agent_configs_override,
             mcp_override=mcp_override,
+            additional_dirs_override=additional_dirs_override,
         )
     else:
         # Instant mode: copy bundled templates into a fresh temp directory so
@@ -155,4 +161,5 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
                     shadow_override=shadow_override,
                     agent_configs_override=agent_configs_override,
                     mcp_override=mcp_override,
+                    additional_dirs_override=additional_dirs_override,
                 )
