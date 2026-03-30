@@ -8,6 +8,8 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+import tomli_w
+
 from .exceptions import ConfigurationError
 
 CONFIG_DIR_NAME = ".agent-circus"
@@ -21,6 +23,8 @@ COMPOSE_AGENT_CONFIGS_FILE_NAME = "compose.agent-configs.json"
 COMPOSE_MCP_FILE_NAME = "compose.mcp.json"
 
 COMPOSE_ADDITIONAL_DIRS_FILE_NAME = "compose.additional-dirs.json"
+
+COMPOSE_SSH_FILE_NAME = "compose.ssh.json"
 
 CONFIG_FILE_NAME = "config.toml"
 
@@ -54,6 +58,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "mcp_servers": [],
     "env": {},
     "additional_dirs": [],
+    "ssh": None,
 }
 
 logger = logging.getLogger(__name__)
@@ -254,6 +259,40 @@ def load_config(workspace: Path) -> dict[str, Any]:
     return config
 
 
+def read_project_config(workspace: Path) -> dict[str, Any]:
+    """Read the project-local config file, returning an empty dict if absent.
+
+    :param workspace: Workspace path.
+    :type workspace: Path
+    :returns: Parsed project config, or ``{}`` when the file does not exist.
+    :rtype: dict[str, Any]
+    :raises ConfigurationError: If the file contains invalid TOML.
+    """
+    path = get_project_config_path(workspace)
+    if not path.is_file():
+        return {}
+    return _load_toml(path)
+
+
+def write_project_config(workspace: Path, config: dict[str, Any]) -> None:
+    """Write *config* to the project-local config file.
+
+    Creates ``.agent-circus/`` if it does not exist.  Keys whose value is
+    ``None`` are omitted because TOML has no null type; an absent key is
+    equivalent to ``None`` in the default-config fallback.
+
+    :param workspace: Workspace path.
+    :type workspace: Path
+    :param config: Configuration mapping to serialise.
+    :type config: dict[str, Any]
+    """
+    config_dir = get_config_dir(workspace)
+    config_dir.mkdir(parents=True, exist_ok=True)
+    cleaned = {k: v for k, v in config.items() if v is not None}
+    path = get_project_config_path(workspace)
+    path.write_bytes(tomli_w.dumps(cleaned).encode())
+
+
 def _mcp_server_url(name: str, server: dict) -> str:
     """Build the Docker-network URL for an MCP sidecar server.
 
@@ -360,6 +399,42 @@ def build_additional_dirs_override(additional_dirs: list[dict]) -> str:
         mode = "ro" if entry.get("readonly", False) else "cached"
         volumes.append(f"{host_path}:/workspaces/{name}:{mode}")
     services = {svc: {"volumes": volumes} for svc in AVAILABLE_SERVICES}
+    return json.dumps({"services": services})
+
+
+def build_ssh_override(
+    config_path: str | None = None,
+    known_hosts_path: str | None = None,
+) -> str:
+    """Build a Docker Compose override for SSH agent forwarding and config files.
+
+    Always mounts the host's SSH agent socket (``${SSH_AUTH_SOCK}``) at
+    ``/run/ssh-agent.sock`` inside every agent container and sets
+    ``SSH_AUTH_SOCK`` accordingly.  The socket path is resolved by
+    Docker Compose via environment variable substitution at runtime —
+    no key material is copied into the container.
+
+    Optionally mounts ``~/.ssh/config`` and/or ``~/.ssh/known_hosts`` at
+    intermediate read-only paths (``/run/ssh-host/config`` and
+    ``/run/ssh-host/known_hosts``).  The container entrypoint copies these
+    files into ``/home/node/.ssh/`` at startup with correct ownership.
+
+    The caller is responsible for verifying that ``SSH_AUTH_SOCK`` is
+    set in the host environment before calling this function.
+
+    :param config_path: Absolute host path to an SSH config file, or ``None``.
+    :param known_hosts_path: Absolute host path to a known_hosts file, or ``None``.
+    :returns: Compose override as a JSON string.
+    """
+    volumes = ["${SSH_AUTH_SOCK}:/run/ssh-agent.sock:ro"]
+    if config_path:
+        volumes.append(f"{config_path}:/run/ssh-host/config:ro")
+    if known_hosts_path:
+        volumes.append(f"{known_hosts_path}:/run/ssh-host/known_hosts:ro")
+    env = {"SSH_AUTH_SOCK": "/run/ssh-agent.sock"}
+    services = {
+        svc: {"volumes": volumes, "environment": env} for svc in AVAILABLE_SERVICES
+    }
     return json.dumps({"services": services})
 
 

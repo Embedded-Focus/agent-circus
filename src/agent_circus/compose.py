@@ -17,6 +17,7 @@ from .state import (
     get_agent_configs_override_path,
     get_mcp_override_path,
     get_shadow_override_path,
+    get_ssh_override_path,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,7 @@ class ComposeContext:
     :param agent_configs_override: JSON string for agent config mounts, or ``None``.
     :param mcp_override: JSON string for MCP sidecar services, or ``None``.
     :param additional_dirs_override: JSON string for extra directory mounts, or ``None``.
+    :param ssh_override: JSON string for SSH agent socket forwarding, or ``None``.
     """
 
     workspace: Path
@@ -51,6 +53,7 @@ class ComposeContext:
     agent_configs_override: str | None = None
     mcp_override: str | None = None
     additional_dirs_override: str | None = None
+    ssh_override: str | None = None
 
 
 def _exec_compose(
@@ -109,6 +112,14 @@ def _exec_compose(
         logger.debug("Additional dirs override: %s", additional_dirs_path)
     else:
         additional_dirs_path.unlink(missing_ok=True)
+
+    ssh_path = get_ssh_override_path(ctx.workspace)
+    if ctx.ssh_override:
+        ssh_path.write_text(ctx.ssh_override)
+        cmd.extend(["-f", str(ssh_path)])
+        logger.debug("SSH agent override: %s", ssh_path)
+    else:
+        ssh_path.unlink(missing_ok=True)
 
     cmd.extend(args)
     logger.debug("Running: %s", " ".join(cmd))

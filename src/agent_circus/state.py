@@ -14,6 +14,7 @@ from .config import (
     COMPOSE_AGENT_CONFIGS_FILE_NAME,
     COMPOSE_MCP_FILE_NAME,
     COMPOSE_SHADOW_FILE_NAME,
+    COMPOSE_SSH_FILE_NAME,
     sanitize_project_name,
 )
 
@@ -95,3 +96,14 @@ def get_additional_dirs_override_path(workspace: Path) -> Path:
     :rtype: Path
     """
     return get_state_dir(workspace) / COMPOSE_ADDITIONAL_DIRS_FILE_NAME
+
+
+def get_ssh_override_path(workspace: Path) -> Path:
+    """Get the path for the SSH agent forwarding compose override file.
+
+    :param workspace: Workspace path.
+    :type workspace: Path
+    :returns: Path to ``compose.ssh.json`` in the state directory.
+    :rtype: Path
+    """
+    return get_state_dir(workspace) / COMPOSE_SSH_FILE_NAME

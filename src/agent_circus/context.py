@@ -26,10 +26,12 @@ from .config import (
     build_agent_config_additions,
     build_env_dockerfile_lines,
     build_shadow_override,
+    build_ssh_override,
     load_config,
     resolve_config,
     sanitize_project_name,
 )
+from .exceptions import ConfigurationError
 from .mcp import build_compose_override as build_mcp_compose_override
 from .state import get_agent_configs_dir
 from .templates import template_dir_context
@@ -103,6 +105,7 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
     mcp_servers = config.get("mcp_servers", [])
     env_vars: dict[str, str] = config.get("env", {})
     additional_dirs: list[dict] = config.get("additional_dirs", [])
+    ssh_config = config.get("ssh")
     agent_config_additions = build_agent_config_additions(config)
 
     # Build override strings (None when not needed).
@@ -110,6 +113,24 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
     additional_dirs_override = (
         build_additional_dirs_override(additional_dirs) if additional_dirs else None
     )
+
+    ssh_override: str | None = None
+    if ssh_config is not None:
+        if not os.environ.get("SSH_AUTH_SOCK"):
+            raise ConfigurationError(
+                "SSH agent forwarding requested but SSH_AUTH_SOCK is not set. "
+                "Is ssh-agent running? Start one with: eval $(ssh-agent) && ssh-add"
+            )
+        config_path = ssh_config.get("config_path")
+        known_hosts_path = ssh_config.get("known_hosts_path")
+        if config_path:
+            config_path = str(Path(config_path).expanduser())
+        if known_hosts_path:
+            known_hosts_path = str(Path(known_hosts_path).expanduser())
+        ssh_override = build_ssh_override(
+            config_path=config_path,
+            known_hosts_path=known_hosts_path,
+        )
 
     agent_configs_override: str | None = None
     if agent_config_additions and any(agent_config_additions.values()):
@@ -137,6 +158,7 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
             agent_configs_override=agent_configs_override,
             mcp_override=mcp_override,
             additional_dirs_override=additional_dirs_override,
+            ssh_override=ssh_override,
         )
     else:
         # Instant mode: copy bundled templates into a fresh temp directory so
@@ -162,4 +184,5 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
                     agent_configs_override=agent_configs_override,
                     mcp_override=mcp_override,
                     additional_dirs_override=additional_dirs_override,
+                    ssh_override=ssh_override,
                 )

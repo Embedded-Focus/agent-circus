@@ -141,6 +141,39 @@ available, deploy mode takes priority.
 Agent Circus can be configured via TOML files. Settings are resolved
 in this order (last wins):
 
+### Initialising config with `init`
+
+Rather than editing `config.toml` by hand, use `agent-circus init` flags to
+write common options directly. This creates `.agent-circus/config.toml`
+(and the directory, if absent) without copying any template files — instant
+mode continues to work alongside a `config.toml`.
+
+``` sh
+# Enable SSH agent forwarding
+agent-circus init --ssh
+
+# SSH forwarding with config and known_hosts passthrough
+agent-circus init --ssh \
+  --ssh-config ~/.ssh/config \
+  --ssh-known-hosts ~/.ssh/known_hosts
+
+# Shadow secret files
+agent-circus init --shadow .env --shadow .env.local
+
+# Combine with full deploy
+agent-circus init --deploy --ssh --shadow .env
+```
+
+All flags are additive and idempotent: running them again merges into the
+existing `config.toml` without overwriting unrelated keys.
+
+| Flag | Description |
+|---|---|
+| `--ssh` | Add `[ssh]` table to enable SSH agent forwarding |
+| `--ssh-config PATH` | Set `ssh.config_path` (implies `--ssh`) |
+| `--ssh-known-hosts PATH` | Set `ssh.known_hosts_path` (implies `--ssh`) |
+| `--shadow TEXT` | Append a path to the `shadow` list (repeatable) |
+
 1. **User-global** — `$XDG_CONFIG_HOME/agent-circus/config.toml`
    (default: `~/.config/agent-circus/config.toml`)
 2. **Project-local** — `.agent-circus/config.toml` in the workspace
@@ -204,6 +237,104 @@ Fields:
 | `path` | yes | — | Absolute path on the host |
 | `readonly` | no | `false` | Mount read-only when `true` |
 | `name` | no | basename of `path` | Container mount name (`/workspaces/<name>`) |
+
+### SSH Agent Forwarding
+
+Add an `[ssh]` table to `config.toml` to forward your host SSH agent into
+agent containers. This lets agents interact with Git servers (e.g. GitHub)
+over SSH without any key material entering the container — all private key
+operations stay on the host.
+
+``` toml
+[ssh]
+```
+
+The host's SSH agent socket (`$SSH_AUTH_SOCK`) is mounted read-only at
+`/run/ssh-agent.sock` inside each container, and `SSH_AUTH_SOCK` is set
+accordingly.
+
+> **Note:** `SSH_AUTH_SOCK` must be set in your environment when running
+> `agent-circus`. If it is not, agent-circus will report an error.
+
+#### Starting an SSH agent on the host
+
+**Linux — desktop session (GNOME, KDE, etc.)**
+
+Most desktop environments start an SSH agent automatically as part of the
+session. `SSH_AUTH_SOCK` is usually already set; verify with:
+
+``` sh
+echo $SSH_AUTH_SOCK
+```
+
+**Linux — systemd user service**
+
+For headless or server setups, enable the systemd SSH agent user service:
+
+``` sh
+systemctl --user enable --now ssh-agent
+```
+
+Add the following to your shell profile (e.g. `~/.bashrc` or `~/.zshrc`) to
+make the socket available in new shells:
+
+``` sh
+export SSH_AUTH_SOCK="$XDG_RUNTIME_DIR/ssh-agent.socket"
+```
+
+**Linux — manual (one-off)**
+
+Start a temporary agent in your current shell session:
+
+``` sh
+eval $(ssh-agent)
+```
+
+**macOS**
+
+macOS integrates the system keychain as an SSH agent; `SSH_AUTH_SOCK` is set
+automatically in GUI and terminal sessions. No extra setup is needed.
+
+#### Loading keys into the agent
+
+Once the agent is running, add your key(s):
+
+``` sh
+ssh-add ~/.ssh/id_ed25519
+# or to add all default keys:
+ssh-add
+```
+
+On macOS you can persist keys across reboots in the keychain:
+
+``` sh
+ssh-add --apple-use-keychain ~/.ssh/id_ed25519
+```
+
+#### Passing SSH config and known_hosts
+
+By default only the agent socket is forwarded. To also make your SSH config
+and known hosts available inside containers, add the optional fields:
+
+``` toml
+[ssh]
+config_path = "~/.ssh/config"
+known_hosts_path = "~/.ssh/known_hosts"
+```
+
+Both fields are optional and independent of each other. Tilde (`~`) is
+expanded to your home directory. The files are mounted read-only at
+intermediate paths and copied into `/home/node/.ssh/` at container startup
+with correct ownership — no key material is involved.
+
+> **Rebuild required**: The copy logic lives in `docker-entrypoint.sh`
+> which is baked into the image. Run `agent-circus build` after enabling
+> these options for the first time.
+
+> **IdentityFile directives**: If your `~/.ssh/config` references local key
+> paths (e.g. `IdentityFile ~/.ssh/id_ed25519`), those paths won't exist
+> inside the container. This is harmless — SSH falls back to the forwarded
+> agent automatically when a referenced file is absent.
 
 ### Environment Variables
 

@@ -2,22 +2,27 @@
 
 import json
 
-from agent_circus.config import build_additional_dirs_override
-from agent_circus.config import AVAILABLE_SERVICES
+from agent_circus.config import AVAILABLE_SERVICES, build_additional_dirs_override
 
 
 def test_build_additional_dirs_override_readonly() -> None:
     dirs = [{"path": "/home/user/shared-libs", "readonly": True}]
     result = json.loads(build_additional_dirs_override(dirs))
     for svc in AVAILABLE_SERVICES:
-        assert "/home/user/shared-libs:/workspaces/shared-libs:ro" in result["services"][svc]["volumes"]
+        assert (
+            "/home/user/shared-libs:/workspaces/shared-libs:ro"
+            in result["services"][svc]["volumes"]
+        )
 
 
 def test_build_additional_dirs_override_readwrite() -> None:
     dirs = [{"path": "/home/user/other-project"}]
     result = json.loads(build_additional_dirs_override(dirs))
     for svc in AVAILABLE_SERVICES:
-        assert "/home/user/other-project:/workspaces/other-project:cached" in result["services"][svc]["volumes"]
+        assert (
+            "/home/user/other-project:/workspaces/other-project:cached"
+            in result["services"][svc]["volumes"]
+        )
 
 
 def test_build_additional_dirs_override_default_name() -> None:
@@ -31,7 +36,10 @@ def test_build_additional_dirs_override_custom_name() -> None:
     dirs = [{"path": "/home/user/myrepo", "name": "custom-name"}]
     result = json.loads(build_additional_dirs_override(dirs))
     for svc in AVAILABLE_SERVICES:
-        assert "/home/user/myrepo:/workspaces/custom-name:cached" in result["services"][svc]["volumes"]
+        assert (
+            "/home/user/myrepo:/workspaces/custom-name:cached"
+            in result["services"][svc]["volumes"]
+        )
 
 
 def test_build_additional_dirs_override_multiple() -> None:
