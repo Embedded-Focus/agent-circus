@@ -32,7 +32,8 @@ services:
       args:
         <<: *common-build-args
         CLAUDE_CODE_VERSION: latest
-        CLAUDE_AGENT_ACP_VERSION: 0.22.2
+        # https://github.com/agentclientprotocol/claude-agent-acp
+        CLAUDE_AGENT_ACP_VERSION: 0.23.1
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
     - bashhistory:/commandhistory
@@ -51,7 +52,9 @@ services:
       target: codex
       args:
         <<: *common-build-args
-        CODEX_VERSION: 0.116.0
+        # https://github.com/openai/codex
+        CODEX_VERSION: 0.117.0
+        # https://github.com/zed-industries/codex-acp
         CODEX_ACP_VERSION: 0.10.0
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
