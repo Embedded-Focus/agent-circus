@@ -45,4 +45,11 @@ if compgen -G "/run/ca-host/*.crt" > /dev/null 2>&1; then
   sudo /usr/local/bin/install-ca-certs.sh
 fi
 
+# Run per-project startup hook if present.
+# Runs as the unprivileged container user. Changes to this script take
+# effect on the next container start without requiring a rebuild.
+if [[ -s /workspace/.agent-circus/hooks/startup.sh ]]; then
+  bash /workspace/.agent-circus/hooks/startup.sh
+fi
+
 exec "${@}"

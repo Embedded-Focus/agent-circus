@@ -507,13 +507,15 @@ without modifying the shared `Dockerfile`. They only apply in
 create the `.agent-circus/` directory — and are placed under
 `.agent-circus/hooks/`:
 
-| Script | Runs as | Typical use |
-|---|---|---|
-| `base-root.sh` | `root` | Install apt packages, system-level configuration |
-| `base-user.sh` | `node` | Install npm/uv/pip packages, user-level tooling |
+| Script | Runs as | When | Typical use |
+|---|---|---|---|
+| `base-root.sh` | `root` | Build time | Install apt packages, system-level configuration |
+| `base-user.sh` | `node` | Build time | Install npm/uv/pip packages, user-level tooling |
+| `startup.sh` | `node` | Container start | Project-specific runtime setup |
 
-Both scripts are optional. A script is executed only if it exists and
-is non-empty; it is removed from the image after execution.
+Build scripts are optional and removed from the image after execution.
+`startup.sh` is read directly from the bind-mounted workspace at container
+start — changes take effect immediately without a rebuild.
 
 Example — add `ripgrep` at the system level and a global npm package
 at the user level:
@@ -527,6 +529,13 @@ apt-get update \
 ``` shell
 # .agent-circus/hooks/base-user.sh
 npm install -g @myorg/custom-tool
+```
+
+``` shell
+# .agent-circus/hooks/startup.sh
+# Sync project dependencies and start an SSH tunnel to an internal host.
+uv sync
+autossh -M 0 -f -N -L 5432:db.internal:5432 tunnel-user@bastion.internal
 ```
 
 ## Setting up Editors to Work with ACP
