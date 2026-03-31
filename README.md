@@ -160,8 +160,11 @@ agent-circus init --ssh \
 # Shadow secret files
 agent-circus init --shadow .env --shadow .env.local
 
+# Git config with commit signing
+agent-circus init --git --git-signing-key ~/.ssh/id_ed25519.pub
+
 # Combine with full deploy
-agent-circus init --deploy --ssh --shadow .env
+agent-circus init --deploy --ssh --git --shadow .env
 ```
 
 All flags are additive and idempotent: running them again merges into the
@@ -173,6 +176,9 @@ existing `config.toml` without overwriting unrelated keys.
 | `--ssh-config PATH` | Set `ssh.config_path` (implies `--ssh`) |
 | `--ssh-known-hosts PATH` | Set `ssh.known_hosts_path` (implies `--ssh`) |
 | `--shadow TEXT` | Append a path to the `shadow` list (repeatable) |
+| `--git` | Add `[git]` table to enable Git config forwarding |
+| `--git-config PATH` | Set `git.config_path` (implies `--git`) |
+| `--git-signing-key PATH` | Set `git.signing_key_path` (implies `--git`) |
 
 1. **User-global** — `$XDG_CONFIG_HOME/agent-circus/config.toml`
    (default: `~/.config/agent-circus/config.toml`)
@@ -335,6 +341,41 @@ with correct ownership — no key material is involved.
 > paths (e.g. `IdentityFile ~/.ssh/id_ed25519`), those paths won't exist
 > inside the container. This is harmless — SSH falls back to the forwarded
 > agent automatically when a referenced file is absent.
+
+### Git Configuration
+
+Add a `[git]` table to `config.toml` to forward your host Git configuration
+into agent containers, giving agents the correct identity for commits and
+enabling SSH commit signing.
+
+``` toml
+[git]
+config_path = "~/.gitconfig"              # optional, defaults to ~/.gitconfig
+signing_key_path = "~/.ssh/id_ed25519.pub"  # optional
+```
+
+The host gitconfig is mounted read-only at `/run/git-host/config`. At container
+startup the entrypoint generates `/home/node/.gitconfig` using git's native
+`[include]` mechanism:
+
+``` ini
+[include]
+    path = /run/git-host/config
+[user]
+    signingkey = /run/git-host/signingkey.pub   # only when signing_key_path is set
+```
+
+All portable settings (name, email, aliases, …) flow through the include
+unchanged. Only `user.signingkey` is overridden to point to the container-local
+path, resolving the host-absolute-path issue without rewriting the original file.
+
+> **Rebuild required**: The entrypoint logic is baked into the image.
+> Run `agent-circus build` after enabling `[git]` for the first time.
+
+> **`[include]` directives** in your gitconfig that reference other host paths
+> (e.g. `~/.gitconfig.local`) will silently produce no-ops inside the container.
+> Extract the portable parts into the forwarded file or use `config_path` to
+> point at a dedicated container-friendly config.
 
 ### Environment Variables
 

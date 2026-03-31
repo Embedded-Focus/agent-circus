@@ -26,6 +26,8 @@ COMPOSE_ADDITIONAL_DIRS_FILE_NAME = "compose.additional-dirs.json"
 
 COMPOSE_SSH_FILE_NAME = "compose.ssh.json"
 
+COMPOSE_GIT_FILE_NAME = "compose.git.json"
+
 CONFIG_FILE_NAME = "config.toml"
 
 DOCKERFILE_NAME = "Dockerfile"
@@ -59,6 +61,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "env": {},
     "additional_dirs": [],
     "ssh": None,
+    "git": None,
 }
 
 logger = logging.getLogger(__name__)
@@ -432,6 +435,34 @@ def build_ssh_override(
     if known_hosts_path:
         volumes.append(f"{known_hosts_path}:/run/ssh-host/known_hosts:ro")
     env = {"SSH_AUTH_SOCK": "/run/ssh-agent.sock"}
+    services = {
+        svc: {"volumes": volumes, "environment": env} for svc in AVAILABLE_SERVICES
+    }
+    return json.dumps({"services": services})
+
+
+def build_git_override(
+    config_path: str,
+    signing_key_path: str | None = None,
+) -> str:
+    """Build a Docker Compose override that forwards the host Git configuration.
+
+    Mounts the host gitconfig at ``/run/git-host/config:ro``.  When
+    *signing_key_path* is provided, the signing public key is also mounted at
+    ``/run/git-host/signingkey.pub:ro``.  ``GIT_CONFIG_GLOBAL`` is set to
+    ``/home/node/.gitconfig`` so that the container entrypoint's generated
+    file (which includes the host config and overrides path-dependent values)
+    is used by Git.
+
+    :param config_path: Absolute host path to the gitconfig file.
+    :param signing_key_path: Absolute host path to the SSH signing public key,
+        or ``None``.
+    :returns: Compose override as a JSON string.
+    """
+    volumes = [f"{config_path}:/run/git-host/config:ro"]
+    if signing_key_path:
+        volumes.append(f"{signing_key_path}:/run/git-host/signingkey.pub:ro")
+    env = {"GIT_CONFIG_GLOBAL": "/home/node/.gitconfig"}
     services = {
         svc: {"volumes": volumes, "environment": env} for svc in AVAILABLE_SERVICES
     }

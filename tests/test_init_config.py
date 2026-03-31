@@ -105,6 +105,35 @@ def test_init_ssh_merges_with_existing_config(workspace) -> None:
     assert "ssh" in data
 
 
+def test_init_git_creates_git_section(workspace) -> None:
+    result = runner.invoke(app, ["init", "--workspace", str(workspace), "--git"])
+    assert result.exit_code == 0, result.output
+    data = _read_toml(workspace / ".agent-circus" / "config.toml")
+    assert data.get("git") == {}
+
+
+def test_init_git_config_path_written(workspace, tmp_path) -> None:
+    cfg = tmp_path / "gitconfig"
+    cfg.write_text("[user]\n\tname = Test\n")
+    result = runner.invoke(
+        app, ["init", "--workspace", str(workspace), "--git-config", str(cfg)]
+    )
+    assert result.exit_code == 0, result.output
+    data = _read_toml(workspace / ".agent-circus" / "config.toml")
+    assert data["git"]["config_path"] == str(cfg)
+
+
+def test_init_git_signing_key_written(workspace, tmp_path) -> None:
+    key = tmp_path / "id_ed25519.pub"
+    key.write_text("ssh-ed25519 AAAA...\n")
+    result = runner.invoke(
+        app, ["init", "--workspace", str(workspace), "--git-signing-key", str(key)]
+    )
+    assert result.exit_code == 0, result.output
+    data = _read_toml(workspace / ".agent-circus" / "config.toml")
+    assert data["git"]["signing_key_path"] == str(key)
+
+
 def test_init_no_flags_no_config_written(workspace) -> None:
     # Bare init without config flags must not create config.toml
     # (it will print guidance about missing config, exit 1 — that's fine)

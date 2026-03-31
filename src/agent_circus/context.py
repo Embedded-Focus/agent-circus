@@ -25,6 +25,7 @@ from .config import (
     build_additional_dirs_override,
     build_agent_config_additions,
     build_env_dockerfile_lines,
+    build_git_override,
     build_shadow_override,
     build_ssh_override,
     load_config,
@@ -106,6 +107,7 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
     env_vars: dict[str, str] = config.get("env", {})
     additional_dirs: list[dict] = config.get("additional_dirs", [])
     ssh_config = config.get("ssh")
+    git_config = config.get("git")
     agent_config_additions = build_agent_config_additions(config)
 
     # Build override strings (None when not needed).
@@ -131,6 +133,16 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
             config_path=config_path,
             known_hosts_path=known_hosts_path,
         )
+
+    git_override: str | None = None
+    if git_config is not None:
+        git_config_path = str(
+            Path(git_config.get("config_path", "~/.gitconfig")).expanduser()
+        )
+        git_signing_key = git_config.get("signing_key_path")
+        if git_signing_key:
+            git_signing_key = str(Path(git_signing_key).expanduser())
+        git_override = build_git_override(git_config_path, git_signing_key)
 
     agent_configs_override: str | None = None
     if agent_config_additions and any(agent_config_additions.values()):
@@ -159,6 +171,7 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
             mcp_override=mcp_override,
             additional_dirs_override=additional_dirs_override,
             ssh_override=ssh_override,
+            git_override=git_override,
         )
     else:
         # Instant mode: copy bundled templates into a fresh temp directory so
@@ -185,4 +198,5 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
                     mcp_override=mcp_override,
                     additional_dirs_override=additional_dirs_override,
                     ssh_override=ssh_override,
+                    git_override=git_override,
                 )

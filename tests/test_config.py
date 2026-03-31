@@ -40,6 +40,7 @@ def test_load_config_no_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         "env": {},
         "additional_dirs": [],
         "ssh": None,
+        "git": None,
     }
 
 

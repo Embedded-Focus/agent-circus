@@ -102,6 +102,35 @@ def init(
             help="Shadow a workspace-relative path with /dev/null (repeatable).",
         ),
     ] = [],
+    git: Annotated[
+        bool,
+        typer.Option(
+            "--git",
+            help="Enable Git configuration forwarding in config.toml.",
+        ),
+    ] = False,
+    git_config: Annotated[
+        Path | None,
+        typer.Option(
+            "--git-config",
+            help="Path to gitconfig file (implies --git, defaults to ~/.gitconfig).",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            resolve_path=True,
+        ),
+    ] = None,
+    git_signing_key: Annotated[
+        Path | None,
+        typer.Option(
+            "--git-signing-key",
+            help="Path to SSH signing public key file (implies --git).",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            resolve_path=True,
+        ),
+    ] = None,
 ) -> None:
     """Initialize or verify agent container configuration.
 
@@ -110,18 +139,30 @@ def init(
 
     Use --check to verify configuration without making changes.
     Use --deploy to deploy template files to the workspace.
-    Use --ssh / --ssh-config / --ssh-known-hosts / --shadow to write
-    configuration options to .agent-circus/config.toml without a full deploy.
+    Use --ssh / --ssh-config / --ssh-known-hosts / --shadow / --git /
+    --git-config / --git-signing-key to write configuration options to
+    .agent-circus/config.toml without a full deploy.
     """
     workspace = workspace or get_workspace_path()
 
-    _apply_config_options(workspace, ssh, ssh_config, ssh_known_hosts, shadow)
+    _apply_config_options(
+        workspace,
+        ssh,
+        ssh_config,
+        ssh_known_hosts,
+        shadow,
+        git,
+        git_config,
+        git_signing_key,
+    )
 
     if deploy:
         _deploy_templates(workspace, force)
     elif check:
         _check_config(workspace)
-    elif not any([ssh, ssh_config, ssh_known_hosts, shadow]):
+    elif not any(
+        [ssh, ssh_config, ssh_known_hosts, shadow, git, git_config, git_signing_key]
+    ):
         _init_config(workspace)
 
     if up:
@@ -134,6 +175,9 @@ def _apply_config_options(
     ssh_config: Path | None,
     ssh_known_hosts: Path | None,
     shadow: list[str],
+    git: bool,
+    git_config: Path | None,
+    git_signing_key: Path | None,
 ) -> None:
     """Write config options to .agent-circus/config.toml.
 
@@ -146,9 +190,13 @@ def _apply_config_options(
     :param ssh_config: Host path for SSH config file, or ``None``.
     :param ssh_known_hosts: Host path for SSH known_hosts file, or ``None``.
     :param shadow: Workspace-relative paths to shadow with ``/dev/null``.
+    :param git: Enable Git configuration forwarding (adds ``[git]`` table).
+    :param git_config: Host path for gitconfig file, or ``None``.
+    :param git_signing_key: Host path for SSH signing public key, or ``None``.
     """
     want_ssh = ssh or ssh_config is not None or ssh_known_hosts is not None
-    if not want_ssh and not shadow:
+    want_git = git or git_config is not None or git_signing_key is not None
+    if not want_ssh and not want_git and not shadow:
         return
 
     config = read_project_config(workspace)
@@ -160,6 +208,14 @@ def _apply_config_options(
         if ssh_known_hosts is not None:
             ssh_section["known_hosts_path"] = str(ssh_known_hosts)
         config["ssh"] = ssh_section
+
+    if want_git:
+        git_section: dict = config.get("git") or {}
+        if git_config is not None:
+            git_section["config_path"] = str(git_config)
+        if git_signing_key is not None:
+            git_section["signing_key_path"] = str(git_signing_key)
+        config["git"] = git_section
 
     if shadow:
         existing: list[str] = config.get("shadow") or []

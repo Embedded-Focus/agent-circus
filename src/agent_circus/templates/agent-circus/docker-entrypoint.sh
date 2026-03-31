@@ -28,4 +28,16 @@ if [[ -s /run/ssh-host/known_hosts ]]; then
   chmod 600 /home/node/.ssh/known_hosts
 fi
 
+# Generate /home/node/.gitconfig from the host config via git's [include] mechanism.
+# The include pulls in all host settings; subsequent directives override host-specific
+# absolute paths (e.g. user.signingkey) with container-local equivalents.
+if [[ -s /run/git-host/config ]]; then
+  {
+    printf '[include]\n\tpath = /run/git-host/config\n'
+    if [[ -s /run/git-host/signingkey.pub ]]; then
+      printf '[user]\n\tsigningkey = /run/git-host/signingkey.pub\n'
+    fi
+  } > /home/node/.gitconfig
+fi
+
 exec "${@}"

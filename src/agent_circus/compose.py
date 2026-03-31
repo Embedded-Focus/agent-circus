@@ -15,6 +15,7 @@ from .exceptions import ComposeError
 from .state import (
     get_additional_dirs_override_path,
     get_agent_configs_override_path,
+    get_git_override_path,
     get_mcp_override_path,
     get_shadow_override_path,
     get_ssh_override_path,
@@ -42,6 +43,7 @@ class ComposeContext:
     :param mcp_override: JSON string for MCP sidecar services, or ``None``.
     :param additional_dirs_override: JSON string for extra directory mounts, or ``None``.
     :param ssh_override: JSON string for SSH agent socket forwarding, or ``None``.
+    :param git_override: JSON string for Git configuration forwarding, or ``None``.
     """
 
     workspace: Path
@@ -54,6 +56,7 @@ class ComposeContext:
     mcp_override: str | None = None
     additional_dirs_override: str | None = None
     ssh_override: str | None = None
+    git_override: str | None = None
 
 
 def _exec_compose(
@@ -120,6 +123,14 @@ def _exec_compose(
         logger.debug("SSH agent override: %s", ssh_path)
     else:
         ssh_path.unlink(missing_ok=True)
+
+    git_path = get_git_override_path(ctx.workspace)
+    if ctx.git_override:
+        git_path.write_text(ctx.git_override)
+        cmd.extend(["-f", str(git_path)])
+        logger.debug("Git config override: %s", git_path)
+    else:
+        git_path.unlink(missing_ok=True)
 
     cmd.extend(args)
     logger.debug("Running: %s", " ".join(cmd))
