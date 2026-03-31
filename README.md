@@ -467,7 +467,8 @@ lines directly to `.agent-circus/Dockerfile`.
 
 Hooks let you inject custom shell commands into the Docker image build,
 without modifying the shared `Dockerfile`. They only apply in
-[deploy mode](#deploy-mode) and are placed under
+[deploy mode](#deploy-mode) — run `agent-circus init --deploy` first to
+create the `.agent-circus/` directory — and are placed under
 `.agent-circus/hooks/`:
 
 | Script | Runs as | Typical use |
@@ -483,7 +484,8 @@ at the user level:
 
 ``` shell
 # .agent-circus/hooks/base-root.sh
-apt-get install -y ripgrep
+apt-get update \
+    && apt-get install -y ripgrep
 ```
 
 ``` shell
