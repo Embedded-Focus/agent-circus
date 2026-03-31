@@ -1,6 +1,6 @@
 ---
 x-common-build-args: &common-build-args
-  TZ: ${TZ:-America/Los_Angeles}
+  TZ: ${TZ:-Europe/Vienna}
   GIT_DELTA_VERSION: 0.18.2
   ZSH_IN_DOCKER_VERSION: 1.2.1
 
