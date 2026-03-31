@@ -26,9 +26,12 @@ from .config import (
     build_agent_config_additions,
     build_env_dockerfile_lines,
     build_git_override,
+    build_hosts_override,
     build_shadow_override,
     build_ssh_override,
+    filter_hosts,
     load_config,
+    parse_hosts_file,
     resolve_config,
     sanitize_project_name,
 )
@@ -134,6 +137,17 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
             known_hosts_path=known_hosts_path,
         )
 
+    hosts_override: str | None = None
+    hosts_config = config.get("hosts")
+    if hosts_config is not None:
+        hosts_file = hosts_config.get("file", "/etc/hosts")
+        patterns: list[str] = hosts_config.get("patterns", [])
+        if patterns:
+            entries = parse_hosts_file(hosts_file)
+            extra_hosts = filter_hosts(entries, patterns)
+            if extra_hosts:
+                hosts_override = build_hosts_override(extra_hosts)
+
     git_override: str | None = None
     if git_config is not None:
         git_config_path = str(
@@ -172,6 +186,7 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
             additional_dirs_override=additional_dirs_override,
             ssh_override=ssh_override,
             git_override=git_override,
+            hosts_override=hosts_override,
         )
     else:
         # Instant mode: copy bundled templates into a fresh temp directory so
@@ -199,4 +214,5 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
                     additional_dirs_override=additional_dirs_override,
                     ssh_override=ssh_override,
                     git_override=git_override,
+                    hosts_override=hosts_override,
                 )

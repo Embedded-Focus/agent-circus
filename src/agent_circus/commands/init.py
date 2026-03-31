@@ -131,6 +131,14 @@ def init(
             resolve_path=True,
         ),
     ] = None,
+    hosts_pattern: Annotated[
+        list[str],
+        typer.Option(
+            "--hosts-pattern",
+            help="Forward /etc/hosts entries matching this pattern (repeatable). "
+            "Glob by default; prefix with 're:' for regex.",
+        ),
+    ] = [],
 ) -> None:
     """Initialize or verify agent container configuration.
 
@@ -140,8 +148,8 @@ def init(
     Use --check to verify configuration without making changes.
     Use --deploy to deploy template files to the workspace.
     Use --ssh / --ssh-config / --ssh-known-hosts / --shadow / --git /
-    --git-config / --git-signing-key to write configuration options to
-    .agent-circus/config.toml without a full deploy.
+    --git-config / --git-signing-key / --hosts-pattern to write
+    configuration options to .agent-circus/config.toml without a full deploy.
     """
     workspace = workspace or get_workspace_path()
 
@@ -154,6 +162,7 @@ def init(
         git,
         git_config,
         git_signing_key,
+        hosts_pattern,
     )
 
     if deploy:
@@ -161,7 +170,16 @@ def init(
     elif check:
         _check_config(workspace)
     elif not any(
-        [ssh, ssh_config, ssh_known_hosts, shadow, git, git_config, git_signing_key]
+        [
+            ssh,
+            ssh_config,
+            ssh_known_hosts,
+            shadow,
+            git,
+            git_config,
+            git_signing_key,
+            hosts_pattern,
+        ]
     ):
         _init_config(workspace)
 
@@ -178,6 +196,7 @@ def _apply_config_options(
     git: bool,
     git_config: Path | None,
     git_signing_key: Path | None,
+    hosts_pattern: list[str],
 ) -> None:
     """Write config options to .agent-circus/config.toml.
 
@@ -193,10 +212,11 @@ def _apply_config_options(
     :param git: Enable Git configuration forwarding (adds ``[git]`` table).
     :param git_config: Host path for gitconfig file, or ``None``.
     :param git_signing_key: Host path for SSH signing public key, or ``None``.
+    :param hosts_pattern: Glob/regex patterns for forwarding ``/etc/hosts`` entries.
     """
     want_ssh = ssh or ssh_config is not None or ssh_known_hosts is not None
     want_git = git or git_config is not None or git_signing_key is not None
-    if not want_ssh and not want_git and not shadow:
+    if not want_ssh and not want_git and not shadow and not hosts_pattern:
         return
 
     config = read_project_config(workspace)
@@ -224,6 +244,16 @@ def _apply_config_options(
             if entry not in merged:
                 merged.append(entry)
         config["shadow"] = merged
+
+    if hosts_pattern:
+        hosts_section: dict = config.get("hosts") or {}
+        existing_patterns: list[str] = hosts_section.get("patterns") or []
+        merged_patterns = list(existing_patterns)
+        for p in hosts_pattern:
+            if p not in merged_patterns:
+                merged_patterns.append(p)
+        hosts_section["patterns"] = merged_patterns
+        config["hosts"] = hosts_section
 
     write_project_config(workspace, config)
     typer.echo(

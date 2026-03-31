@@ -16,6 +16,7 @@ from .state import (
     get_additional_dirs_override_path,
     get_agent_configs_override_path,
     get_git_override_path,
+    get_hosts_override_path,
     get_mcp_override_path,
     get_shadow_override_path,
     get_ssh_override_path,
@@ -57,6 +58,7 @@ class ComposeContext:
     additional_dirs_override: str | None = None
     ssh_override: str | None = None
     git_override: str | None = None
+    hosts_override: str | None = None
 
 
 def _exec_compose(
@@ -131,6 +133,14 @@ def _exec_compose(
         logger.debug("Git config override: %s", git_path)
     else:
         git_path.unlink(missing_ok=True)
+
+    hosts_path = get_hosts_override_path(ctx.workspace)
+    if ctx.hosts_override:
+        hosts_path.write_text(ctx.hosts_override)
+        cmd.extend(["-f", str(hosts_path)])
+        logger.debug("Hosts override: %s", hosts_path)
+    else:
+        hosts_path.unlink(missing_ok=True)
 
     cmd.extend(args)
     logger.debug("Running: %s", " ".join(cmd))

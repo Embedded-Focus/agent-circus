@@ -134,6 +134,32 @@ def test_init_git_signing_key_written(workspace, tmp_path) -> None:
     assert data["git"]["signing_key_path"] == str(key)
 
 
+def test_init_hosts_pattern_written(workspace) -> None:
+    result = runner.invoke(
+        app,
+        ["init", "--workspace", str(workspace), "--hosts-pattern", "*.corp.internal"],
+    )
+    assert result.exit_code == 0, result.output
+    data = _read_toml(workspace / ".agent-circus" / "config.toml")
+    assert "*.corp.internal" in data["hosts"]["patterns"]
+
+
+def test_init_hosts_pattern_additive(workspace) -> None:
+    runner.invoke(
+        app,
+        ["init", "--workspace", str(workspace), "--hosts-pattern", "*.corp.internal"],
+    )
+    runner.invoke(
+        app,
+        ["init", "--workspace", str(workspace), "--hosts-pattern", "myserver"],
+    )
+    data = _read_toml(workspace / ".agent-circus" / "config.toml")
+    patterns = data["hosts"]["patterns"]
+    assert "*.corp.internal" in patterns
+    assert "myserver" in patterns
+    assert len(patterns) == 2  # no duplicates
+
+
 def test_init_no_flags_no_config_written(workspace) -> None:
     # Bare init without config flags must not create config.toml
     # (it will print guidance about missing config, exit 1 — that's fine)

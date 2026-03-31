@@ -1,5 +1,6 @@
 """Configuration management for Agent Circus CLI."""
 
+import fnmatch
 import json
 import logging
 import os
@@ -27,6 +28,8 @@ COMPOSE_ADDITIONAL_DIRS_FILE_NAME = "compose.additional-dirs.json"
 COMPOSE_SSH_FILE_NAME = "compose.ssh.json"
 
 COMPOSE_GIT_FILE_NAME = "compose.git.json"
+
+COMPOSE_HOSTS_FILE_NAME = "compose.hosts.json"
 
 CONFIG_FILE_NAME = "config.toml"
 
@@ -62,6 +65,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "additional_dirs": [],
     "ssh": None,
     "git": None,
+    "hosts": None,
 }
 
 logger = logging.getLogger(__name__)
@@ -466,6 +470,105 @@ def build_git_override(
     services = {
         svc: {"volumes": volumes, "environment": env} for svc in AVAILABLE_SERVICES
     }
+    return json.dumps({"services": services})
+
+
+def parse_hosts_file(path: str = "/etc/hosts") -> list[tuple[str, list[str]]]:
+    """Parse a hosts file into a list of ``(ip, [name, ...])`` tuples.
+
+    Blank lines and lines starting with ``#`` are skipped.  Each
+    remaining line must begin with an IP address followed by one or
+    more hostnames (primary + optional aliases).
+
+    :param path: Path to the hosts file.  Defaults to ``/etc/hosts``.
+    :type path: str
+    :returns: List of ``(ip, names)`` tuples, one per non-comment line.
+    :rtype: list[tuple[str, list[str]]]
+    """
+    entries: list[tuple[str, list[str]]] = []
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.split("#", 1)[0].strip()
+                if not line:
+                    continue
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+                ip, names = parts[0], parts[1:]
+                entries.append((ip, names))
+    except OSError:
+        pass
+    return entries
+
+
+def filter_hosts(
+    entries: list[tuple[str, list[str]]],
+    patterns: list[str],
+) -> list[str]:
+    """Filter host entries by patterns and return ``hostname:ip`` strings.
+
+    Each pattern is matched case-insensitively against every name on a
+    line.  If any name matches, **all** names from that line are included
+    in the output (preserving alias semantics).
+
+    Pattern syntax:
+
+    - Plain patterns are treated as **fnmatch globs** (``*`` matches any
+      sequence of characters, ``?`` matches a single character).
+    - Patterns prefixed with ``re:`` are matched as Python **regular
+      expressions** using :func:`re.search` (unanchored).
+
+    :param entries: Parsed host entries from :func:`parse_hosts_file`.
+    :param patterns: List of glob or ``re:``-prefixed regex patterns.
+    :returns: Deduplicated list of ``"hostname:ip"`` strings.
+    :rtype: list[str]
+    """
+    result: list[str] = []
+    seen: set[str] = set()
+
+    compiled_re: list[re.Pattern[str]] = []
+    glob_patterns: list[str] = []
+    for p in patterns:
+        if p.startswith("re:"):
+            compiled_re.append(re.compile(p[3:], re.IGNORECASE))
+        else:
+            glob_patterns.append(p.lower())
+
+    def _matches(name: str) -> bool:
+        name_lower = name.lower()
+        for pat in glob_patterns:
+            if fnmatch.fnmatch(name_lower, pat):
+                return True
+        for rx in compiled_re:
+            if rx.search(name):
+                return True
+        return False
+
+    for ip, names in entries:
+        if any(_matches(n) for n in names):
+            for name in names:
+                entry = f"{name}:{ip}"
+                if entry not in seen:
+                    seen.add(entry)
+                    result.append(entry)
+
+    return result
+
+
+def build_hosts_override(extra_hosts: list[str]) -> str:
+    """Build a Docker Compose override that injects extra ``/etc/hosts`` entries.
+
+    Applies the same ``extra_hosts`` list to every agent service so that
+    selected host entries from the host machine are resolvable inside
+    containers.
+
+    :param extra_hosts: List of ``"hostname:ip"`` strings to inject.
+    :type extra_hosts: list[str]
+    :returns: Compose override as a JSON string.
+    :rtype: str
+    """
+    services = {svc: {"extra_hosts": extra_hosts} for svc in AVAILABLE_SERVICES}
     return json.dumps({"services": services})
 
 

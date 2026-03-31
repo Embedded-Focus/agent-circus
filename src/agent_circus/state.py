@@ -13,6 +13,7 @@ from .config import (
     COMPOSE_ADDITIONAL_DIRS_FILE_NAME,
     COMPOSE_AGENT_CONFIGS_FILE_NAME,
     COMPOSE_GIT_FILE_NAME,
+    COMPOSE_HOSTS_FILE_NAME,
     COMPOSE_MCP_FILE_NAME,
     COMPOSE_SHADOW_FILE_NAME,
     COMPOSE_SSH_FILE_NAME,
@@ -119,3 +120,14 @@ def get_git_override_path(workspace: Path) -> Path:
     :rtype: Path
     """
     return get_state_dir(workspace) / COMPOSE_GIT_FILE_NAME
+
+
+def get_hosts_override_path(workspace: Path) -> Path:
+    """Get the path for the hosts compose override file.
+
+    :param workspace: Workspace path.
+    :type workspace: Path
+    :returns: Path to ``compose.hosts.json`` in the state directory.
+    :rtype: Path
+    """
+    return get_state_dir(workspace) / COMPOSE_HOSTS_FILE_NAME

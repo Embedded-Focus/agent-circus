@@ -179,6 +179,7 @@ existing `config.toml` without overwriting unrelated keys.
 | `--git` | Add `[git]` table to enable Git config forwarding |
 | `--git-config PATH` | Set `git.config_path` (implies `--git`) |
 | `--git-signing-key PATH` | Set `git.signing_key_path` (implies `--git`) |
+| `--hosts-pattern TEXT` | Append a pattern to `hosts.patterns` (repeatable) |
 
 1. **User-global** — `$XDG_CONFIG_HOME/agent-circus/config.toml`
    (default: `~/.config/agent-circus/config.toml`)
@@ -376,6 +377,43 @@ path, resolving the host-absolute-path issue without rewriting the original file
 > (e.g. `~/.gitconfig.local`) will silently produce no-ops inside the container.
 > Extract the portable parts into the forwarded file or use `config_path` to
 > point at a dedicated container-friendly config.
+
+### Host Entries
+
+Add a `[hosts]` table to `config.toml` to forward selected entries from the host's
+`/etc/hosts` into agent containers. This is useful for reaching internal servers, VPN
+targets, or other hosts that are only resolvable on the host machine.
+
+``` toml
+[hosts]
+patterns = ["*.corp.internal", "myserver", "re:\\.vpn\\.example\\.com$"]
+# file = "/etc/hosts"   # optional, defaults to /etc/hosts
+```
+
+Matching entries are injected via Docker Compose's `extra_hosts` mechanism, which adds
+them to `/etc/hosts` inside every agent container.
+
+**Pattern syntax:**
+
+| Pattern | Syntax | Example |
+|---------|--------|---------|
+| `*.corp.internal` | fnmatch glob (default) | matches `foo.corp.internal` |
+| `myserver` | exact glob | matches only `myserver` |
+| `re:\.vpn\.` | Python regex (prefix `re:`) | matches any name containing `.vpn.` |
+
+- Matching is case-insensitive.
+- If **any** name on a hosts line matches, **all** names from that line are forwarded
+  (e.g. if `myserver.corp.internal` matches, `myserver` is also forwarded — preserving
+  alias semantics).
+
+Use `agent-circus init` to write patterns without editing `config.toml` directly:
+
+``` sh
+agent-circus init --hosts-pattern "*.corp.internal" --hosts-pattern "myserver"
+```
+
+The flag is additive and idempotent: running it again merges new patterns without
+duplicating existing ones.
 
 ### Environment Variables
 
