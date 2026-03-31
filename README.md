@@ -181,6 +181,7 @@ existing `config.toml` without overwriting unrelated keys.
 | `--git-signing-key PATH` | Set `git.signing_key_path` (implies `--git`) |
 | `--hosts-pattern TEXT` | Append a pattern to `hosts.patterns` (repeatable) |
 | `--ca-cert-pattern TEXT` | Append a pattern to `ca_certs.patterns` (repeatable) |
+| `--env-pattern TEXT` | Append a pattern to `env_passthrough` (repeatable) |
 
 1. **User-global** — `$XDG_CONFIG_HOME/agent-circus/config.toml`
    (default: `~/.config/agent-circus/config.toml`)
@@ -446,13 +447,17 @@ duplicating existing ones.
 
 ### Environment Variables
 
-Use the `[env]` table to bake extra environment variables into the
-image. Each entry is injected as a Docker `ENV` instruction at the end
-of the base build stage, so `$VARNAME` is expanded relative to the
-image's current value — not the host shell.
+Two complementary mechanisms control environment variables in containers:
 
-This is the correct way to extend `PATH` after installing a tool in a
-hook script:
+| Mechanism | When | Use for |
+|-----------|------|---------|
+| `[env]` table | **Build time** — baked into the image as `ENV` instructions | Stable toolchain paths, non-secret config |
+| `env_passthrough` list | **Runtime** — forwarded from the host when the container starts | Secrets, tokens, values that change per session |
+
+#### `[env]` — bake into the image
+
+Each entry is injected as a Docker `ENV` instruction at the end of the base build stage,
+so `$VARNAME` is expanded relative to the image's current value — not the host shell.
 
 ``` toml
 [env]
@@ -460,8 +465,39 @@ GOPATH = "/home/node/go"
 PATH = "/usr/local/go/bin:$PATH"
 ```
 
-This only affects **instant mode**. In deploy mode you can add `ENV`
-lines directly to `.agent-circus/Dockerfile`.
+This only affects **instant mode**. In deploy mode add `ENV` lines directly to
+`.agent-circus/Dockerfile`.
+
+#### `env_passthrough` — forward from the host at runtime
+
+Variable **values** are never stored in any config or override file — Docker Compose
+reads them directly from the host environment when the container starts.
+
+``` toml
+env_passthrough = ["MY_CORP_*", "re:^VAULT_", "ANTHROPIC_API_KEY"]
+```
+
+Pattern syntax is the same as `[hosts]` and `[ca_certs]`: fnmatch glob by default,
+`re:` prefix for regex, case-insensitive.
+
+``` sh
+agent-circus init --env-pattern "MY_CORP_*" --env-pattern "re:^VAULT_"
+```
+
+#### Combined example
+
+A typical Go project that needs a corporate proxy and a rotating API token:
+
+``` toml
+# Bake the Go toolchain path into the image once (stable, non-secret).
+[env]
+GOPATH = "/home/node/go"
+PATH = "/usr/local/go/bin:$PATH"
+GOPROXY = "https://proxy.corp.internal/go,direct"
+
+# Forward secrets and session-specific values from the host at runtime.
+env_passthrough = ["ANTHROPIC_API_KEY", "MY_CORP_*", "re:^VAULT_"]
+```
 
 ## Hooks
 

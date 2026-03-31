@@ -27,10 +27,12 @@ from .config import (
     build_agent_config_additions,
     build_ca_certs_override,
     build_env_dockerfile_lines,
+    build_env_passthrough_override,
     build_git_override,
     build_hosts_override,
     build_shadow_override,
     build_ssh_override,
+    filter_env,
     filter_hosts,
     load_config,
     match_files,
@@ -140,6 +142,13 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
             known_hosts_path=known_hosts_path,
         )
 
+    env_passthrough_override: str | None = None
+    env_passthrough_patterns: list[str] = config.get("env_passthrough", [])
+    if env_passthrough_patterns:
+        matched_vars = filter_env(dict(os.environ), env_passthrough_patterns)
+        if matched_vars:
+            env_passthrough_override = build_env_passthrough_override(matched_vars)
+
     ca_certs_override: str | None = None
     ca_certs_config = config.get("ca_certs")
     if ca_certs_config is not None:
@@ -201,6 +210,7 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
             git_override=git_override,
             hosts_override=hosts_override,
             ca_certs_override=ca_certs_override,
+            env_passthrough_override=env_passthrough_override,
         )
     else:
         # Instant mode: copy bundled templates into a fresh temp directory so
@@ -230,4 +240,5 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
                     git_override=git_override,
                     hosts_override=hosts_override,
                     ca_certs_override=ca_certs_override,
+                    env_passthrough_override=env_passthrough_override,
                 )

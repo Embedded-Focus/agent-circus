@@ -186,6 +186,32 @@ def test_init_ca_cert_pattern_additive(workspace) -> None:
     assert len(patterns) == 2
 
 
+def test_init_env_pattern_written(workspace) -> None:
+    result = runner.invoke(
+        app,
+        ["init", "--workspace", str(workspace), "--env-pattern", "MY_CORP_*"],
+    )
+    assert result.exit_code == 0, result.output
+    data = _read_toml(workspace / ".agent-circus" / "config.toml")
+    assert "MY_CORP_*" in data["env_passthrough"]
+
+
+def test_init_env_pattern_additive(workspace) -> None:
+    runner.invoke(
+        app,
+        ["init", "--workspace", str(workspace), "--env-pattern", "MY_CORP_*"],
+    )
+    runner.invoke(
+        app,
+        ["init", "--workspace", str(workspace), "--env-pattern", "re:^VAULT_"],
+    )
+    data = _read_toml(workspace / ".agent-circus" / "config.toml")
+    patterns = data["env_passthrough"]
+    assert "MY_CORP_*" in patterns
+    assert "re:^VAULT_" in patterns
+    assert len(patterns) == 2
+
+
 def test_init_no_flags_no_config_written(workspace) -> None:
     # Bare init without config flags must not create config.toml
     # (it will print guidance about missing config, exit 1 — that's fine)

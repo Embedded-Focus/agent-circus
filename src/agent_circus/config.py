@@ -33,6 +33,8 @@ COMPOSE_HOSTS_FILE_NAME = "compose.hosts.json"
 
 COMPOSE_CA_CERTS_FILE_NAME = "compose.ca-certs.json"
 
+COMPOSE_ENV_PASSTHROUGH_FILE_NAME = "compose.env-passthrough.json"
+
 CA_CERTS_DEFAULT_DIR = "/usr/local/share/ca-certificates"
 
 CONFIG_FILE_NAME = "config.toml"
@@ -71,6 +73,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "git": None,
     "hosts": None,
     "ca_certs": None,
+    "env_passthrough": [],
 }
 
 logger = logging.getLogger(__name__)
@@ -629,6 +632,46 @@ def build_ca_certs_override(cert_paths: list[str]) -> str:
     """
     volumes = [f"{p}:/run/ca-host/{Path(p).name}:ro" for p in cert_paths]
     services = {svc: {"volumes": volumes} for svc in AVAILABLE_SERVICES}
+    return json.dumps({"services": services})
+
+
+def filter_env(environ: dict[str, str], patterns: list[str]) -> list[str]:
+    """Return environment variable names from *environ* that match *patterns*.
+
+    Only the **names** are returned — values are never read or stored, so
+    they remain on the host and are resolved by Docker Compose at container
+    start time.
+
+    Pattern syntax: same as :func:`filter_hosts` — fnmatch glob by default,
+    ``re:`` prefix for Python regex matched case-insensitively against the
+    variable name.
+
+    :param environ: Mapping of variable names to values (typically
+        :data:`os.environ`).
+    :param patterns: List of glob or ``re:``-prefixed regex patterns.
+    :returns: Sorted, deduplicated list of matching variable names.
+    :rtype: list[str]
+    """
+    glob_patterns, compiled_re = _compile_patterns(patterns)
+    return sorted(
+        {name for name in environ if _match_pattern(name, glob_patterns, compiled_re)}
+    )
+
+
+def build_env_passthrough_override(var_names: list[str]) -> str:
+    """Build a Docker Compose override that passes host env vars into containers.
+
+    Each variable is listed by name only (no value) so Docker Compose
+    inherits it from the host environment at container start time — values
+    never appear in the override file on disk.
+
+    :param var_names: Environment variable names to forward.
+    :type var_names: list[str]
+    :returns: Compose override as a JSON string.
+    :rtype: str
+    """
+    env_map = {name: None for name in var_names}
+    services = {svc: {"environment": env_map} for svc in AVAILABLE_SERVICES}
     return json.dumps({"services": services})
 
 

@@ -16,6 +16,7 @@ from .state import (
     get_additional_dirs_override_path,
     get_agent_configs_override_path,
     get_ca_certs_override_path,
+    get_env_passthrough_override_path,
     get_git_override_path,
     get_hosts_override_path,
     get_mcp_override_path,
@@ -61,6 +62,7 @@ class ComposeContext:
     git_override: str | None = None
     hosts_override: str | None = None
     ca_certs_override: str | None = None
+    env_passthrough_override: str | None = None
 
 
 def _exec_compose(
@@ -151,6 +153,14 @@ def _exec_compose(
         logger.debug("CA certs override: %s", ca_certs_path)
     else:
         ca_certs_path.unlink(missing_ok=True)
+
+    env_passthrough_path = get_env_passthrough_override_path(ctx.workspace)
+    if ctx.env_passthrough_override:
+        env_passthrough_path.write_text(ctx.env_passthrough_override)
+        cmd.extend(["-f", str(env_passthrough_path)])
+        logger.debug("Env passthrough override: %s", env_passthrough_path)
+    else:
+        env_passthrough_path.unlink(missing_ok=True)
 
     cmd.extend(args)
     logger.debug("Running: %s", " ".join(cmd))

@@ -148,6 +148,14 @@ def init(
             "Glob by default; prefix with 're:' for regex.",
         ),
     ] = [],
+    env_pattern: Annotated[
+        list[str],
+        typer.Option(
+            "--env-pattern",
+            help="Forward host environment variables whose name matches this pattern "
+            "(repeatable). Glob by default; prefix with 're:' for regex.",
+        ),
+    ] = [],
 ) -> None:
     """Initialize or verify agent container configuration.
 
@@ -174,6 +182,7 @@ def init(
         git_signing_key,
         hosts_pattern,
         ca_cert_pattern,
+        env_pattern,
     )
 
     if deploy:
@@ -191,6 +200,7 @@ def init(
             git_signing_key,
             hosts_pattern,
             ca_cert_pattern,
+            env_pattern,
         ]
     ):
         _init_config(workspace)
@@ -210,6 +220,7 @@ def _apply_config_options(
     git_signing_key: Path | None,
     hosts_pattern: list[str],
     ca_cert_pattern: list[str],
+    env_pattern: list[str],
 ) -> None:
     """Write config options to .agent-circus/config.toml.
 
@@ -227,6 +238,7 @@ def _apply_config_options(
     :param git_signing_key: Host path for SSH signing public key, or ``None``.
     :param hosts_pattern: Glob/regex patterns for forwarding ``/etc/hosts`` entries.
     :param ca_cert_pattern: Glob/regex patterns for forwarding CA certificate files.
+    :param env_pattern: Glob/regex patterns for forwarding host environment variables.
     """
     want_ssh = ssh or ssh_config is not None or ssh_known_hosts is not None
     want_git = git or git_config is not None or git_signing_key is not None
@@ -236,6 +248,7 @@ def _apply_config_options(
         and not shadow
         and not hosts_pattern
         and not ca_cert_pattern
+        and not env_pattern
     ):
         return
 
@@ -284,6 +297,14 @@ def _apply_config_options(
                 merged_ca_patterns.append(p)
         ca_section["patterns"] = merged_ca_patterns
         config["ca_certs"] = ca_section
+
+    if env_pattern:
+        existing_env: list[str] = config.get("env_passthrough") or []
+        merged_env = list(existing_env)
+        for p in env_pattern:
+            if p not in merged_env:
+                merged_env.append(p)
+        config["env_passthrough"] = merged_env
 
     write_project_config(workspace, config)
     typer.echo(
