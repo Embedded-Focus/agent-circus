@@ -40,4 +40,9 @@ if [[ -s /run/git-host/config ]]; then
   } > /home/node/.gitconfig
 fi
 
+# Install forwarded CA certificates and refresh the system trust store.
+if compgen -G "/run/ca-host/*.crt" > /dev/null 2>&1; then
+  sudo /usr/local/bin/install-ca-certs.sh
+fi
+
 exec "${@}"

@@ -139,6 +139,15 @@ def init(
             "Glob by default; prefix with 're:' for regex.",
         ),
     ] = [],
+    ca_cert_pattern: Annotated[
+        list[str],
+        typer.Option(
+            "--ca-cert-pattern",
+            help="Forward CA certificates from /usr/local/share/ca-certificates "
+            "whose filename matches this pattern (repeatable). "
+            "Glob by default; prefix with 're:' for regex.",
+        ),
+    ] = [],
 ) -> None:
     """Initialize or verify agent container configuration.
 
@@ -148,8 +157,9 @@ def init(
     Use --check to verify configuration without making changes.
     Use --deploy to deploy template files to the workspace.
     Use --ssh / --ssh-config / --ssh-known-hosts / --shadow / --git /
-    --git-config / --git-signing-key / --hosts-pattern to write
-    configuration options to .agent-circus/config.toml without a full deploy.
+    --git-config / --git-signing-key / --hosts-pattern / --ca-cert-pattern
+    to write configuration options to .agent-circus/config.toml without a
+    full deploy.
     """
     workspace = workspace or get_workspace_path()
 
@@ -163,6 +173,7 @@ def init(
         git_config,
         git_signing_key,
         hosts_pattern,
+        ca_cert_pattern,
     )
 
     if deploy:
@@ -179,6 +190,7 @@ def init(
             git_config,
             git_signing_key,
             hosts_pattern,
+            ca_cert_pattern,
         ]
     ):
         _init_config(workspace)
@@ -197,6 +209,7 @@ def _apply_config_options(
     git_config: Path | None,
     git_signing_key: Path | None,
     hosts_pattern: list[str],
+    ca_cert_pattern: list[str],
 ) -> None:
     """Write config options to .agent-circus/config.toml.
 
@@ -213,10 +226,17 @@ def _apply_config_options(
     :param git_config: Host path for gitconfig file, or ``None``.
     :param git_signing_key: Host path for SSH signing public key, or ``None``.
     :param hosts_pattern: Glob/regex patterns for forwarding ``/etc/hosts`` entries.
+    :param ca_cert_pattern: Glob/regex patterns for forwarding CA certificate files.
     """
     want_ssh = ssh or ssh_config is not None or ssh_known_hosts is not None
     want_git = git or git_config is not None or git_signing_key is not None
-    if not want_ssh and not want_git and not shadow and not hosts_pattern:
+    if (
+        not want_ssh
+        and not want_git
+        and not shadow
+        and not hosts_pattern
+        and not ca_cert_pattern
+    ):
         return
 
     config = read_project_config(workspace)
@@ -254,6 +274,16 @@ def _apply_config_options(
                 merged_patterns.append(p)
         hosts_section["patterns"] = merged_patterns
         config["hosts"] = hosts_section
+
+    if ca_cert_pattern:
+        ca_section: dict = config.get("ca_certs") or {}
+        existing_ca_patterns: list[str] = ca_section.get("patterns") or []
+        merged_ca_patterns = list(existing_ca_patterns)
+        for p in ca_cert_pattern:
+            if p not in merged_ca_patterns:
+                merged_ca_patterns.append(p)
+        ca_section["patterns"] = merged_ca_patterns
+        config["ca_certs"] = ca_section
 
     write_project_config(workspace, config)
     typer.echo(

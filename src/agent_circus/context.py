@@ -18,12 +18,14 @@ from .agent_config import build_agent_configs_override
 from .compose import ComposeContext
 from .config import (
     AVAILABLE_SERVICES,
+    CA_CERTS_DEFAULT_DIR,
     COMPOSE_FILE_NAME,
     CONFIG_DIR_NAME,
     DOCKERFILE_NAME,
     HOOKS_DIR_NAME,
     build_additional_dirs_override,
     build_agent_config_additions,
+    build_ca_certs_override,
     build_env_dockerfile_lines,
     build_git_override,
     build_hosts_override,
@@ -31,6 +33,7 @@ from .config import (
     build_ssh_override,
     filter_hosts,
     load_config,
+    match_files,
     parse_hosts_file,
     resolve_config,
     sanitize_project_name,
@@ -137,6 +140,16 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
             known_hosts_path=known_hosts_path,
         )
 
+    ca_certs_override: str | None = None
+    ca_certs_config = config.get("ca_certs")
+    if ca_certs_config is not None:
+        certs_dir = ca_certs_config.get("path", CA_CERTS_DEFAULT_DIR)
+        cert_patterns: list[str] = ca_certs_config.get("patterns", [])
+        if cert_patterns:
+            cert_paths = match_files(certs_dir, cert_patterns)
+            if cert_paths:
+                ca_certs_override = build_ca_certs_override(cert_paths)
+
     hosts_override: str | None = None
     hosts_config = config.get("hosts")
     if hosts_config is not None:
@@ -187,6 +200,7 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
             ssh_override=ssh_override,
             git_override=git_override,
             hosts_override=hosts_override,
+            ca_certs_override=ca_certs_override,
         )
     else:
         # Instant mode: copy bundled templates into a fresh temp directory so
@@ -215,4 +229,5 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
                     ssh_override=ssh_override,
                     git_override=git_override,
                     hosts_override=hosts_override,
+                    ca_certs_override=ca_certs_override,
                 )

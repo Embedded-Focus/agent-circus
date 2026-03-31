@@ -100,15 +100,16 @@ RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/
   -a "export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \
   -x
 
-# Copy and set up firewall script
-COPY init-firewall.sh /usr/local/bin/
+# Copy and set up firewall and CA cert scripts
+COPY init-firewall.sh install-ca-certs.sh /usr/local/bin/
 COPY docker-entrypoint.sh /
 USER root
-RUN chmod +x /usr/local/bin/init-firewall.sh && \
+RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/install-ca-certs.sh && \
   { \
     echo 'Defaults env_keep += "AGENT_TYPE"'; \
     echo 'Defaults secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"'; \
     echo 'node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh'; \
+    echo 'node ALL=(root) NOPASSWD: /usr/local/bin/install-ca-certs.sh'; \
   } > /etc/sudoers.d/node-firewall && \
   chmod 0440 /etc/sudoers.d/node-firewall
 

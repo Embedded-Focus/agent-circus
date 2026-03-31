@@ -160,6 +160,32 @@ def test_init_hosts_pattern_additive(workspace) -> None:
     assert len(patterns) == 2  # no duplicates
 
 
+def test_init_ca_cert_pattern_written(workspace) -> None:
+    result = runner.invoke(
+        app,
+        ["init", "--workspace", str(workspace), "--ca-cert-pattern", "corp-*.crt"],
+    )
+    assert result.exit_code == 0, result.output
+    data = _read_toml(workspace / ".agent-circus" / "config.toml")
+    assert "corp-*.crt" in data["ca_certs"]["patterns"]
+
+
+def test_init_ca_cert_pattern_additive(workspace) -> None:
+    runner.invoke(
+        app,
+        ["init", "--workspace", str(workspace), "--ca-cert-pattern", "corp-root.crt"],
+    )
+    runner.invoke(
+        app,
+        ["init", "--workspace", str(workspace), "--ca-cert-pattern", "vpn-ca.crt"],
+    )
+    data = _read_toml(workspace / ".agent-circus" / "config.toml")
+    patterns = data["ca_certs"]["patterns"]
+    assert "corp-root.crt" in patterns
+    assert "vpn-ca.crt" in patterns
+    assert len(patterns) == 2
+
+
 def test_init_no_flags_no_config_written(workspace) -> None:
     # Bare init without config flags must not create config.toml
     # (it will print guidance about missing config, exit 1 — that's fine)

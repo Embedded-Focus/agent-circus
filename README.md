@@ -180,6 +180,7 @@ existing `config.toml` without overwriting unrelated keys.
 | `--git-config PATH` | Set `git.config_path` (implies `--git`) |
 | `--git-signing-key PATH` | Set `git.signing_key_path` (implies `--git`) |
 | `--hosts-pattern TEXT` | Append a pattern to `hosts.patterns` (repeatable) |
+| `--ca-cert-pattern TEXT` | Append a pattern to `ca_certs.patterns` (repeatable) |
 
 1. **User-global** — `$XDG_CONFIG_HOME/agent-circus/config.toml`
    (default: `~/.config/agent-circus/config.toml`)
@@ -377,6 +378,34 @@ path, resolving the host-absolute-path issue without rewriting the original file
 > (e.g. `~/.gitconfig.local`) will silently produce no-ops inside the container.
 > Extract the portable parts into the forwarded file or use `config_path` to
 > point at a dedicated container-friendly config.
+
+### CA Certificates
+
+Add a `[ca_certs]` table to `config.toml` to forward selected CA certificates from the
+host into agent containers. This is needed when agents make HTTPS requests to internal
+services signed by a private or corporate CA.
+
+``` toml
+[ca_certs]
+patterns = ["corp-*.crt", "my-vpn-ca.crt", "re:internal"]
+# path = "/usr/local/share/ca-certificates"   # optional, defaults as above
+```
+
+Certificates whose **filename** matches a pattern are bind-mounted at
+`/run/ca-host/<filename>` and installed into the container's system trust store by the
+entrypoint (`update-ca-certificates`), making them trusted for all tools (curl, git,
+npm, etc.).
+
+Pattern syntax is the same as `[hosts]`: fnmatch glob by default, `re:` prefix for regex.
+
+Use `agent-circus init` to write patterns:
+
+``` sh
+agent-circus init --ca-cert-pattern "corp-*.crt" --ca-cert-pattern "vpn-ca.crt"
+```
+
+> **Rebuild required**: `install-ca-certs.sh` and its sudoers rule are baked into the
+> image. Run `agent-circus build` after enabling `[ca_certs]` for the first time.
 
 ### Host Entries
 

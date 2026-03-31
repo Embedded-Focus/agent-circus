@@ -31,6 +31,10 @@ COMPOSE_GIT_FILE_NAME = "compose.git.json"
 
 COMPOSE_HOSTS_FILE_NAME = "compose.hosts.json"
 
+COMPOSE_CA_CERTS_FILE_NAME = "compose.ca-certs.json"
+
+CA_CERTS_DEFAULT_DIR = "/usr/local/share/ca-certificates"
+
 CONFIG_FILE_NAME = "config.toml"
 
 DOCKERFILE_NAME = "Dockerfile"
@@ -66,6 +70,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "ssh": None,
     "git": None,
     "hosts": None,
+    "ca_certs": None,
 }
 
 logger = logging.getLogger(__name__)
@@ -502,6 +507,50 @@ def parse_hosts_file(path: str = "/etc/hosts") -> list[tuple[str, list[str]]]:
     return entries
 
 
+def _compile_patterns(
+    patterns: list[str],
+) -> tuple[list[str], list[re.Pattern[str]]]:
+    """Split *patterns* into fnmatch globs and compiled regex objects.
+
+    Patterns prefixed with ``re:`` are compiled as case-insensitive regular
+    expressions.  All other patterns are lowercased for case-insensitive
+    fnmatch matching.
+
+    :param patterns: Raw pattern list from config.
+    :returns: ``(glob_patterns, compiled_re)`` tuple.
+    """
+    glob_patterns: list[str] = []
+    compiled_re: list[re.Pattern[str]] = []
+    for p in patterns:
+        if p.startswith("re:"):
+            compiled_re.append(re.compile(p[3:], re.IGNORECASE))
+        else:
+            glob_patterns.append(p.lower())
+    return glob_patterns, compiled_re
+
+
+def _match_pattern(
+    name: str,
+    glob_patterns: list[str],
+    compiled_re: list[re.Pattern[str]],
+) -> bool:
+    """Return ``True`` if *name* matches any glob or regex pattern.
+
+    :param name: String to test (hostname or filename).
+    :param glob_patterns: Pre-lowercased fnmatch glob strings.
+    :param compiled_re: Pre-compiled regex patterns.
+    :returns: ``True`` when at least one pattern matches.
+    """
+    name_lower = name.lower()
+    for pat in glob_patterns:
+        if fnmatch.fnmatch(name_lower, pat):
+            return True
+    for rx in compiled_re:
+        if rx.search(name):
+            return True
+    return False
+
+
 def filter_hosts(
     entries: list[tuple[str, list[str]]],
     patterns: list[str],
@@ -526,27 +575,10 @@ def filter_hosts(
     """
     result: list[str] = []
     seen: set[str] = set()
-
-    compiled_re: list[re.Pattern[str]] = []
-    glob_patterns: list[str] = []
-    for p in patterns:
-        if p.startswith("re:"):
-            compiled_re.append(re.compile(p[3:], re.IGNORECASE))
-        else:
-            glob_patterns.append(p.lower())
-
-    def _matches(name: str) -> bool:
-        name_lower = name.lower()
-        for pat in glob_patterns:
-            if fnmatch.fnmatch(name_lower, pat):
-                return True
-        for rx in compiled_re:
-            if rx.search(name):
-                return True
-        return False
+    glob_patterns, compiled_re = _compile_patterns(patterns)
 
     for ip, names in entries:
-        if any(_matches(n) for n in names):
+        if any(_match_pattern(n, glob_patterns, compiled_re) for n in names):
             for name in names:
                 entry = f"{name}:{ip}"
                 if entry not in seen:
@@ -554,6 +586,50 @@ def filter_hosts(
                     result.append(entry)
 
     return result
+
+
+def match_files(directory: str, patterns: list[str]) -> list[str]:
+    """Return absolute paths of files in *directory* whose name matches *patterns*.
+
+    Only regular files (not subdirectories or symlinks to directories) are
+    returned.  Returns an empty list when *directory* does not exist.
+
+    Pattern syntax: same as :func:`filter_hosts` — fnmatch glob by default,
+    ``re:`` prefix for Python regex matched against the basename.
+
+    :param directory: Absolute path to the directory to scan.
+    :param patterns: List of glob or ``re:``-prefixed regex patterns.
+    :returns: Sorted list of absolute file paths whose basename matches.
+    :rtype: list[str]
+    """
+    try:
+        entries = Path(directory).iterdir()
+    except OSError:
+        return []
+    glob_patterns, compiled_re = _compile_patterns(patterns)
+    result = []
+    for entry in entries:
+        if entry.is_file() and _match_pattern(entry.name, glob_patterns, compiled_re):
+            result.append(str(entry))
+    return sorted(result)
+
+
+def build_ca_certs_override(cert_paths: list[str]) -> str:
+    """Build a Docker Compose override that bind-mounts CA certificate files.
+
+    Each certificate is mounted read-only at
+    ``/run/ca-host/<basename>`` inside every agent container.  The
+    container entrypoint copies them into the system certificate store
+    and runs ``update-ca-certificates`` at startup.
+
+    :param cert_paths: Absolute host paths to ``.crt`` files to forward.
+    :type cert_paths: list[str]
+    :returns: Compose override as a JSON string.
+    :rtype: str
+    """
+    volumes = [f"{p}:/run/ca-host/{Path(p).name}:ro" for p in cert_paths]
+    services = {svc: {"volumes": volumes} for svc in AVAILABLE_SERVICES}
+    return json.dumps({"services": services})
 
 
 def build_hosts_override(extra_hosts: list[str]) -> str:

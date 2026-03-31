@@ -15,6 +15,7 @@ from .exceptions import ComposeError
 from .state import (
     get_additional_dirs_override_path,
     get_agent_configs_override_path,
+    get_ca_certs_override_path,
     get_git_override_path,
     get_hosts_override_path,
     get_mcp_override_path,
@@ -59,6 +60,7 @@ class ComposeContext:
     ssh_override: str | None = None
     git_override: str | None = None
     hosts_override: str | None = None
+    ca_certs_override: str | None = None
 
 
 def _exec_compose(
@@ -141,6 +143,14 @@ def _exec_compose(
         logger.debug("Hosts override: %s", hosts_path)
     else:
         hosts_path.unlink(missing_ok=True)
+
+    ca_certs_path = get_ca_certs_override_path(ctx.workspace)
+    if ctx.ca_certs_override:
+        ca_certs_path.write_text(ctx.ca_certs_override)
+        cmd.extend(["-f", str(ca_certs_path)])
+        logger.debug("CA certs override: %s", ca_certs_path)
+    else:
+        ca_certs_path.unlink(missing_ok=True)
 
     cmd.extend(args)
     logger.debug("Running: %s", " ".join(cmd))
