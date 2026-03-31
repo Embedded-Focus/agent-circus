@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   iptables \
   ipset \
   iproute2 \
+  iputils-ping \
   dnsutils \
   aggregate \
   jq \
