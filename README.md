@@ -499,13 +499,26 @@ GOPROXY = "https://proxy.corp.internal/go,direct"
 env_passthrough = ["ANTHROPIC_API_KEY", "MY_CORP_*", "re:^VAULT_"]
 ```
 
+### `[logging]` — log level and file
+
+Control logging from your user-global `config.toml`
+(`~/.config/agent-circus/config.toml`):
+
+``` toml
+[logging]
+level = "DEBUG"                      # DEBUG | INFO | WARNING | ERROR | CRITICAL
+file  = "/tmp/agent-circus.log"      # optional; omit to log to stdout only
+```
+
+The `--log-level` and `--log-file` CLI flags (and their `LOGLEVEL` / `LOGFILE`
+environment variables) take precedence over `config.toml`.  This section is
+read from the **user-global** config only — project-local logging config is
+not supported because logging is initialised before the workspace is known.
+
 ## Hooks
 
 Hooks let you inject custom shell commands into the Docker image build,
-without modifying the shared `Dockerfile`. They only apply in
-[deploy mode](#deploy-mode) — run `agent-circus init --deploy` first to
-create the `.agent-circus/` directory — and are placed under
-`.agent-circus/hooks/`:
+without modifying the shared `Dockerfile`.
 
 | Script | Runs as | When | Typical use |
 |---|---|---|---|
@@ -517,8 +530,41 @@ Build scripts are optional and removed from the image after execution.
 `startup.sh` is read directly from the bind-mounted workspace at container
 start — changes take effect immediately without a rebuild.
 
-Example — add `ripgrep` at the system level and a global npm package
-at the user level:
+### Inline hooks via `config.toml` (instant mode)
+
+In instant mode you can define hook content directly in `config.toml` using
+the `[hooks]` table.  This works without a `.agent-circus/` directory and is
+ideal for user-global hooks that apply to every project:
+
+``` toml
+[hooks]
+base_root = """
+apt-get update && apt-get install -y ripgrep fd-find
+"""
+
+base_user = """
+npm install -g @myorg/custom-tool
+curl -fsSL https://my-tool.sh | sh
+"""
+
+startup = """
+uv sync
+"""
+```
+
+Values are multi-line TOML strings written verbatim as shell scripts. A
+`#!/usr/bin/env bash` shebang is prepended automatically when absent.  If
+both a `[hooks]` table and project hook files exist, `config.toml` wins.
+
+> **Note:** `startup.sh` defined in `config.toml` is written to the XDG state
+> directory and bind-mounted into the container at
+> `/workspace/.agent-circus/hooks/startup.sh`. It takes precedence over any
+> `startup.sh` file in the workspace. `base_root` and `base_user` are ignored
+> in deploy mode — place those scripts in `.agent-circus/hooks/` directly.
+
+### Hook files (deploy mode)
+
+In deploy mode, place scripts under `.agent-circus/hooks/`:
 
 ``` shell
 # .agent-circus/hooks/base-root.sh

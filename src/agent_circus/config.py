@@ -35,6 +35,8 @@ COMPOSE_CA_CERTS_FILE_NAME = "compose.ca-certs.json"
 
 COMPOSE_ENV_PASSTHROUGH_FILE_NAME = "compose.env-passthrough.json"
 
+COMPOSE_STARTUP_HOOK_FILE_NAME = "compose.startup-hook.json"
+
 CA_CERTS_DEFAULT_DIR = "/usr/local/share/ca-certificates"
 
 CONFIG_FILE_NAME = "config.toml"
@@ -74,6 +76,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "hosts": None,
     "ca_certs": None,
     "env_passthrough": [],
+    "hooks": None,
+    "logging": {"level": "INFO", "file": None},
 }
 
 logger = logging.getLogger(__name__)
@@ -245,6 +249,53 @@ def _load_toml(path: Path) -> dict[str, Any]:
         raise ConfigurationError(f"Invalid TOML in {path}: {e}") from e
 
 
+def validate_config(config: dict[str, Any]) -> None:
+    """Warn about unknown top-level keys in a loaded configuration dict.
+
+    Logs a WARNING for every key not present in :data:`DEFAULT_CONFIG`.
+    Unknown keys are ignored rather than rejected so that older installs
+    remain compatible with config files written for newer versions.
+
+    :param config: Merged configuration dictionary.
+    """
+    known = set(DEFAULT_CONFIG)
+    for key in config:
+        if key not in known:
+            logger.warning("Unknown config key %r — ignoring", key)
+
+
+def write_hook_script(content: str, dest: Path) -> None:
+    """Write inline hook script content to *dest*, ensuring it is executable.
+
+    Prepends ``#!/usr/bin/env bash`` if the content does not already start
+    with a shebang line.  Creates parent directories as needed.
+
+    :param content: Shell script body from ``config.toml``.
+    :param dest: Destination path for the script file.
+    """
+    if not content.startswith("#!"):
+        content = "#!/usr/bin/env bash\n" + content
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(content)
+    dest.chmod(0o755)
+
+
+def load_user_config() -> dict[str, Any]:
+    """Load the user-global configuration file.
+
+    Returns an empty dict when the file does not exist.  Unlike
+    :func:`load_config`, no defaults are applied and no project-local
+    layer is merged.
+
+    :returns: Parsed user-global config, or ``{}`` if absent.
+    :raises ConfigurationError: If the file contains invalid TOML.
+    """
+    path = get_user_config_path()
+    if not path.is_file():
+        return {}
+    return _load_toml(path)
+
+
 def load_config(workspace: Path) -> dict[str, Any]:
     """Load and merge configuration from user-global and project-local files.
 
@@ -271,6 +322,7 @@ def load_config(workspace: Path) -> dict[str, Any]:
             layer = _load_toml(path)
             config.update(layer)
 
+    validate_config(config)
     return config
 
 
@@ -702,4 +754,24 @@ def build_shadow_override(shadow: list[str]) -> str:
     """
     volumes = [f"/dev/null:/workspace/{p}:ro" for p in shadow]
     services = {name: {"volumes": volumes} for name in AVAILABLE_SERVICES}
+    return json.dumps({"services": services})
+
+
+def build_startup_hook_override(startup_script_path: Path) -> str:
+    """Build a Docker Compose override that bind-mounts a startup hook script.
+
+    Mounts *startup_script_path* read-only at
+    ``/workspace/.agent-circus/hooks/startup.sh`` inside every agent
+    container, shadowing any file at that path coming from the workspace
+    bind-mount.  Docker's volume semantics give the more specific path
+    precedence, so this effectively makes ``config.toml`` win over a
+    workspace-level ``startup.sh``.
+
+    :param startup_script_path: Absolute host path to the startup script
+        (typically in the XDG state directory).
+    :returns: Compose override as a JSON string.
+    :rtype: str
+    """
+    volume = f"{startup_script_path}:/workspace/.agent-circus/hooks/startup.sh:ro"
+    services = {svc: {"volumes": [volume]} for svc in AVAILABLE_SERVICES}
     return json.dumps({"services": services})

@@ -9,6 +9,7 @@ from agent_circus.config import (
     get_project_config_path,
     get_user_config_path,
     load_config,
+    load_user_config,
 )
 from agent_circus.exceptions import ConfigurationError
 
@@ -44,7 +45,29 @@ def test_load_config_no_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         "hosts": None,
         "ca_certs": None,
         "env_passthrough": [],
+        "hooks": None,
+        "logging": {"level": "INFO", "file": None},
     }
+
+
+def test_load_user_config_returns_empty_when_absent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    assert load_user_config() == {}
+
+
+def test_load_user_config_reads_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    xdg_dir = tmp_path / "xdg" / "agent-circus"
+    xdg_dir.mkdir(parents=True)
+    (xdg_dir / "config.toml").write_text('[logging]\nlevel = "DEBUG"\n')
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    config = load_user_config()
+    assert config == {"logging": {"level": "DEBUG"}}
 
 
 def test_load_config_user_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

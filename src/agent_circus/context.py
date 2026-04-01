@@ -32,6 +32,7 @@ from .config import (
     build_hosts_override,
     build_shadow_override,
     build_ssh_override,
+    build_startup_hook_override,
     filter_env,
     filter_hosts,
     load_config,
@@ -39,15 +40,24 @@ from .config import (
     parse_hosts_file,
     resolve_config,
     sanitize_project_name,
+    write_hook_script,
 )
 from .exceptions import ConfigurationError
 from .mcp import build_compose_override as build_mcp_compose_override
-from .state import get_agent_configs_dir
+from .state import get_agent_configs_dir, get_startup_hook_path
 from .templates import template_dir_context
 
 logger = logging.getLogger(__name__)
 
 _HOOK_SCRIPTS = ("base-root.sh", "base-user.sh")
+# Maps config.toml [hooks] keys to their build-context filenames.
+# Only build-time hooks (baked into the image) are supported here;
+# startup.sh is bind-mounted from the workspace at runtime and cannot
+# be inlined in the build context.
+_CONFIG_HOOK_MAP = {
+    "base_root": "base-root.sh",
+    "base_user": "base-user.sh",
+}
 # Inject ENV lines immediately before the base-stage ENTRYPOINT instruction.
 _ENV_INJECTION_ANCHOR = "\nENTRYPOINT"
 
@@ -71,6 +81,24 @@ def _copy_project_hooks(workspace: Path, build_context: Path) -> None:
         src = hooks_src / hook_name
         if src.is_file():
             shutil.copy2(src, hooks_dst / hook_name)
+
+
+def _write_config_hooks(hooks_config: dict, build_context: Path) -> None:
+    """Write inline hook scripts from config.toml into the Docker build context.
+
+    Overwrites any scripts previously copied by :func:`_copy_project_hooks`.
+    Only ``base_root`` and ``base_user`` are supported; ``startup`` is
+    executed at runtime from ``/workspace/.agent-circus/hooks/startup.sh``
+    and cannot be inlined into the build context.
+
+    :param hooks_config: ``[hooks]`` table from merged config.
+    :param build_context: Target build context directory.
+    """
+    hooks_dst = build_context / HOOKS_DIR_NAME
+    for key, filename in _CONFIG_HOOK_MAP.items():
+        content = hooks_config.get(key)
+        if content is not None:
+            write_hook_script(content, hooks_dst / filename)
 
 
 def _inject_env_into_dockerfile(build_context: Path, env: dict[str, str]) -> None:
@@ -193,10 +221,25 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
 
     project_name = sanitize_project_name(workspace.name)
 
+    hooks_config = config.get("hooks")
+
+    startup_hook_override: str | None = None
+    if hooks_config and hooks_config.get("startup"):
+        startup_path = get_startup_hook_path(workspace)
+        write_hook_script(hooks_config["startup"], startup_path)
+        startup_hook_override = build_startup_hook_override(startup_path)
+
     config_dir = resolve_config(workspace)
 
     if config_dir is not None:
         # Deploy mode: compose file lives in the workspace.
+        if hooks_config is not None and any(
+            k in hooks_config for k in ("base_root", "base_user")
+        ):
+            logger.warning(
+                "config.toml [hooks].base_root / base_user is ignored in deploy mode — "
+                "place hook scripts in .agent-circus/hooks/ directly."
+            )
         yield ComposeContext(
             workspace=workspace,
             project_name=project_name,
@@ -211,6 +254,7 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
             hosts_override=hosts_override,
             ca_certs_override=ca_certs_override,
             env_passthrough_override=env_passthrough_override,
+            startup_hook_override=startup_hook_override,
         )
     else:
         # Instant mode: copy bundled templates into a fresh temp directory so
@@ -223,6 +267,8 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
                     src_dir, build_context, symlinks=True, dirs_exist_ok=True
                 )
                 _copy_project_hooks(workspace, build_context)
+                if hooks_config is not None:
+                    _write_config_hooks(hooks_config, build_context)
                 _inject_env_into_dockerfile(build_context, env_vars)
                 env = os.environ.copy()
                 env["AGENT_CIRCUS_WORKSPACE"] = str(workspace)
@@ -241,4 +287,5 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
                     hosts_override=hosts_override,
                     ca_certs_override=ca_certs_override,
                     env_passthrough_override=env_passthrough_override,
+                    startup_hook_override=startup_hook_override,
                 )

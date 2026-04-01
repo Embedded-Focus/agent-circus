@@ -6,6 +6,7 @@ from typing import Annotated
 import typer
 
 from agent_circus.commands import build, exec_, init, ps, remove, up
+from agent_circus.config import load_user_config
 from agent_circus.utils import setup_logging
 
 app = typer.Typer(
@@ -18,13 +19,13 @@ app = typer.Typer(
 @app.callback()
 def main(
     log_level: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--log-level",
             envvar="LOGLEVEL",
             help="Set the log level (DEBUG, INFO, WARNING, ERROR, CRITICAL).",
         ),
-    ] = "INFO",
+    ] = None,
     log_file: Annotated[
         Path | None,
         typer.Option(
@@ -35,7 +36,12 @@ def main(
     ] = None,
 ) -> None:
     """CLI for managing agent containers."""
-    setup_logging(level=log_level, log_file=log_file)
+    logging_cfg = load_user_config().get("logging", {})
+    setup_logging(
+        level=log_level or logging_cfg.get("level", "INFO"),
+        log_file=log_file
+        or (Path(logging_cfg["file"]) if logging_cfg.get("file") else None),
+    )
 
 
 app.command()(init.init)

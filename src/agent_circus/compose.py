@@ -22,6 +22,7 @@ from .state import (
     get_mcp_override_path,
     get_shadow_override_path,
     get_ssh_override_path,
+    get_startup_hook_override_path,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,7 @@ class ComposeContext:
     hosts_override: str | None = None
     ca_certs_override: str | None = None
     env_passthrough_override: str | None = None
+    startup_hook_override: str | None = None
 
 
 def _exec_compose(
@@ -161,6 +163,14 @@ def _exec_compose(
         logger.debug("Env passthrough override: %s", env_passthrough_path)
     else:
         env_passthrough_path.unlink(missing_ok=True)
+
+    startup_hook_path = get_startup_hook_override_path(ctx.workspace)
+    if ctx.startup_hook_override:
+        startup_hook_path.write_text(ctx.startup_hook_override)
+        cmd.extend(["-f", str(startup_hook_path)])
+        logger.debug("Startup hook override: %s", startup_hook_path)
+    else:
+        startup_hook_path.unlink(missing_ok=True)
 
     cmd.extend(args)
     logger.debug("Running: %s", " ".join(cmd))

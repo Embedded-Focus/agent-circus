@@ -19,6 +19,7 @@ from .config import (
     COMPOSE_MCP_FILE_NAME,
     COMPOSE_SHADOW_FILE_NAME,
     COMPOSE_SSH_FILE_NAME,
+    COMPOSE_STARTUP_HOOK_FILE_NAME,
     sanitize_project_name,
 )
 
@@ -155,3 +156,29 @@ def get_env_passthrough_override_path(workspace: Path) -> Path:
     :rtype: Path
     """
     return get_state_dir(workspace) / COMPOSE_ENV_PASSTHROUGH_FILE_NAME
+
+
+def get_startup_hook_path(workspace: Path) -> Path:
+    """Get the path for the startup hook script in the state directory.
+
+    Creates the ``hooks/`` subdirectory if it does not exist.
+
+    :param workspace: Workspace path.
+    :type workspace: Path
+    :returns: Path to ``hooks/startup.sh`` in the state directory.
+    :rtype: Path
+    """
+    hooks_dir = get_state_dir(workspace) / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    return hooks_dir / "startup.sh"
+
+
+def get_startup_hook_override_path(workspace: Path) -> Path:
+    """Get the path for the startup hook compose override file.
+
+    :param workspace: Workspace path.
+    :type workspace: Path
+    :returns: Path to ``compose.startup-hook.json`` in the state directory.
+    :rtype: Path
+    """
+    return get_state_dir(workspace) / COMPOSE_STARTUP_HOOK_FILE_NAME
