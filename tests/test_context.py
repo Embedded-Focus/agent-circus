@@ -235,7 +235,7 @@ def test_inject_env_inserts_before_entrypoint(tmp_path: Path) -> None:
     _inject_env_into_dockerfile(tmp_path, {"GOPATH": "/home/node/go"})
 
     content = dockerfile.read_text()
-    assert "ENV GOPATH=/home/node/go" in content
+    assert 'ENV GOPATH="/home/node/go"' in content
     # ENV must appear before ENTRYPOINT in the file
     assert content.index("ENV GOPATH") < content.index("ENTRYPOINT")
 
@@ -249,8 +249,24 @@ def test_inject_env_multiple_vars(tmp_path: Path) -> None:
     )
 
     content = dockerfile.read_text()
-    assert "ENV GOPATH=/home/node/go" in content
-    assert "ENV PATH=/usr/local/go/bin:$PATH" in content
+    assert 'ENV GOPATH="/home/node/go"' in content
+    assert 'ENV PATH="/usr/local/go/bin:$PATH"' in content
+
+
+def test_inject_env_value_with_spaces_is_quoted(tmp_path: Path) -> None:
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(f"FROM scratch{_ENV_INJECTION_ANCHOR} []\n")
+
+    _inject_env_into_dockerfile(
+        tmp_path,
+        {"LG_BUILDINFO_NAME": "firmware :: ybp :: yocto-based-platform :: main"},
+    )
+
+    content = dockerfile.read_text()
+    assert (
+        'ENV LG_BUILDINFO_NAME="firmware :: ybp :: yocto-based-platform :: main"'
+        in content
+    )
 
 
 def test_inject_env_empty_leaves_dockerfile_unchanged(tmp_path: Path) -> None:
@@ -291,5 +307,5 @@ def test_context_instant_mode_injects_env(
 
     with build_compose_context(workspace) as ctx:
         content = (ctx.cwd / "Dockerfile").read_text()
-        assert "ENV PATH=/usr/local/go/bin:$PATH" in content
+        assert 'ENV PATH="/usr/local/go/bin:$PATH"' in content
         assert content.index("ENV PATH") < content.index("ENTRYPOINT")

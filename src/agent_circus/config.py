@@ -435,16 +435,24 @@ def validate_services(services: list[str]) -> list[str]:
 def build_env_dockerfile_lines(env: dict[str, str]) -> list[str]:
     """Build Dockerfile ``ENV`` instruction lines from an env mapping.
 
-    Each entry is emitted as a separate ``ENV key=value`` line so that
+    Each entry is emitted as a separate ``ENV key="value"`` line so that
     Docker treats each variable as an independent layer, which is
     important for ``$VARNAME`` expansion (e.g. ``PATH=/foo:$PATH``
     expands ``$PATH`` from the previous layer's value).
+
+    Values are double-quoted to prevent Docker from interpreting
+    whitespace-separated tokens as additional ``key=value`` pairs
+    (legacy multi-variable ``ENV`` syntax).
 
     :param env: Mapping of environment variable names to values.
     :returns: List of Dockerfile ``ENV`` instruction strings, one per variable.
     :rtype: list[str]
     """
-    return [f"ENV {key}={value}" for key, value in env.items()]
+
+    def _quote(v: str) -> str:
+        return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    return [f"ENV {key}={_quote(value)}" for key, value in env.items()]
 
 
 def build_additional_dirs_override(additional_dirs: list[dict]) -> str:
