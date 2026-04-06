@@ -136,7 +136,7 @@ ARG CLAUDE_AGENT_ACP_VERSION
 
 RUN npm install -g \
     @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
-    @zed-industries/claude-agent-acp@${CLAUDE_AGENT_ACP_VERSION}
+    @agentclientprotocol/claude-agent-acp@${CLAUDE_AGENT_ACP_VERSION}
 
 FROM base AS codex
 
