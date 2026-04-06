@@ -15,6 +15,7 @@ from .config import (
     COMPOSE_CA_CERTS_FILE_NAME,
     COMPOSE_ENV_PASSTHROUGH_FILE_NAME,
     COMPOSE_GIT_FILE_NAME,
+    COMPOSE_GIT_WORKTREE_MIRROR_FILE_NAME,
     COMPOSE_HOSTS_FILE_NAME,
     COMPOSE_MCP_FILE_NAME,
     COMPOSE_SHADOW_FILE_NAME,
@@ -156,6 +157,17 @@ def get_env_passthrough_override_path(workspace: Path) -> Path:
     :rtype: Path
     """
     return get_state_dir(workspace) / COMPOSE_ENV_PASSTHROUGH_FILE_NAME
+
+
+def get_git_worktree_mirror_override_path(workspace: Path) -> Path:
+    """Get the path for the git worktree mirror compose override file.
+
+    :param workspace: Workspace path.
+    :type workspace: Path
+    :returns: Path to ``compose.git-worktree-mirror.json`` in the state directory.
+    :rtype: Path
+    """
+    return get_state_dir(workspace) / COMPOSE_GIT_WORKTREE_MIRROR_FILE_NAME
 
 
 def get_startup_hook_path(workspace: Path) -> Path:

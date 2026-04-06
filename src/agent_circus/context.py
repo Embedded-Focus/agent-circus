@@ -29,6 +29,7 @@ from .config import (
     build_env_dockerfile_lines,
     build_env_passthrough_override,
     build_git_override,
+    build_git_worktree_mirror_override,
     build_hosts_override,
     build_shadow_override,
     build_ssh_override,
@@ -229,6 +230,10 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
         write_hook_script(hooks_config["startup"], startup_path)
         startup_hook_override = build_startup_hook_override(startup_path)
 
+    git_worktree_mirror_override: str | None = None
+    if git_config and git_config.get("worktree_mirror"):
+        git_worktree_mirror_override = build_git_worktree_mirror_override(workspace)
+
     config_dir = resolve_config(workspace)
 
     if config_dir is not None:
@@ -255,6 +260,7 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
             ca_certs_override=ca_certs_override,
             env_passthrough_override=env_passthrough_override,
             startup_hook_override=startup_hook_override,
+            git_worktree_mirror_override=git_worktree_mirror_override,
         )
     else:
         # Instant mode: copy bundled templates into a fresh temp directory so
@@ -288,4 +294,5 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
                     ca_certs_override=ca_certs_override,
                     env_passthrough_override=env_passthrough_override,
                     startup_hook_override=startup_hook_override,
+                    git_worktree_mirror_override=git_worktree_mirror_override,
                 )

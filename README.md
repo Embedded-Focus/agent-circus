@@ -182,6 +182,7 @@ existing `config.toml` without overwriting unrelated keys.
 | `--hosts-pattern TEXT` | Append a pattern to `hosts.patterns` (repeatable) |
 | `--ca-cert-pattern TEXT` | Append a pattern to `ca_certs.patterns` (repeatable) |
 | `--env-pattern TEXT` | Append a pattern to `env_passthrough` (repeatable) |
+| `--git-worktree-mirror` | Set `git.worktree_mirror = true` and write `AGENTS.md` |
 
 1. **User-global** — `$XDG_CONFIG_HOME/agent-circus/config.toml`
    (default: `~/.config/agent-circus/config.toml`)
@@ -355,6 +356,7 @@ enabling SSH commit signing.
 [git]
 config_path = "~/.gitconfig"              # optional, defaults to ~/.gitconfig
 signing_key_path = "~/.ssh/id_ed25519.pub"  # optional
+worktree_mirror = true                    # optional, see below
 ```
 
 The host gitconfig is mounted read-only at `/run/git-host/config`. At container
@@ -379,6 +381,34 @@ path, resolving the host-absolute-path issue without rewriting the original file
 > (e.g. `~/.gitconfig.local`) will silently produce no-ops inside the container.
 > Extract the portable parts into the forwarded file or use `config_path` to
 > point at a dedicated container-friendly config.
+
+#### Worktree support (`worktree_mirror`)
+
+Set `worktree_mirror = true` when the repository is also used outside the
+containers and you need transparent Git worktree support.
+
+This adds a second bind mount for the workspace at its exact host absolute path
+inside every agent container (in addition to the standard `/workspace` mount).
+Both paths point to the same directory, so Git's recorded absolute paths are
+valid inside the container — `git worktree list`, `git worktree add`, and all
+other operations that consume or emit absolute paths work without any manual
+path rewriting.
+
+Enable it via `agent-circus init`:
+
+``` sh
+agent-circus init --git-worktree-mirror
+```
+
+This also writes a managed `## Git Operations` section to `AGENTS.md` in the
+workspace, instructing agents to use the host path (e.g.
+`/home/user/projects/myrepo`) rather than `/workspace` for Git operations.
+The section is bounded by HTML comment markers and updated idempotently on
+subsequent runs.
+
+> **Note:** The host path of the workspace is embedded in `AGENTS.md` at init
+> time. Re-run `agent-circus init --git-worktree-mirror` if the repository is
+> moved to a different location on the host.
 
 ### CA Certificates
 

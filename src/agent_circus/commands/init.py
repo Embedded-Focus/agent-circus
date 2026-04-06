@@ -156,6 +156,15 @@ def init(
             "(repeatable). Glob by default; prefix with 're:' for regex.",
         ),
     ] = [],
+    git_worktree_mirror: Annotated[
+        bool,
+        typer.Option(
+            "--git-worktree-mirror",
+            help="Mount the workspace at its host path inside containers for "
+            "transparent Git worktree support. Also writes a Git instructions "
+            "section to CLAUDE.md.",
+        ),
+    ] = False,
 ) -> None:
     """Initialize or verify agent container configuration.
 
@@ -165,9 +174,9 @@ def init(
     Use --check to verify configuration without making changes.
     Use --deploy to deploy template files to the workspace.
     Use --ssh / --ssh-config / --ssh-known-hosts / --shadow / --git /
-    --git-config / --git-signing-key / --hosts-pattern / --ca-cert-pattern
-    to write configuration options to .agent-circus/config.toml without a
-    full deploy.
+    --git-config / --git-signing-key / --hosts-pattern / --ca-cert-pattern /
+    --git-worktree-mirror to write configuration options to
+    .agent-circus/config.toml without a full deploy.
     """
     workspace = workspace or get_workspace_path()
 
@@ -183,6 +192,7 @@ def init(
         hosts_pattern,
         ca_cert_pattern,
         env_pattern,
+        git_worktree_mirror,
     )
 
     if deploy:
@@ -201,6 +211,7 @@ def init(
             hosts_pattern,
             ca_cert_pattern,
             env_pattern,
+            git_worktree_mirror,
         ]
     ):
         _init_config(workspace)
@@ -221,12 +232,17 @@ def _apply_config_options(
     hosts_pattern: list[str],
     ca_cert_pattern: list[str],
     env_pattern: list[str],
+    git_worktree_mirror: bool = False,
 ) -> None:
     """Write config options to .agent-circus/config.toml.
 
     Merges the provided options into the existing project-local config,
     creating the config directory and file if absent.  Returns immediately
     when no options are given.
+
+    When *git_worktree_mirror* is ``True``, also writes a managed section to
+    ``CLAUDE.md`` in the workspace instructing the agent to use the host path
+    for Git operations.
 
     :param workspace: Workspace path.
     :param ssh: Enable SSH agent forwarding (adds ``[ssh]`` table).
@@ -239,6 +255,7 @@ def _apply_config_options(
     :param hosts_pattern: Glob/regex patterns for forwarding ``/etc/hosts`` entries.
     :param ca_cert_pattern: Glob/regex patterns for forwarding CA certificate files.
     :param env_pattern: Glob/regex patterns for forwarding host environment variables.
+    :param git_worktree_mirror: Mount workspace at its host path for Git worktrees.
     """
     want_ssh = ssh or ssh_config is not None or ssh_known_hosts is not None
     want_git = git or git_config is not None or git_signing_key is not None
@@ -249,6 +266,7 @@ def _apply_config_options(
         and not hosts_pattern
         and not ca_cert_pattern
         and not env_pattern
+        and not git_worktree_mirror
     ):
         return
 
@@ -306,9 +324,60 @@ def _apply_config_options(
                 merged_env.append(p)
         config["env_passthrough"] = merged_env
 
+    if git_worktree_mirror:
+        git_section = config.get("git") or {}
+        git_section["worktree_mirror"] = True
+        config["git"] = git_section
+        _write_agents_md_git_worktree_section(workspace)
+
     write_project_config(workspace, config)
     typer.echo(
         f"Configuration written to {workspace / '.agent-circus' / 'config.toml'}"
+    )
+
+
+_AGENTS_MD_MARKER_START = "<!-- agent-circus: git-worktree-mirror -->"
+_AGENTS_MD_MARKER_END = "<!-- /agent-circus: git-worktree-mirror -->"
+
+
+def _write_agents_md_git_worktree_section(workspace: Path) -> None:
+    """Write (or replace) the git-worktree-mirror section in ``AGENTS.md``.
+
+    Inserts a managed block bounded by HTML comment markers so the section
+    can be found and updated idempotently on subsequent ``init`` runs.
+    If ``AGENTS.md`` does not exist it is created.
+
+    :param workspace: Workspace path.
+    """
+    host_path = str(workspace)
+    section = (
+        f"{_AGENTS_MD_MARKER_START}\n"
+        "## Git Operations\n\n"
+        f"This repository is mounted at `{host_path}` inside the agent container "
+        "in addition to the standard `/workspace` mount. "
+        "When performing Git operations that involve absolute paths — such as "
+        "`git worktree` commands — use `"
+        f"{host_path}` rather than `/workspace` to ensure Git's recorded paths "
+        "remain consistent with the host.\n"
+        f"{_AGENTS_MD_MARKER_END}"
+    )
+
+    agents_md = workspace / "AGENTS.md"
+    if agents_md.exists():
+        text = agents_md.read_text()
+        if _AGENTS_MD_MARKER_START in text:
+            # Replace existing managed section.
+            start = text.index(_AGENTS_MD_MARKER_START)
+            end = text.index(_AGENTS_MD_MARKER_END) + len(_AGENTS_MD_MARKER_END)
+            text = text[:start] + section + text[end:]
+        else:
+            text = text.rstrip("\n") + "\n\n" + section + "\n"
+    else:
+        text = section + "\n"
+
+    agents_md.write_text(text)
+    typer.echo(
+        f"Git worktree instructions written to {agents_md.relative_to(workspace)}"
     )
 
 

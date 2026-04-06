@@ -37,6 +37,8 @@ COMPOSE_ENV_PASSTHROUGH_FILE_NAME = "compose.env-passthrough.json"
 
 COMPOSE_STARTUP_HOOK_FILE_NAME = "compose.startup-hook.json"
 
+COMPOSE_GIT_WORKTREE_MIRROR_FILE_NAME = "compose.git-worktree-mirror.json"
+
 CA_CERTS_DEFAULT_DIR = "/usr/local/share/ca-certificates"
 
 CONFIG_FILE_NAME = "config.toml"
@@ -474,6 +476,23 @@ def build_additional_dirs_override(additional_dirs: list[dict]) -> str:
         mode = "ro" if entry.get("readonly", False) else "cached"
         volumes.append(f"{host_path}:/workspaces/{name}:{mode}")
     services = {svc: {"volumes": volumes} for svc in AVAILABLE_SERVICES}
+    return json.dumps({"services": services})
+
+
+def build_git_worktree_mirror_override(workspace: Path) -> str:
+    """Build a Docker Compose override that mirrors the workspace at its host path.
+
+    Adds a second bind mount for the workspace at its exact host absolute path
+    inside every agent container (in addition to the standard ``/workspace``
+    mount).  This makes Git's recorded absolute paths valid inside the
+    container, enabling transparent Git worktree operations.
+
+    :param workspace: Absolute host path of the workspace.
+    :returns: Compose override as a JSON string.
+    """
+    host_path = str(workspace)
+    volume = f"{host_path}:{host_path}:cached"
+    services = {svc: {"volumes": [volume]} for svc in AVAILABLE_SERVICES}
     return json.dumps({"services": services})
 
 

@@ -18,6 +18,7 @@ from .state import (
     get_ca_certs_override_path,
     get_env_passthrough_override_path,
     get_git_override_path,
+    get_git_worktree_mirror_override_path,
     get_hosts_override_path,
     get_mcp_override_path,
     get_shadow_override_path,
@@ -65,6 +66,7 @@ class ComposeContext:
     ca_certs_override: str | None = None
     env_passthrough_override: str | None = None
     startup_hook_override: str | None = None
+    git_worktree_mirror_override: str | None = None
 
 
 def _exec_compose(
@@ -171,6 +173,14 @@ def _exec_compose(
         logger.debug("Startup hook override: %s", startup_hook_path)
     else:
         startup_hook_path.unlink(missing_ok=True)
+
+    git_worktree_mirror_path = get_git_worktree_mirror_override_path(ctx.workspace)
+    if ctx.git_worktree_mirror_override:
+        git_worktree_mirror_path.write_text(ctx.git_worktree_mirror_override)
+        cmd.extend(["-f", str(git_worktree_mirror_path)])
+        logger.debug("Git worktree mirror override: %s", git_worktree_mirror_path)
+    else:
+        git_worktree_mirror_path.unlink(missing_ok=True)
 
     cmd.extend(args)
     logger.debug("Running: %s", " ".join(cmd))
