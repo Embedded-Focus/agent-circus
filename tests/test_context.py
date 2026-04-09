@@ -5,6 +5,8 @@ from unittest.mock import MagicMock, patch
 
 from agent_circus.context import (
     _ENV_INJECTION_ANCHOR,
+    _ENV_PROFILE_D_PATH,
+    _ENV_PROFILE_SCRIPT_NAME,
     _copy_project_hooks,
     _inject_env_into_dockerfile,
     build_compose_context,
@@ -277,6 +279,35 @@ def test_inject_env_empty_leaves_dockerfile_unchanged(tmp_path: Path) -> None:
     _inject_env_into_dockerfile(tmp_path, {})
 
     assert dockerfile.read_text() == original
+
+
+def test_inject_env_writes_profile_d_script(tmp_path: Path) -> None:
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(f"FROM scratch{_ENV_INJECTION_ANCHOR} []\n")
+
+    _inject_env_into_dockerfile(tmp_path, {"PATH": "${PATH}:/home/node/go/bin"})
+
+    profile_src = tmp_path / "hooks" / _ENV_PROFILE_SCRIPT_NAME
+    assert profile_src.is_file()
+    content = profile_src.read_text()
+    assert "#!/bin/sh" in content
+    assert 'export PATH="${PATH}:/home/node/go/bin"' in content
+
+
+def test_inject_env_dockerfile_contains_profile_d_copy(tmp_path: Path) -> None:
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(f"FROM scratch{_ENV_INJECTION_ANCHOR} []\n")
+
+    _inject_env_into_dockerfile(tmp_path, {"PATH": "${PATH}:/home/node/go/bin"})
+
+    content = dockerfile.read_text()
+    assert f"COPY hooks/{_ENV_PROFILE_SCRIPT_NAME} {_ENV_PROFILE_D_PATH}" in content
+    assert f"RUN chmod 644 {_ENV_PROFILE_D_PATH}" in content
+    # profile.d install must appear before ENTRYPOINT
+    assert (
+        content.index(f"COPY hooks/{_ENV_PROFILE_SCRIPT_NAME}")
+        < content.index("ENTRYPOINT")
+    )
 
 
 @patch("agent_circus.context.build_mcp_compose_override", return_value="{}")

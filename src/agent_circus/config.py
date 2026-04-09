@@ -457,6 +457,30 @@ def build_env_dockerfile_lines(env: dict[str, str]) -> list[str]:
     return [f"ENV {key}={_quote(value)}" for key, value in env.items()]
 
 
+def build_env_profile_script(env: dict[str, str]) -> str:
+    """Build a ``/etc/profile.d`` shell script that exports env vars.
+
+    Unlike Dockerfile ``ENV`` instructions (which are evaluated at image build
+    time and discarded by login shells that re-source ``/etc/profile``), a
+    ``/etc/profile.d`` script is sourced *after* ``/etc/profile`` so it runs
+    with the login-shell PATH already in place.  Shell variable references such
+    as ``$PATH`` in the values therefore expand at container runtime against the
+    live environment — ``PATH="$PATH:/home/node/go/bin"`` correctly appends to
+    whatever PATH the login shell has set.
+
+    :param env: Mapping of environment variable names to values.
+    :returns: Shell script content suitable for ``/etc/profile.d/``.
+    :rtype: str
+    """
+
+    def _sh_quote(v: str) -> str:
+        return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    lines = ["#!/bin/sh"]
+    lines += [f"export {key}={_sh_quote(value)}" for key, value in env.items()]
+    return "\n".join(lines) + "\n"
+
+
 def build_additional_dirs_override(additional_dirs: list[dict]) -> str:
     """Build a Docker Compose override that bind-mounts extra host directories.
 

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from agent_circus.config import (
+    build_env_profile_script,
     find_project_root,
     get_project_config_path,
     get_user_config_path,
@@ -164,3 +165,31 @@ def test_find_project_root_no_marker_falls_back(
     monkeypatch.setattr(Path, "exists", lambda self: False)
     result = find_project_root(tmp_path)
     assert result == tmp_path
+
+
+# ---------------------------------------------------------------------------
+# build_env_profile_script
+# ---------------------------------------------------------------------------
+
+
+def test_build_env_profile_script_shebang() -> None:
+    script = build_env_profile_script({"GOPATH": "/home/node/gopath"})
+    assert script.startswith("#!/bin/sh\n")
+
+
+def test_build_env_profile_script_exports_vars() -> None:
+    script = build_env_profile_script(
+        {"PATH": "${PATH}:/home/node/go/bin", "GOPATH": "${HOME}/gopath"}
+    )
+    assert 'export PATH="${PATH}:/home/node/go/bin"' in script
+    assert 'export GOPATH="${HOME}/gopath"' in script
+
+
+def test_build_env_profile_script_escapes_double_quotes() -> None:
+    script = build_env_profile_script({"VAR": 'value with "quotes"'})
+    assert 'export VAR="value with \\"quotes\\""' in script
+
+
+def test_build_env_profile_script_ends_with_newline() -> None:
+    script = build_env_profile_script({"X": "y"})
+    assert script.endswith("\n")

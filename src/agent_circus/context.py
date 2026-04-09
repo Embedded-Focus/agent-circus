@@ -28,6 +28,7 @@ from .config import (
     build_ca_certs_override,
     build_env_dockerfile_lines,
     build_env_passthrough_override,
+    build_env_profile_script,
     build_git_override,
     build_git_worktree_mirror_override,
     build_hosts_override,
@@ -61,6 +62,10 @@ _CONFIG_HOOK_MAP = {
 }
 # Inject ENV lines immediately before the base-stage ENTRYPOINT instruction.
 _ENV_INJECTION_ANCHOR = "\nENTRYPOINT"
+# Filename used inside the build-context hooks/ dir for the profile.d script.
+_ENV_PROFILE_SCRIPT_NAME = "env-profile.sh"
+# Path inside the container where the profile.d script is installed.
+_ENV_PROFILE_D_PATH = "/etc/profile.d/agent-circus.sh"
 
 
 def _copy_project_hooks(workspace: Path, build_context: Path) -> None:
@@ -113,6 +118,13 @@ def _inject_env_into_dockerfile(build_context: Path, env: dict[str, str]) -> Non
     ``ENV`` variables, so ``PATH=/usr/local/go/bin:$PATH`` correctly prepends
     to the image's existing PATH.
 
+    Additionally writes a ``/etc/profile.d/agent-circus.sh`` script into the
+    image.  This ensures the env vars are also visible to login shells (e.g.
+    Codex command runner that uses ``/bin/bash -lc``).  Debian's
+    ``/etc/profile`` resets ``PATH`` for all login shells, which would
+    otherwise discard the Docker ``ENV`` layer; the ``profile.d`` script runs
+    *after* ``/etc/profile`` and restores the configured values.
+
     :param build_context: Directory containing the Dockerfile to patch.
     :param env: Mapping of variable names to values to inject.
     """
@@ -120,8 +132,20 @@ def _inject_env_into_dockerfile(build_context: Path, env: dict[str, str]) -> Non
         return
     dockerfile = build_context / DOCKERFILE_NAME
     text = dockerfile.read_text()
-    lines = build_env_dockerfile_lines(env)
-    insertion = "\n".join(lines) + _ENV_INJECTION_ANCHOR
+
+    # Write the profile.d script into the build context alongside the hooks.
+    profile_src = build_context / HOOKS_DIR_NAME / _ENV_PROFILE_SCRIPT_NAME
+    profile_src.parent.mkdir(parents=True, exist_ok=True)
+    profile_src.write_text(build_env_profile_script(env))
+
+    env_lines = build_env_dockerfile_lines(env)
+    profile_install = (
+        f"USER root\n"
+        f"COPY hooks/{_ENV_PROFILE_SCRIPT_NAME} {_ENV_PROFILE_D_PATH}\n"
+        f"RUN chmod 644 {_ENV_PROFILE_D_PATH}\n"
+        f"USER node\n"
+    )
+    insertion = "\n".join(env_lines) + "\n" + profile_install + _ENV_INJECTION_ANCHOR
     text = text.replace(_ENV_INJECTION_ANCHOR, insertion, 1)
     dockerfile.write_text(text)
 
