@@ -33,7 +33,7 @@ services:
         <<: *common-build-args
         CLAUDE_CODE_VERSION: latest
         # https://github.com/agentclientprotocol/claude-agent-acp
-        CLAUDE_AGENT_ACP_VERSION: 0.26.0
+        CLAUDE_AGENT_ACP_VERSION: 0.28.0
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
     - bashhistory:/commandhistory
