@@ -6,5 +6,5 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     # https://github.com/mistralai/mistral-vibe
-    "mistral-vibe>=2.7.5",
+    "mistral-vibe>=2.7.6",
 ]
