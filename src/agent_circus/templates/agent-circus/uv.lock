@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "mistral-vibe", specifier = ">=2.8.1" }]
+requires-dist = [{ name = "mistral-vibe", specifier = ">=2.9.2" }]
 
 [[package]]
 name = "agent-client-protocol"
@@ -605,7 +605,7 @@ wheels = [
 
 [[package]]
 name = "mistral-vibe"
-version = "2.8.1"
+version = "2.9.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "agent-client-protocol" },
@@ -645,9 +645,9 @@ dependencies = [
     { name = "websockets" },
     { name = "zstandard" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/89/9e/0a0854a71ace0e130ddb49e5d3c373da3f4b64480fc13df862389cdc3c90/mistral_vibe-2.8.1.tar.gz", hash = "sha256:dbd07840525a940cffe661f177d1d743f43335f0e4f4fcb930e26d22c1018f26", size = 745782, upload-time = "2026-04-21T14:35:17.464Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/64/c2/aa00e8f4f0e3d05d616d1c4156d5f41156d8e1a076c661f2cd061927a465/mistral_vibe-2.9.2.tar.gz", hash = "sha256:fd0a1196b01fab1b97d41b2203138385d933c1e8714bfdd005e7dac15a562621", size = 823966, upload-time = "2026-04-29T17:33:32.19Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/bd/3b/76baf7b16e8c8540b7cb4b31b2b91e59d00ca763f5e989b2f6ce2f278e43/mistral_vibe-2.8.1-py3-none-any.whl", hash = "sha256:a7dea6aba713a78b1299e1c8f814bf590d78d32098c08d32af36fbd9df18af94", size = 416808, upload-time = "2026-04-21T14:35:15.616Z" },
+    { url = "https://files.pythonhosted.org/packages/ce/f9/2f989c153701cdbe0f71d063ad3e4cd2da70e301f246ccb83479e4aa3469/mistral_vibe-2.9.2-py3-none-any.whl", hash = "sha256:e178e9fab3f5261d1dd20bcce010cac0367a0c345c69d37f0ef9048b3f658789", size = 466295, upload-time = "2026-04-29T17:33:30.419Z" },
 ]
 
 [[package]]
