@@ -1,7 +1,7 @@
 ---
 x-common-build-args: &common-build-args
   TZ: ${TZ:-Europe/Vienna}
-  GIT_DELTA_VERSION: 0.18.2
+  GIT_DELTA_VERSION: 0.19.2
   ZSH_IN_DOCKER_VERSION: 1.2.1
 
 x-common-build: &common-build
@@ -53,7 +53,7 @@ services:
       args:
         <<: *common-build-args
         # https://github.com/openai/codex
-        CODEX_VERSION: 0.125.0
+        CODEX_VERSION: 0.128.0
         # https://github.com/zed-industries/codex-acp
         CODEX_ACP_VERSION: 0.12.0
     volumes:

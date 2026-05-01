@@ -3,7 +3,7 @@ FROM node:24-trixie AS base
 ARG TZ
 ENV TZ="$TZ"
 
-ARG MCP_INSPECTOR_VERSION=0.18.0
+ARG MCP_INSPECTOR_VERSION=0.21.2
 
 # Install basic development tools and iptables/ipset
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -115,8 +115,8 @@ RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/install-ca-certs.sh 
   chmod 0440 /etc/sudoers.d/node-firewall
 
 # install additional tools
-COPY --from=ghcr.io/astral-sh/uv:0.10 /uv /uvx /usr/local/bin/
-RUN curl -L https://github.com/mikefarah/yq/releases/download/v4.50.1/yq_linux_amd64 -o /usr/local/bin/yq \
+COPY --from=ghcr.io/astral-sh/uv:0.11.8 /uv /uvx /usr/local/bin/
+RUN curl -L https://github.com/mikefarah/yq/releases/download/v4.53.2/yq_linux_amd64 -o /usr/local/bin/yq \
     && chmod a+x /usr/local/bin/yq
 
 USER node
