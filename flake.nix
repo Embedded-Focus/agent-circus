@@ -24,7 +24,6 @@
             sops
 
             # Python
-            python313
             uv
 
             # Usage CLI (mise plugin)
@@ -37,7 +36,7 @@
             export LD_LIBRARY_PATH=${libPath}:''${LD_LIBRARY_PATH:-}
 
             # Auto-sync Python dependencies
-            uv sync --python $(command -v python)
+            uv sync --python 3.14
             export PATH="$PWD/.venv/bin:$PATH"
           '';
         };
