@@ -11,6 +11,7 @@ Used (minimum) versions can be found in pyproject.toml.
 
 - `tests/`: unit tests for the agent-circus tool.
 - `src/`: source code of this repository/agent-circus
+- `src/agent_circus/templates`: dependencies and versions for containerized agents/libraries
 - `pyproject.toml`: formal description of the project environment/dependencies
 
 ## Common Commands
@@ -28,6 +29,7 @@ Always prefix any python-related command with `uv run`, e.g.:
 
 - Naming: `test_<feature>_<scenario>.py`, test functions `test_<action>_<expected_outcome>`
 - Create tests for utility functions such as parsing functions.
+- You won't be able to run any docker-related commands because you are running inside a container and you don't have the docker socket mounted into it.
 
 ## Implementation Details
 
