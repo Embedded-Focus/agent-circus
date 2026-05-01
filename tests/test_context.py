@@ -304,9 +304,8 @@ def test_inject_env_dockerfile_contains_profile_d_copy(tmp_path: Path) -> None:
     assert f"COPY hooks/{_ENV_PROFILE_SCRIPT_NAME} {_ENV_PROFILE_D_PATH}" in content
     assert f"RUN chmod 644 {_ENV_PROFILE_D_PATH}" in content
     # profile.d install must appear before ENTRYPOINT
-    assert (
-        content.index(f"COPY hooks/{_ENV_PROFILE_SCRIPT_NAME}")
-        < content.index("ENTRYPOINT")
+    assert content.index(f"COPY hooks/{_ENV_PROFILE_SCRIPT_NAME}") < content.index(
+        "ENTRYPOINT"
     )
 
 
