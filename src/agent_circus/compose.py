@@ -254,6 +254,7 @@ def compose_up(
 
 def compose_down(
     ctx: ComposeContext,
+    services: list[str] | None = None,
     volumes: bool = False,
     remove_orphans: bool = False,
     timeout: int | None = None,
@@ -261,6 +262,7 @@ def compose_down(
     """Stop and remove containers using docker compose.
 
     :param ctx: Pre-assembled compose context.
+    :param services: Services to stop and remove, or ``None`` for all.
     :param volumes: Remove named volumes.
     :param remove_orphans: Remove orphan containers.
     :param timeout: Seconds to wait for containers to stop (``-t``).
@@ -273,8 +275,10 @@ def compose_down(
         args.append("-v")
     if remove_orphans:
         args.append("--remove-orphans")
+    if services:
+        args.extend(services)
 
-    logger.info("Stopping and removing containers")
+    logger.info("Stopping and removing containers: %s", ", ".join(services or ["all"]))
     _exec_compose(args, ctx)
 
 
