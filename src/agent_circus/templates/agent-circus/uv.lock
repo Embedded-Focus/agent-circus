@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "mistral-vibe", specifier = ">=2.9.3" }]
+requires-dist = [{ name = "mistral-vibe", specifier = ">=2.9.5" }]
 
 [[package]]
 name = "agent-client-protocol"
@@ -605,7 +605,7 @@ wheels = [
 
 [[package]]
 name = "mistral-vibe"
-version = "2.9.3"
+version = "2.9.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "agent-client-protocol" },
@@ -645,14 +645,14 @@ dependencies = [
     { name = "websockets" },
     { name = "zstandard" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5d/c4/bda8c6b1656079011127981de0dbce0dc0b0aad1f28fff3c6c8d778a4292/mistral_vibe-2.9.3.tar.gz", hash = "sha256:9c14e1c631337aa5b7aaf18e6c70c986d3cdcb3d0cd4609885020729688cddc9", size = 823993, upload-time = "2026-04-30T09:15:08.656Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d0/b7/bc28d01413770823f03a57be778fa2b6ab248fcebd7d7090a097f4870423/mistral_vibe-2.9.5.tar.gz", hash = "sha256:21e1c330141d7aac15612af94dcd5ee041351c7cfffe8ea7605e6374af3e0a3b", size = 850763, upload-time = "2026-05-07T12:49:41.133Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/90/dc/90b6fee7e1f622117cc8595d6859f1280897e8f89445d87b208b5baa850e/mistral_vibe-2.9.3-py3-none-any.whl", hash = "sha256:3cb60ba42ec8455bdec0f270d98052a87ce8e230716dbfafb056c1d3ad72d1ff", size = 466299, upload-time = "2026-04-30T09:15:06.492Z" },
+    { url = "https://files.pythonhosted.org/packages/5e/6f/71174e225f88fb7e0bb9894979184a7221cdb050e071bf2eb594a2838bc1/mistral_vibe-2.9.5-py3-none-any.whl", hash = "sha256:d9ef35be31676acdefb64b574ecfe7381198ea67df9a6f515aea78e3e911342e", size = 478327, upload-time = "2026-05-07T12:49:39.476Z" },
 ]
 
 [[package]]
 name = "mistralai"
-version = "2.3.2"
+version = "2.4.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "eval-type-backport" },
@@ -664,9 +664,9 @@ dependencies = [
     { name = "python-dateutil" },
     { name = "typing-inspection" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5c/08/f8fed64eab35ad1ded82f92bf834160302db19f5bbda5a904df7d4dbf3c4/mistralai-2.3.2.tar.gz", hash = "sha256:a02c7e90ac165e8680c849551ff5fe9788e9fc10b7dbe71817443dc63cc5e9c9", size = 394665, upload-time = "2026-04-10T14:05:36.31Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f0/f0/80dfabf224be4419c6c112f3950676f5af3dcde582d225c03ca0196a4b32/mistralai-2.4.4.tar.gz", hash = "sha256:cd8a27a230e5458b62237a6c4f7b52f5be86909fbc18694360ceb21dac932eda", size = 420936, upload-time = "2026-04-30T12:26:38.775Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/83/e0/9f246d18f8fe6e815f7cae88c437c986b342d3ff568607c8e0d53f4710d0/mistralai-2.3.2-py3-none-any.whl", hash = "sha256:dec05f446502289b76add9796d75465c070fc539b3c01d6f7d3297833bb64981", size = 935914, upload-time = "2026-04-10T14:05:37.845Z" },
+    { url = "https://files.pythonhosted.org/packages/0f/74/0f6188190e79eef4363754c71414c1a791537b1e506cbee615bb581cb05f/mistralai-2.4.4-py3-none-any.whl", hash = "sha256:43dd3b1f0f4f960a723359165c4da0d035590b27c050028322934fe4f189f14e", size = 990545, upload-time = "2026-04-30T12:26:40.702Z" },
 ]
 
 [[package]]
