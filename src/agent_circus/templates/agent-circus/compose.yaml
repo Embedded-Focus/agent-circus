@@ -79,5 +79,22 @@ services:
     environment:
       AGENT_TYPE: mistral-vibe
 
+  opencode:
+    <<: *common-service
+    build:
+      <<: *common-build
+      target: opencode
+      args:
+        <<: *common-build-args
+        # https://www.npmjs.com/package/opencode-ai
+        OPENCODE_VERSION: 1.14.50
+    volumes:
+    - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
+    - bashhistory:/commandhistory
+    - ${HOME}/.cache:/home/node/.cache
+    - ${HOME}/.config/opencode:/home/node/.config/opencode
+    environment:
+      AGENT_TYPE: opencode
+
 volumes:
   bashhistory:

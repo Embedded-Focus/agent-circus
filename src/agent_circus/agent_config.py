@@ -82,7 +82,7 @@ def build_handler(
 
 
 # ---------------------------------------------------------------------------
-# Claude Code (JSON)
+# JSON-based handlers (Claude Code, OpenCode)
 # ---------------------------------------------------------------------------
 
 
@@ -111,6 +111,43 @@ class ClaudeCodeConfigHandler:
                 and isinstance(value, dict)
             ):
                 # Dict-level merge (e.g. mcpServers): additions overwrite conflicts.
+                merged[key] = {**merged[key], **value}
+            else:
+                merged[key] = value
+        return merged
+
+    def write(self, config: dict[str, Any], output_path: Path) -> None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w") as f:
+            json.dump(config, f, indent=2)
+            f.write("\n")
+
+
+class OpenCodeConfigHandler:
+    """Handler for OpenCode configuration (JSON)."""
+
+    agent_name = "opencode"
+    container_config_path = "/home/node/.config/opencode/opencode.json"
+    output_filename = "opencode.json"
+
+    def __init__(self) -> None:
+        self.host_config_path = Path.home() / ".config" / "opencode" / "opencode.json"
+
+    def read(self) -> dict[str, Any]:
+        if not self.host_config_path.is_file():
+            return {}
+        with open(self.host_config_path) as f:
+            return json.load(f)
+
+    def merge(self, base: dict[str, Any], additions: dict[str, Any]) -> dict[str, Any]:
+        merged = base.copy()
+        for key, value in additions.items():
+            if (
+                key in merged
+                and isinstance(merged[key], dict)
+                and isinstance(value, dict)
+            ):
+                # Dict-level merge (e.g. mcp): additions overwrite conflicts.
                 merged[key] = {**merged[key], **value}
             else:
                 merged[key] = value
@@ -233,6 +270,7 @@ HANDLERS: list[type[AgentConfigHandler]] = [
     ClaudeCodeConfigHandler,
     CodexConfigHandler,
     VibeConfigHandler,
+    OpenCodeConfigHandler,
 ]
 
 
@@ -259,6 +297,7 @@ def build_agent_configs_override(
                 "claude-code": {"mcpServers": {...}},
                 "codex": {"mcp_servers": [...]},
                 "mistral-vibe": {"mcp_servers": [...]},
+                "opencode": {"mcp": {...}},
             }
 
     :param output_dir: Directory to write merged config files to.

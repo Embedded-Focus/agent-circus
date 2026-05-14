@@ -47,7 +47,7 @@ DOCKERFILE_NAME = "Dockerfile"
 
 HOOKS_DIR_NAME = "hooks"
 
-AVAILABLE_SERVICES = ["claude-code", "codex", "mistral-vibe"]
+AVAILABLE_SERVICES = ["claude-code", "codex", "mistral-vibe", "opencode"]
 
 VCS_MARKERS: tuple[str, ...] = (".git", ".hg", ".svn", ".bzr", "_darcs")
 
@@ -395,6 +395,8 @@ def build_agent_config_additions(
     codex_mcp: dict[str, dict] = {}
     # Vibe: {"mcp_servers": [{"name": ..., "transport": ..., "url": ...}]}
     vibe_mcp: list[dict] = []
+    # OpenCode: {"mcp": {"name": {"type": "remote", "url": ..., "enabled": true}}}
+    opencode_mcp: dict[str, dict] = {}
 
     for server in mcp_servers:
         name = server["name"]
@@ -407,11 +409,13 @@ def build_agent_config_additions(
         claude_mcp[name] = {"type": claude_transport, "url": url}
         codex_mcp[name] = {"url": url}
         vibe_mcp.append({"name": name, "transport": transport, "url": url})
+        opencode_mcp[name] = {"type": "remote", "url": url, "enabled": True}
 
     return {
         "claude-code": {"mcpServers": claude_mcp},
         "codex": {"mcp_servers": codex_mcp},
         "mistral-vibe": {"mcp_servers": vibe_mcp},
+        "opencode": {"mcp": opencode_mcp},
     }
 
 

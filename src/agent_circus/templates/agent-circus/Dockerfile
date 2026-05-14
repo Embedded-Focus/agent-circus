@@ -150,6 +150,13 @@ RUN npm install -g \
     @openai/codex@${CODEX_VERSION} \
     @zed-industries/codex-acp@${CODEX_ACP_VERSION}
 
+FROM base AS opencode
+
+ARG OPENCODE_VERSION
+
+RUN npm install -g \
+    opencode-ai@${OPENCODE_VERSION}
+
 FROM base AS mistral-vibe
 
 ENV UV_LINK_MODE=copy \

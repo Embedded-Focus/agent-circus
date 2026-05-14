@@ -68,7 +68,8 @@ def build_compose_override(
     :param mcp_servers: List of MCP server definitions from config.
     :type mcp_servers: list[dict[str, Any]]
     :param agent_services: Agent service names that should depend on the
-        MCP sidecars (e.g. ``["claude-code", "codex", "mistral-vibe"]``).
+        MCP sidecars (e.g. ``["claude-code", "codex", "mistral-vibe",
+        "opencode"]``).
     :type agent_services: list[str]
     :returns: Compose override as a JSON string.
     :rtype: str

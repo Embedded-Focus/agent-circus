@@ -18,6 +18,7 @@ Currently supported agents:
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Anthropic)
 - [Codex](https://openai.com/codex/) (OpenAI)
 - [Vibe CLI](https://docs.mistral.ai/mistral-vibe/introduction) (Mistral)
+- [OpenCode](https://opencode.ai/) (SST)
 
 IDEs interface with agents via the [Agent Client Protocol](https://agentclientprotocol.com/) (ACP).
 
@@ -39,14 +40,15 @@ credentials already present on the host. Agent Circus bind-mounts the
 vendor-specific configuration directory from the host into the
 corresponding container:
 
-| Agent       | Host directory | Container path         |
-|-------------|----------------|------------------------|
-| Claude Code | `~/.claude`    | `/home/node/.claude`   |
-| Codex       | `~/.codex`     | `/home/node/.codex`    |
-| Vibe CLI    | `~/.vibe`      | `/home/node/.vibe`     |
+| Agent       | Host directory       | Container path                |
+|-------------|----------------------|-------------------------------|
+| Claude Code | `~/.claude`          | `/home/node/.claude`          |
+| Codex       | `~/.codex`           | `/home/node/.codex`           |
+| Vibe CLI    | `~/.vibe`            | `/home/node/.vibe`            |
+| OpenCode    | `~/.config/opencode` | `/home/node/.config/opencode` |
 
 This means you only need to authenticate once on the host (e.g. by
-running `claude` or `codex` locally) and the containerized agents will
+running `claude`, `codex`, or `opencode` locally) and the containerized agents will
 pick up the same session and API keys automatically.
 
 ## Getting Started
@@ -99,6 +101,7 @@ agent-circus build
 # Execute a command in a container (starts it automatically)
 agent-circus exec claude-code -- claude-agent-acp
 agent-circus exec codex -- codex-acp
+agent-circus exec opencode -- opencode
 agent-circus exec -T claude-code -- echo hello   # non-interactive
 
 # Optionally start containers ahead of time
@@ -663,6 +666,7 @@ Works in both instant mode and deploy mode."
             ('claude-code "claude-code")
             ('codex "codex")
             ('mistral-vibe "mistral-vibe")
+            ('opencode "opencode")
             (_ "claude-code"))))
     (list "agent-circus" "--log-level" "DEBUG" "--log-file" "/tmp/agent-circus.log" "exec" service "--")))
 

@@ -101,7 +101,7 @@ def test_build_shadow_override_produces_valid_json() -> None:
     data = json.loads(result)
 
     assert "services" in data
-    for service in ("claude-code", "codex", "mistral-vibe"):
+    for service in ("claude-code", "codex", "mistral-vibe", "opencode"):
         volumes = data["services"][service]["volumes"]
         assert "/dev/null:/workspace/.env:ro" in volumes
         assert "/dev/null:/workspace/.env.local:ro" in volumes
@@ -111,5 +111,5 @@ def test_build_shadow_override_empty_list() -> None:
     result = build_shadow_override([])
     data = json.loads(result)
 
-    for service in ("claude-code", "codex", "mistral-vibe"):
+    for service in ("claude-code", "codex", "mistral-vibe", "opencode"):
         assert data["services"][service]["volumes"] == []

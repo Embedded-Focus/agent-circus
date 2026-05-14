@@ -10,7 +10,7 @@ from agent_circus.mcp import (
     build_compose_override,
 )
 
-AGENTS = ["claude-code", "codex", "mistral-vibe"]
+AGENTS = ["claude-code", "codex", "mistral-vibe", "opencode"]
 
 # -- Fixtures ---------------------------------------------------------------
 

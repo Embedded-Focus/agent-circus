@@ -10,6 +10,7 @@ import pytest
 from agent_circus.agent_config import (
     ClaudeCodeConfigHandler,
     CodexConfigHandler,
+    OpenCodeConfigHandler,
     VibeConfigHandler,
     _merge_named_arrays,
     build_agent_configs_override,
@@ -39,6 +40,13 @@ def codex_handler(tmp_path: Path) -> CodexConfigHandler:
 def vibe_handler(tmp_path: Path) -> VibeConfigHandler:
     handler = VibeConfigHandler()
     handler.host_config_path = tmp_path / ".vibe" / "config.toml"
+    return handler
+
+
+@pytest.fixture()
+def opencode_handler(tmp_path: Path) -> OpenCodeConfigHandler:
+    handler = OpenCodeConfigHandler()
+    handler.host_config_path = tmp_path / ".config" / "opencode" / "opencode.json"
     return handler
 
 
@@ -314,6 +322,76 @@ class TestVibeBuild:
 
 
 # ---------------------------------------------------------------------------
+# OpenCodeConfigHandler (JSON)
+# ---------------------------------------------------------------------------
+
+
+class TestOpenCodeRead:
+    def test_read_existing_file(self, opencode_handler: OpenCodeConfigHandler) -> None:
+        _write_json(opencode_handler.host_config_path, {"model": "anthropic/foo"})
+        result = opencode_handler.read()
+        assert result == {"model": "anthropic/foo"}
+
+    def test_read_missing_file(self, opencode_handler: OpenCodeConfigHandler) -> None:
+        assert opencode_handler.read() == {}
+
+
+class TestOpenCodeMerge:
+    def test_merge_mcp_dict(self, opencode_handler: OpenCodeConfigHandler) -> None:
+        base = {
+            "model": "anthropic/foo",
+            "mcp": {"existing": {"type": "remote", "url": "http://old"}},
+        }
+        additions = {
+            "mcp": {"new": {"type": "remote", "url": "http://new", "enabled": True}},
+        }
+        result = opencode_handler.merge(base, additions)
+        assert result["model"] == "anthropic/foo"
+        assert "existing" in result["mcp"]
+        assert "new" in result["mcp"]
+
+    def test_merge_mcp_conflict_additions_win(
+        self, opencode_handler: OpenCodeConfigHandler
+    ) -> None:
+        base = {"mcp": {"server": {"type": "remote", "url": "http://old"}}}
+        additions = {
+            "mcp": {"server": {"type": "remote", "url": "http://new", "enabled": True}}
+        }
+        result = opencode_handler.merge(base, additions)
+        assert result["mcp"]["server"]["url"] == "http://new"
+
+
+class TestOpenCodeWrite:
+    def test_write_produces_valid_json(
+        self, opencode_handler: OpenCodeConfigHandler, tmp_path: Path
+    ) -> None:
+        output = tmp_path / "opencode.json"
+        config = {"mcp": {"s": {"type": "remote", "url": "http://x"}}}
+        opencode_handler.write(config, output)
+        data = json.loads(output.read_text())
+        assert data == config
+
+
+class TestOpenCodeBuild:
+    def test_build_full_flow(
+        self, opencode_handler: OpenCodeConfigHandler, tmp_path: Path
+    ) -> None:
+        _write_json(
+            opencode_handler.host_config_path,
+            {"mcp": {"old": {"type": "remote", "url": "http://old"}}},
+        )
+        additions = {
+            "mcp": {"new": {"type": "remote", "url": "http://new", "enabled": True}}
+        }
+        output_dir = tmp_path / "output"
+        path = build_handler(opencode_handler, additions, output_dir)
+
+        data = json.loads(path.read_text())
+        assert "old" in data["mcp"]
+        assert "new" in data["mcp"]
+
+
+# ---------------------------------------------------------------------------
 # _merge_named_arrays
 # ---------------------------------------------------------------------------
 
@@ -367,39 +445,49 @@ class TestBuildAgentConfigsOverride:
         additions = {
             "claude-code": {"mcpServers": {"s": {"type": "http", "url": "http://x"}}},
             "codex": {"mcp_servers": [{"name": "s", "url": "http://x"}]},
+            "opencode": {"mcp": {"s": {"type": "remote", "url": "http://x"}}},
         }
         # Create source config files so handlers can read them.
         result = json.loads(build_agent_configs_override(additions, tmp_path))
 
         assert "claude-code" in result["services"]
         assert "codex" in result["services"]
+        assert "opencode" in result["services"]
         # Verify volume mounts point to correct container paths.
         cc_vols = result["services"]["claude-code"]["volumes"]
         assert any("/home/node/.claude/.claude.json" in v for v in cc_vols)
         codex_vols = result["services"]["codex"]["volumes"]
         assert any("/home/node/.codex/config.toml" in v for v in codex_vols)
+        opencode_vols = result["services"]["opencode"]["volumes"]
+        assert any(
+            "/home/node/.config/opencode/opencode.json" in v for v in opencode_vols
+        )
 
     def test_skips_agents_with_empty_additions(self, tmp_path: Path) -> None:
         additions = {
             "claude-code": {"mcpServers": {"s": {"type": "http"}}},
             "codex": {},
             "mistral-vibe": {},
+            "opencode": {},
         }
         result = json.loads(build_agent_configs_override(additions, tmp_path))
         assert "claude-code" in result["services"]
         assert "codex" not in result["services"]
         assert "mistral-vibe" not in result["services"]
+        assert "opencode" not in result["services"]
 
     def test_creates_output_files(self, tmp_path: Path) -> None:
         additions = {
             "claude-code": {"mcpServers": {"s": {"type": "http"}}},
             "codex": {"mcp_servers": [{"name": "s"}]},
             "mistral-vibe": {"mcp_servers": [{"name": "s"}]},
+            "opencode": {"mcp": {"s": {"type": "remote", "url": "http://x"}}},
         }
         build_agent_configs_override(additions, tmp_path)
         assert (tmp_path / "claude-code.json").is_file()
         assert (tmp_path / "codex.toml").is_file()
         assert (tmp_path / "mistral-vibe.toml").is_file()
+        assert (tmp_path / "opencode.json").is_file()
 
 
 # ---------------------------------------------------------------------------
@@ -448,6 +536,12 @@ class TestBuildAgentConfigAdditions:
         vibe_srv = result["mistral-vibe"]["mcp_servers"][0]
         assert vibe_srv["name"] == "grafana"
         assert vibe_srv["transport"] == "streamable-http"
+
+        # OpenCode format — remote MCP server map
+        opencode_srv = result["opencode"]["mcp"]["grafana"]
+        assert opencode_srv["type"] == "remote"
+        assert opencode_srv["url"] == "http://mcp-grafana:8000/mcp"
+        assert opencode_srv["enabled"] is True
 
     def test_defaults(self) -> None:
         from agent_circus.config import build_agent_config_additions
