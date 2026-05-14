@@ -3,43 +3,42 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
-      let
-        pkgs = import nixpkgs {
-          inherit system;
-        };
-        libPath = pkgs.lib.makeLibraryPath [
-          pkgs.stdenv.cc.cc.lib   # provides libstdc++.so.6 (and libgcc_s)
-        ];
-      in
-      {
-        devShells.default = pkgs.mkShell {
-          buildInputs = with pkgs; [
-            # Encryption tools
-            age
-            sops
-
-            # Python
-            uv
-
-            # Usage CLI (mise plugin)
-            usage
-
-            stdenv.cc.cc.lib
+  outputs = { nixpkgs, ... }:
+    let
+      systems = [
+        "x86_64-linux"
+      ];
+      forAllSystems = nixpkgs.lib.genAttrs systems;
+    in
+    {
+      devShells = forAllSystems (system:
+        let
+          pkgs = import nixpkgs {
+            inherit system;
+          };
+          libPath = pkgs.lib.makeLibraryPath [
+            pkgs.stdenv.cc.cc.lib   # provides libstdc++.so.6 (and libgcc_s)
           ];
+        in
+        {
+          default = pkgs.mkShell {
+            buildInputs = with pkgs; [
+              # Encryption tools
+              age
+              sops
 
-          shellHook = ''
-            export LD_LIBRARY_PATH=${libPath}:''${LD_LIBRARY_PATH:-}
+              # Python
+              uv
 
-            # Auto-sync Python dependencies
-            uv sync --python 3.14
-            export PATH="$PWD/.venv/bin:$PATH"
-          '';
-        };
-      }
-    );
+              stdenv.cc.cc.lib
+            ];
+
+            shellHook = ''
+              export LD_LIBRARY_PATH=${libPath}:''${LD_LIBRARY_PATH:-}
+            '';
+          };
+        });
+    };
 }
