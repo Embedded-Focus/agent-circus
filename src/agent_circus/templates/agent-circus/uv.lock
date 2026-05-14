@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "mistral-vibe", specifier = ">=2.9.5" }]
+requires-dist = [{ name = "mistral-vibe", specifier = ">=2.9.6" }]
 
 [[package]]
 name = "agent-client-protocol"
@@ -79,11 +79,11 @@ wheels = [
 
 [[package]]
 name = "certifi"
-version = "2026.2.25"
+version = "2026.4.22"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/af/2d/7bf41579a8986e348fa033a31cdd0e4121114f6bce2457e8876010b092dd/certifi-2026.2.25.tar.gz", hash = "sha256:e887ab5cee78ea814d3472169153c2d12cd43b14bd03329a39a9c6e2e80bfba7", size = 155029, upload-time = "2026-02-25T02:54:17.342Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/25/ee/6caf7a40c36a1220410afe15a1cc64993a1f864871f698c0f93acb72842a/certifi-2026.4.22.tar.gz", hash = "sha256:8d455352a37b71bf76a79caa83a3d6c25afee4a385d632127b6afb3963f1c580", size = 137077, upload-time = "2026-04-22T11:26:11.191Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9a/3c/c17fb3ca2d9c3acff52e30b309f538586f9f5b9c9cf454f3845fc9af4881/certifi-2026.2.25-py3-none-any.whl", hash = "sha256:027692e4402ad994f1c42e52a4997a9763c646b73e4096e4d5d6db8af1d6f0fa", size = 153684, upload-time = "2026-02-25T02:54:15.766Z" },
+    { url = "https://files.pythonhosted.org/packages/22/30/7cd8fdcdfbc5b869528b079bfb76dcdf6056b1a2097a662e5e8c04f42965/certifi-2026.4.22-py3-none-any.whl", hash = "sha256:3cb2210c8f88ba2318d29b0388d1023c8492ff72ecdde4ebdaddbb13a31b1c4a", size = 135707, upload-time = "2026-04-22T11:26:09.372Z" },
 ]
 
 [[package]]
@@ -605,12 +605,13 @@ wheels = [
 
 [[package]]
 name = "mistral-vibe"
-version = "2.9.5"
+version = "2.9.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "agent-client-protocol" },
     { name = "anyio" },
     { name = "cachetools" },
+    { name = "certifi" },
     { name = "charset-normalizer" },
     { name = "cryptography" },
     { name = "gitpython" },
@@ -645,9 +646,9 @@ dependencies = [
     { name = "websockets" },
     { name = "zstandard" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d0/b7/bc28d01413770823f03a57be778fa2b6ab248fcebd7d7090a097f4870423/mistral_vibe-2.9.5.tar.gz", hash = "sha256:21e1c330141d7aac15612af94dcd5ee041351c7cfffe8ea7605e6374af3e0a3b", size = 850763, upload-time = "2026-05-07T12:49:41.133Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e1/87/86ebc414ef08a28391b690c313cfe44199e91c68857687cfd64b09da579f/mistral_vibe-2.9.6.tar.gz", hash = "sha256:ab170e47e5e2fb220abae7022996d8d0f3749feb53b1a35485ff991fa9711523", size = 853721, upload-time = "2026-05-11T09:46:18.239Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5e/6f/71174e225f88fb7e0bb9894979184a7221cdb050e071bf2eb594a2838bc1/mistral_vibe-2.9.5-py3-none-any.whl", hash = "sha256:d9ef35be31676acdefb64b574ecfe7381198ea67df9a6f515aea78e3e911342e", size = 478327, upload-time = "2026-05-07T12:49:39.476Z" },
+    { url = "https://files.pythonhosted.org/packages/e2/9a/d3f8745b19ec1909834fa99afa12d2d9060cb3e69505c7614355fad5fa97/mistral_vibe-2.9.6-py3-none-any.whl", hash = "sha256:d54dcdbaa23a375aad8dc4276f7c49bf086b012d38462536d203bd83acc24306", size = 480362, upload-time = "2026-05-11T09:46:15.97Z" },
 ]
 
 [[package]]
