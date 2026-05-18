@@ -26,6 +26,7 @@ from .config import (
     build_additional_dirs_override,
     build_agent_config_additions,
     build_ca_certs_override,
+    build_data_store_override,
     build_env_dockerfile_lines,
     build_env_passthrough_override,
     build_env_profile_script,
@@ -46,7 +47,7 @@ from .config import (
 )
 from .exceptions import ConfigurationError
 from .mcp import build_compose_override as build_mcp_compose_override
-from .state import get_agent_configs_dir, get_startup_hook_path
+from .state import get_agent_configs_dir, get_data_store_dir, get_startup_hook_path
 from .templates import template_dir_context
 
 logger = logging.getLogger(__name__)
@@ -258,6 +259,14 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
     if git_config and git_config.get("worktree_mirror"):
         git_worktree_mirror_override = build_git_worktree_mirror_override(workspace)
 
+    data_stores: list[dict] = config.get("data_stores", [])
+    data_store_override: str | None = None
+    if data_stores:
+        store_dirs = [get_data_store_dir(workspace, e["name"]) for e in data_stores]
+        data_store_override = build_data_store_override(
+            data_stores, store_dirs[0].parent
+        )
+
     config_dir = resolve_config(workspace)
 
     if config_dir is not None:
@@ -285,6 +294,7 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
             env_passthrough_override=env_passthrough_override,
             startup_hook_override=startup_hook_override,
             git_worktree_mirror_override=git_worktree_mirror_override,
+            data_store_override=data_store_override,
         )
     else:
         # Instant mode: copy bundled templates into a fresh temp directory so
@@ -319,4 +329,5 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
                     env_passthrough_override=env_passthrough_override,
                     startup_hook_override=startup_hook_override,
                     git_worktree_mirror_override=git_worktree_mirror_override,
+                    data_store_override=data_store_override,
                 )

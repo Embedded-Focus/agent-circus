@@ -39,6 +39,10 @@ COMPOSE_STARTUP_HOOK_FILE_NAME = "compose.startup-hook.json"
 
 COMPOSE_GIT_WORKTREE_MIRROR_FILE_NAME = "compose.git-worktree-mirror.json"
 
+COMPOSE_DATA_STORE_FILE_NAME = "compose.data-store.json"
+
+DATA_STORE_DEFAULT_MOUNT_BASE = "/home/node/.local/share/agent-circus"
+
 CA_CERTS_DEFAULT_DIR = "/usr/local/share/ca-certificates"
 
 CONFIG_FILE_NAME = "config.toml"
@@ -73,6 +77,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "mcp_servers": [],
     "env": {},
     "additional_dirs": [],
+    "data_stores": [],
     "ssh": None,
     "git": None,
     "hosts": None,
@@ -503,6 +508,30 @@ def build_additional_dirs_override(additional_dirs: list[dict]) -> str:
         name = entry.get("name") or Path(host_path).name
         mode = "ro" if entry.get("readonly", False) else "cached"
         volumes.append(f"{host_path}:/workspaces/{name}:{mode}")
+    services = {svc: {"volumes": volumes} for svc in AVAILABLE_SERVICES}
+    return json.dumps({"services": services})
+
+
+def build_data_store_override(data_stores: list[dict], data_base_dir: Path) -> str:
+    """Build a Docker Compose override that bind-mounts project data store directories.
+
+    Each named store is mounted at its configured ``mount_path`` (or a default under
+    :data:`DATA_STORE_DEFAULT_MOUNT_BASE`) inside every agent container.  Host
+    directories are located under ``data_base_dir/<name>/``.
+
+    :param data_stores: List of data store entries from ``config.toml``.
+        Each entry must have a ``name`` key and may optionally have ``mount_path``
+        (default ``/home/node/.local/share/agent-circus/<name>``).
+    :param data_base_dir: Base directory on the host under which per-store
+        subdirectories reside.
+    :returns: Compose override as a JSON string.
+    """
+    volumes = []
+    for entry in data_stores:
+        name = entry["name"]
+        mount_path = entry.get("mount_path", f"{DATA_STORE_DEFAULT_MOUNT_BASE}/{name}")
+        host_path = str(data_base_dir / name)
+        volumes.append(f"{host_path}:{mount_path}:cached")
     services = {svc: {"volumes": volumes} for svc in AVAILABLE_SERVICES}
     return json.dumps({"services": services})
 

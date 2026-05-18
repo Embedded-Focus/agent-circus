@@ -36,7 +36,6 @@ services:
         CLAUDE_AGENT_ACP_VERSION: 0.33.1
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
-    - bashhistory:/commandhistory
     - ${HOME}/.cache:/home/node/.cache
     - ${HOME}/.claude:/home/node/.claude
     environment:
@@ -58,7 +57,6 @@ services:
         CODEX_ACP_VERSION: 0.14.0
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
-    - bashhistory:/commandhistory
     - ${HOME}/.cache:/home/node/.cache
     - ${HOME}/.codex:/home/node/.codex
     environment:
@@ -73,7 +71,6 @@ services:
         <<: *common-build-args
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
-    - bashhistory:/commandhistory
     - ${HOME}/.cache:/home/node/.cache
     - ${HOME}/.vibe:/home/node/.vibe
     environment:
@@ -90,11 +87,8 @@ services:
         OPENCODE_VERSION: 1.15.0
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
-    - bashhistory:/commandhistory
     - ${HOME}/.cache:/home/node/.cache
     - ${HOME}/.config/opencode:/home/node/.config/opencode
     environment:
       AGENT_TYPE: opencode
 
-volumes:
-  bashhistory:

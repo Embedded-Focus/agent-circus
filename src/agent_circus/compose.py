@@ -16,6 +16,7 @@ from .state import (
     get_additional_dirs_override_path,
     get_agent_configs_override_path,
     get_ca_certs_override_path,
+    get_data_store_override_path,
     get_env_passthrough_override_path,
     get_git_override_path,
     get_git_worktree_mirror_override_path,
@@ -67,6 +68,7 @@ class ComposeContext:
     env_passthrough_override: str | None = None
     startup_hook_override: str | None = None
     git_worktree_mirror_override: str | None = None
+    data_store_override: str | None = None
 
 
 def _exec_compose(
@@ -181,6 +183,14 @@ def _exec_compose(
         logger.debug("Git worktree mirror override: %s", git_worktree_mirror_path)
     else:
         git_worktree_mirror_path.unlink(missing_ok=True)
+
+    data_store_path = get_data_store_override_path(ctx.workspace)
+    if ctx.data_store_override:
+        data_store_path.write_text(ctx.data_store_override)
+        cmd.extend(["-f", str(data_store_path)])
+        logger.debug("Data store override: %s", data_store_path)
+    else:
+        data_store_path.unlink(missing_ok=True)
 
     cmd.extend(args)
     logger.debug("Running: %s", " ".join(cmd))

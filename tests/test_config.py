@@ -41,6 +41,7 @@ def test_load_config_no_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         "mcp_servers": [],
         "env": {},
         "additional_dirs": [],
+        "data_stores": [],
         "ssh": None,
         "git": None,
         "hosts": None,

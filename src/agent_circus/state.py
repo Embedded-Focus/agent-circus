@@ -13,6 +13,7 @@ from .config import (
     COMPOSE_ADDITIONAL_DIRS_FILE_NAME,
     COMPOSE_AGENT_CONFIGS_FILE_NAME,
     COMPOSE_CA_CERTS_FILE_NAME,
+    COMPOSE_DATA_STORE_FILE_NAME,
     COMPOSE_ENV_PASSTHROUGH_FILE_NAME,
     COMPOSE_GIT_FILE_NAME,
     COMPOSE_GIT_WORKTREE_MIRROR_FILE_NAME,
@@ -183,6 +184,34 @@ def get_startup_hook_path(workspace: Path) -> Path:
     hooks_dir = get_state_dir(workspace) / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
     return hooks_dir / "startup.sh"
+
+
+def get_data_store_dir(workspace: Path, name: str) -> Path:
+    """Get the host directory for a named project data store.
+
+    Creates the directory if it does not exist.
+
+    :param workspace: Workspace path.
+    :type workspace: Path
+    :param name: Data store name as specified in ``config.toml``.
+    :type name: str
+    :returns: Path to the ``data/<name>/`` subdirectory in the state directory.
+    :rtype: Path
+    """
+    data_dir = get_state_dir(workspace) / "data" / name
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return data_dir
+
+
+def get_data_store_override_path(workspace: Path) -> Path:
+    """Get the path for the data store compose override file.
+
+    :param workspace: Workspace path.
+    :type workspace: Path
+    :returns: Path to ``compose.data-store.json`` in the state directory.
+    :rtype: Path
+    """
+    return get_state_dir(workspace) / COMPOSE_DATA_STORE_FILE_NAME
 
 
 def get_startup_hook_override_path(workspace: Path) -> Path:

@@ -251,6 +251,35 @@ Fields:
 | `readonly` | no | `false` | Mount read-only when `true` |
 | `name` | no | basename of `path` | Container mount name (`/workspaces/<name>`) |
 
+### Data Stores
+
+Use the `[[data_stores]]` array to persist data across container restarts on a
+per-project basis. Each named store is a directory kept under
+`~/.local/state/agent-circus/<project>/data/<name>/` on the host and
+bind-mounted into every agent container.
+
+``` toml
+[[data_stores]]
+name = "memory"
+# mount_path defaults to /home/node/.local/share/agent-circus/<name>
+
+[[data_stores]]
+name = "bashhistory"
+mount_path = "/commandhistory"
+```
+
+Fields:
+
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `name` | yes | — | Store name; used as the host subdirectory |
+| `mount_path` | no | `/home/node/.local/share/agent-circus/<name>` | Container mount path |
+
+**Bash history.** The container image configures shells to write history to
+`/commandhistory`. Adding a `bashhistory` data store (as shown above) makes
+that history survive container restarts. Without a data store, history is kept
+only for the lifetime of the container.
+
 ### SSH Agent Forwarding
 
 Add an `[ssh]` table to `config.toml` to forward your host SSH agent into
