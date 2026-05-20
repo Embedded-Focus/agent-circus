@@ -280,6 +280,59 @@ Fields:
 that history survive container restarts. Without a data store, history is kept
 only for the lifetime of the container.
 
+### Port Forwarding
+
+Use the `[[port_forwards]]` array to publish a container port on the host.
+Each entry applies to one explicit agent service.
+
+``` toml
+[[port_forwards]]
+service = "codex"
+container_port = 3333
+host_port = 3333
+# host defaults to 127.0.0.1
+# protocol defaults to tcp
+```
+
+For example, to reach the lean-ctx dashboard from the host, publish port
+`3333` and run the dashboard inside the container bound to the container
+network interface:
+
+``` sh
+lean-ctx dashboard --host=0.0.0.0 --port=3333
+```
+
+The process inside the container must bind to `0.0.0.0` or the container
+network interface. If it binds only to `127.0.0.1` inside the container,
+Docker port publishing cannot reach it from the host.
+
+Fields:
+
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `service` | yes | - | Agent service to expose |
+| `container_port` | yes | - | Port inside the container |
+| `host_port` | no | `container_port` | Port on the host |
+| `host` | no | `127.0.0.1` | Host bind address |
+| `protocol` | no | `tcp` | `tcp` or `udp` |
+
+Agent Circus binds forwarded ports to `127.0.0.1` by default. Use
+`host = "0.0.0.0"` only when the UI or API should be reachable from other
+machines on the network.
+
+Published ports are set when Docker creates the container. If port forwarding
+configuration changes for an already-created service, recreate the container:
+
+``` sh
+agent-circus remove
+agent-circus up codex
+```
+
+Host port collisions are left to Docker Compose. If the requested host port is
+already in use, Docker reports its normal error. Agent Circus only publishes
+the port; it does not check whether a process is listening inside the
+container.
+
 ### SSH Agent Forwarding
 
 Add an `[ssh]` table to `config.toml` to forward your host SSH agent into

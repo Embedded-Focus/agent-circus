@@ -33,6 +33,7 @@ from .config import (
     build_git_override,
     build_git_worktree_mirror_override,
     build_hosts_override,
+    build_port_forwards_override,
     build_shadow_override,
     build_ssh_override,
     build_startup_hook_override,
@@ -168,6 +169,7 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
     mcp_servers = config.get("mcp_servers", [])
     env_vars: dict[str, str] = config.get("env", {})
     additional_dirs: list[dict] = config.get("additional_dirs", [])
+    port_forwards: list[dict] = config.get("port_forwards", [])
     ssh_config = config.get("ssh")
     git_config = config.get("git")
     agent_config_additions = build_agent_config_additions(config)
@@ -176,6 +178,9 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
     shadow_override = build_shadow_override(shadow) if shadow else None
     additional_dirs_override = (
         build_additional_dirs_override(additional_dirs) if additional_dirs else None
+    )
+    port_forwards_override = (
+        build_port_forwards_override(port_forwards) if port_forwards else None
     )
 
     ssh_override: str | None = None
@@ -295,6 +300,7 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
             startup_hook_override=startup_hook_override,
             git_worktree_mirror_override=git_worktree_mirror_override,
             data_store_override=data_store_override,
+            port_forwards_override=port_forwards_override,
         )
     else:
         # Instant mode: copy bundled templates into a fresh temp directory so
@@ -330,4 +336,5 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
                     startup_hook_override=startup_hook_override,
                     git_worktree_mirror_override=git_worktree_mirror_override,
                     data_store_override=data_store_override,
+                    port_forwards_override=port_forwards_override,
                 )

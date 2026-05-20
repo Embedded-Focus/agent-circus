@@ -19,6 +19,7 @@ from .config import (
     COMPOSE_GIT_WORKTREE_MIRROR_FILE_NAME,
     COMPOSE_HOSTS_FILE_NAME,
     COMPOSE_MCP_FILE_NAME,
+    COMPOSE_PORT_FORWARDS_FILE_NAME,
     COMPOSE_SHADOW_FILE_NAME,
     COMPOSE_SSH_FILE_NAME,
     COMPOSE_STARTUP_HOOK_FILE_NAME,
@@ -212,6 +213,17 @@ def get_data_store_override_path(workspace: Path) -> Path:
     :rtype: Path
     """
     return get_state_dir(workspace) / COMPOSE_DATA_STORE_FILE_NAME
+
+
+def get_port_forwards_override_path(workspace: Path) -> Path:
+    """Get the path for the port forwards compose override file.
+
+    :param workspace: Workspace path.
+    :type workspace: Path
+    :returns: Path to ``compose.port-forwards.json`` in the state directory.
+    :rtype: Path
+    """
+    return get_state_dir(workspace) / COMPOSE_PORT_FORWARDS_FILE_NAME
 
 
 def get_startup_hook_override_path(workspace: Path) -> Path:

@@ -54,6 +54,29 @@ def test_context_no_shadow_when_empty(
 @patch("agent_circus.context.build_agent_configs_override", return_value="{}")
 @patch(
     "agent_circus.context.load_config",
+    return_value={
+        "shadow": [],
+        "mcp_servers": [],
+        "port_forwards": [{"service": "codex", "container_port": 3333}],
+    },
+)
+@patch("agent_circus.context.resolve_config", return_value=None)
+def test_context_includes_port_forwards_override(
+    mock_resolve: MagicMock,
+    mock_load: MagicMock,
+    mock_agent_configs: MagicMock,
+    mock_mcp: MagicMock,
+    tmp_path: Path,
+) -> None:
+    with build_compose_context(tmp_path) as ctx:
+        assert ctx.port_forwards_override is not None
+        assert "127.0.0.1:3333:3333/tcp" in ctx.port_forwards_override
+
+
+@patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
+@patch("agent_circus.context.build_agent_configs_override", return_value="{}")
+@patch(
+    "agent_circus.context.load_config",
     return_value={"shadow": [], "mcp_servers": []},
 )
 @patch("agent_circus.context.resolve_config")

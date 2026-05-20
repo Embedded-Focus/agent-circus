@@ -22,6 +22,7 @@ from .state import (
     get_git_worktree_mirror_override_path,
     get_hosts_override_path,
     get_mcp_override_path,
+    get_port_forwards_override_path,
     get_shadow_override_path,
     get_ssh_override_path,
     get_startup_hook_override_path,
@@ -50,6 +51,7 @@ class ComposeContext:
     :param additional_dirs_override: JSON string for extra directory mounts, or ``None``.
     :param ssh_override: JSON string for SSH agent socket forwarding, or ``None``.
     :param git_override: JSON string for Git configuration forwarding, or ``None``.
+    :param port_forwards_override: JSON string for published ports, or ``None``.
     """
 
     workspace: Path
@@ -69,6 +71,7 @@ class ComposeContext:
     startup_hook_override: str | None = None
     git_worktree_mirror_override: str | None = None
     data_store_override: str | None = None
+    port_forwards_override: str | None = None
 
 
 def _exec_compose(
@@ -191,6 +194,14 @@ def _exec_compose(
         logger.debug("Data store override: %s", data_store_path)
     else:
         data_store_path.unlink(missing_ok=True)
+
+    port_forwards_path = get_port_forwards_override_path(ctx.workspace)
+    if ctx.port_forwards_override:
+        port_forwards_path.write_text(ctx.port_forwards_override)
+        cmd.extend(["-f", str(port_forwards_path)])
+        logger.debug("Port forwards override: %s", port_forwards_path)
+    else:
+        port_forwards_path.unlink(missing_ok=True)
 
     cmd.extend(args)
     logger.debug("Running: %s", " ".join(cmd))

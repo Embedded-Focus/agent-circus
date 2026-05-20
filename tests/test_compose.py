@@ -7,11 +7,13 @@ from unittest.mock import MagicMock, patch
 
 from agent_circus.compose import (
     ComposeContext,
+    _exec_compose,
     compose_down,
     compose_is_service_running,
 )
 from agent_circus.config import build_shadow_override
 from agent_circus.exceptions import ComposeError
+from agent_circus.state import get_port_forwards_override_path
 
 
 def _make_ctx(tmp_path: Path) -> ComposeContext:
@@ -94,6 +96,34 @@ def test_compose_down_no_services_omits_trailing_args(
 
     called_args = mock_exec.call_args[0][0]
     assert called_args == ["down"]
+
+
+@patch("agent_circus.compose.subprocess.run")
+def test_exec_compose_writes_port_forwards_override(
+    mock_run: MagicMock,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    override = '{"services":{"codex":{"ports":["127.0.0.1:3333:3333/tcp"]}}}'
+    ctx = ComposeContext(
+        workspace=tmp_path / "workspace",
+        project_name="test-project",
+        compose_file=tmp_path / "compose.yaml",
+        cwd=tmp_path,
+        port_forwards_override=override,
+    )
+    mock_run.return_value = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout=""
+    )
+
+    _exec_compose(["ps"], ctx, capture_output=True)
+
+    override_path = get_port_forwards_override_path(ctx.workspace)
+    called_cmd = mock_run.call_args[0][0]
+    assert override_path.read_text() == override
+    assert "-f" in called_cmd
+    assert str(override_path) in called_cmd
 
 
 def test_build_shadow_override_produces_valid_json() -> None:

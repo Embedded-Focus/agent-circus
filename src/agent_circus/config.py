@@ -41,6 +41,8 @@ COMPOSE_GIT_WORKTREE_MIRROR_FILE_NAME = "compose.git-worktree-mirror.json"
 
 COMPOSE_DATA_STORE_FILE_NAME = "compose.data-store.json"
 
+COMPOSE_PORT_FORWARDS_FILE_NAME = "compose.port-forwards.json"
+
 DATA_STORE_DEFAULT_MOUNT_BASE = "/home/node/.local/share/agent-circus"
 
 CA_CERTS_DEFAULT_DIR = "/usr/local/share/ca-certificates"
@@ -78,6 +80,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "env": {},
     "additional_dirs": [],
     "data_stores": [],
+    "port_forwards": [],
     "ssh": None,
     "git": None,
     "hosts": None,
@@ -550,6 +553,64 @@ def build_git_worktree_mirror_override(workspace: Path) -> str:
     host_path = str(workspace)
     volume = f"{host_path}:{host_path}:cached"
     services = {svc: {"volumes": [volume]} for svc in AVAILABLE_SERVICES}
+    return json.dumps({"services": services})
+
+
+def _validate_port(value: Any, field: str) -> int:
+    """Validate a TCP/UDP port number from config.
+
+    :param value: Raw config value.
+    :param field: Field name for error messages.
+    :returns: Validated port number.
+    :raises ConfigurationError: If the value is not an integer in ``1..65535``.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConfigurationError(f"Port forward {field} must be an integer")
+    if not 1 <= value <= 65535:
+        raise ConfigurationError(f"Port forward {field} must be in range 1..65535")
+    return value
+
+
+def build_port_forwards_override(port_forwards: list[dict]) -> str:
+    """Build a Docker Compose override that publishes container ports.
+
+    :param port_forwards: Port forward entries from ``config.toml``.
+    :returns: Compose override as a JSON string.
+    :raises ConfigurationError: If an entry is invalid.
+    """
+    services: dict[str, dict[str, list[str]]] = {}
+
+    for entry in port_forwards:
+        if not isinstance(entry, dict):
+            raise ConfigurationError("Port forward entries must be tables")
+
+        service = entry.get("service")
+        if not service:
+            raise ConfigurationError("Port forward service is required")
+        if service not in AVAILABLE_SERVICES:
+            raise ConfigurationError(
+                f"Invalid port forward service: {service}. "
+                f"Available: {', '.join(AVAILABLE_SERVICES)}"
+            )
+
+        if "container_port" not in entry:
+            raise ConfigurationError("Port forward container_port is required")
+        container_port = _validate_port(entry["container_port"], "container_port")
+        host_port = _validate_port(entry.get("host_port", container_port), "host_port")
+
+        host = entry.get("host", "127.0.0.1")
+        if not isinstance(host, str) or not host:
+            raise ConfigurationError("Port forward host must be a non-empty string")
+
+        protocol = entry.get("protocol", "tcp")
+        if protocol not in ("tcp", "udp"):
+            raise ConfigurationError("Port forward protocol must be 'tcp' or 'udp'")
+
+        service_config = services.setdefault(service, {"ports": []})
+        service_config["ports"].append(
+            f"{host}:{host_port}:{container_port}/{protocol}"
+        )
+
     return json.dumps({"services": services})
 
 
