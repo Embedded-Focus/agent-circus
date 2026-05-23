@@ -246,6 +246,8 @@ name = "other-project"
 Fields:
 
 | Field | Required | Default | Description |
+|---|---|---|---|
+|---|---|---|---|
 |-------|----------|---------|-------------|
 | `path` | yes | — | Absolute path on the host |
 | `readonly` | no | `false` | Mount read-only when `true` |
@@ -256,7 +258,7 @@ Fields:
 Use the `[[data_stores]]` array to persist data across container restarts on a
 per-project basis. Each named store is a directory kept under
 `~/.local/state/agent-circus/<project>/data/<name>/` on the host and
-bind-mounted into every agent container.
+bind-mounted into configured agent containers.
 
 ``` toml
 [[data_stores]]
@@ -266,6 +268,12 @@ name = "memory"
 [[data_stores]]
 name = "bashhistory"
 mount_path = "/commandhistory"
+
+[[data_stores]]
+name = "codex-config-sandbox"
+mount_path = "/home/node/.codex"
+seed_from = "${HOME}/.codex"
+services = ["codex"]
 ```
 
 Fields:
@@ -274,6 +282,26 @@ Fields:
 |-------|----------|---------|-------------|
 | `name` | yes | — | Store name; used as the host subdirectory |
 | `mount_path` | no | `/home/node/.local/share/agent-circus/<name>` | Container mount path |
+| `services` | no | all agent services | Services that receive the store |
+| `seed_from` | no | unset | Host directory copied into the store before first container start; use an absolute path or environment interpolation like `${HOME}/.codex` |
+| `seed_mode` | no | `once` | Seed copy behavior; currently only `once` is supported |
+
+Seeded stores are useful when you want a writable, project-local copy of host
+state. For example, mounting a data store at `/home/node/.codex` and setting
+`seed_from = "${HOME}/.codex"` gives Codex its own writable sandbox copy of the
+host config. In that case Agent Circus omits the default host config bind mount
+for `codex`, so the container does not receive duplicate mounts for
+`/home/node/.codex`. Tilde paths such as `~/.codex` are rejected; use an
+absolute path or environment interpolation such as `${HOME}/.codex`.
+
+Seeding currently happens only once per data store. After the first successful
+seed copy, later container starts keep the data store's existing contents and do
+not re-copy from `seed_from`. Optional always-on seeding will be added in a
+future release. To re-initiate seeding today, remove the store directory
+(`~/.local/state/agent-circus/<project>/data/<name>/`) before starting the
+container again. If you want to keep the existing store contents and only allow
+another seed copy into it, remove the store's `.agent-circus-seeded` marker
+file instead.
 
 **Bash history.** The container image configures shells to write history to
 `/commandhistory`. Adding a `bashhistory` data store (as shown above) makes

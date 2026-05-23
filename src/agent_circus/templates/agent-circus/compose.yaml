@@ -37,7 +37,6 @@ services:
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
     - ${HOME}/.cache:/home/node/.cache
-    - ${HOME}/.claude:/home/node/.claude
     environment:
       AGENT_TYPE: claude-code
       NODE_OPTIONS: --max-old-space-size=4096
@@ -58,7 +57,6 @@ services:
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
     - ${HOME}/.cache:/home/node/.cache
-    - ${HOME}/.codex:/home/node/.codex
     environment:
       AGENT_TYPE: codex
 
@@ -72,7 +70,6 @@ services:
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
     - ${HOME}/.cache:/home/node/.cache
-    - ${HOME}/.vibe:/home/node/.vibe
     environment:
       AGENT_TYPE: mistral-vibe
 
@@ -88,6 +85,5 @@ services:
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
     - ${HOME}/.cache:/home/node/.cache
-    - ${HOME}/.config/opencode:/home/node/.config/opencode
     environment:
       AGENT_TYPE: opencode

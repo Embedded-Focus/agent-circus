@@ -21,6 +21,8 @@ COMPOSE_SHADOW_FILE_NAME = "compose.shadow.json"
 
 COMPOSE_AGENT_CONFIGS_FILE_NAME = "compose.agent-configs.json"
 
+COMPOSE_AGENT_CONFIG_MOUNTS_FILE_NAME = "compose.agent-config-mounts.json"
+
 COMPOSE_MCP_FILE_NAME = "compose.mcp.json"
 
 COMPOSE_ADDITIONAL_DIRS_FILE_NAME = "compose.additional-dirs.json"
@@ -45,6 +47,8 @@ COMPOSE_PORT_FORWARDS_FILE_NAME = "compose.port-forwards.json"
 
 DATA_STORE_DEFAULT_MOUNT_BASE = "/home/node/.local/share/agent-circus"
 
+DATA_STORE_SEED_MODES = {"once"}
+
 CA_CERTS_DEFAULT_DIR = "/usr/local/share/ca-certificates"
 
 CONFIG_FILE_NAME = "config.toml"
@@ -54,6 +58,25 @@ DOCKERFILE_NAME = "Dockerfile"
 HOOKS_DIR_NAME = "hooks"
 
 AVAILABLE_SERVICES = ["claude-code", "codex", "mistral-vibe", "opencode"]
+
+DEFAULT_AGENT_CONFIG_MOUNTS: dict[str, dict[str, str]] = {
+    "claude-code": {
+        "host": "${HOME}/.claude",
+        "container": "/home/node/.claude",
+    },
+    "codex": {
+        "host": "${HOME}/.codex",
+        "container": "/home/node/.codex",
+    },
+    "mistral-vibe": {
+        "host": "${HOME}/.vibe",
+        "container": "/home/node/.vibe",
+    },
+    "opencode": {
+        "host": "${HOME}/.config/opencode",
+        "container": "/home/node/.config/opencode",
+    },
+}
 
 VCS_MARKERS: tuple[str, ...] = (".git", ".hg", ".svn", ".bzr", "_darcs")
 
@@ -515,7 +538,127 @@ def build_additional_dirs_override(additional_dirs: list[dict]) -> str:
     return json.dumps({"services": services})
 
 
-def build_data_store_override(data_stores: list[dict], data_base_dir: Path) -> str:
+def _data_store_mount_path(entry: dict) -> str:
+    """Return the container mount path for a data store entry.
+
+    :param entry: Data store entry from ``config.toml``.
+    :returns: Explicit or default container mount path.
+    """
+    name = entry["name"]
+    return entry.get("mount_path", f"{DATA_STORE_DEFAULT_MOUNT_BASE}/{name}")
+
+
+def _data_store_services(entry: dict) -> list[str]:
+    """Return validated services for a data store entry.
+
+    :param entry: Data store entry from ``config.toml``.
+    :returns: Services the store should be mounted into.
+    :raises ConfigurationError: If ``services`` is not a list of valid services.
+    """
+    services = entry.get("services")
+    if services is None:
+        return AVAILABLE_SERVICES.copy()
+    if (
+        not isinstance(services, list)
+        or not services
+        or any(not isinstance(service, str) for service in services)
+    ):
+        raise ConfigurationError("Data store services must be a non-empty list")
+    return validate_services(services)
+
+
+def _data_store_seed_mode(entry: dict) -> str:
+    """Return the validated seed mode for a data store entry.
+
+    :param entry: Data store entry from ``config.toml``.
+    :returns: Seed mode, currently only ``"once"``.
+    :raises ConfigurationError: If the seed mode is unsupported.
+    """
+    mode = entry.get("seed_mode", "once")
+    if mode not in DATA_STORE_SEED_MODES:
+        raise ConfigurationError(
+            "Data store seed_mode must be one of: "
+            f"{', '.join(sorted(DATA_STORE_SEED_MODES))}"
+        )
+    return mode
+
+
+def _data_store_seed_from(entry: dict) -> str | None:
+    """Return the validated seed source path for a data store entry.
+
+    Docker Compose handles ``${VAR}`` interpolation but does not reliably expand
+    shell-style ``~`` in volume source paths, so tilde-prefixed paths are
+    rejected with an explicit configuration error.
+
+    :param entry: Data store entry from ``config.toml``.
+    :returns: Seed source path, or ``None`` when unset.
+    :raises ConfigurationError: If the path starts with ``~``.
+    """
+    seed_from = entry.get("seed_from")
+    if seed_from is None:
+        return None
+    if not isinstance(seed_from, str) or not seed_from:
+        raise ConfigurationError("Data store seed_from must be a non-empty string")
+    if seed_from.startswith("~"):
+        raise ConfigurationError(
+            "Data store seed_from must use an absolute path or Compose "
+            "environment interpolation like ${HOME}/.codex; '~' is not supported"
+        )
+    return seed_from
+
+
+def get_claimed_agent_config_mounts(data_stores: list[dict]) -> set[tuple[str, str]]:
+    """Return default agent config mount paths claimed by data stores.
+
+    A claim means a data store applies to a service and mounts at that service's
+    default agent configuration directory. The default host config mount is then
+    suppressed for that service/path.
+
+    :param data_stores: Data store entries from ``config.toml``.
+    :returns: ``(service, container_path)`` tuples claimed by data stores.
+    """
+    claimed: set[tuple[str, str]] = set()
+    for entry in data_stores:
+        mount_path = _data_store_mount_path(entry)
+        for service in _data_store_services(entry):
+            default_mount = DEFAULT_AGENT_CONFIG_MOUNTS.get(service)
+            if default_mount and mount_path == default_mount["container"]:
+                claimed.add((service, mount_path))
+    return claimed
+
+
+def build_agent_config_mounts_override(
+    claimed_mounts: set[tuple[str, str]] | None = None,
+) -> str:
+    """Build default host agent configuration directory mounts.
+
+    These mounts preserve the historical template behavior, except any
+    ``(service, container_path)`` claimed by a data store is omitted so the
+    container never receives duplicate mounts for the same agent config dir.
+
+    :param claimed_mounts: Service/path pairs claimed by data stores.
+    :returns: Compose override as a JSON string.
+    """
+    claimed_mounts = claimed_mounts or set()
+    services: dict[str, dict[str, list[str]]] = {}
+    for service in AVAILABLE_SERVICES:
+        default_mount = DEFAULT_AGENT_CONFIG_MOUNTS.get(service)
+        volumes: list[str] = []
+        if (
+            default_mount
+            and (service, default_mount["container"]) not in claimed_mounts
+        ):
+            volumes.append(
+                f"{default_mount['host']}:{default_mount['container']}:cached"
+            )
+        services[service] = {"volumes": volumes}
+    return json.dumps({"services": services})
+
+
+def build_data_store_override(
+    data_stores: list[dict],
+    data_base_dir: Path,
+) -> str:
     """Build a Docker Compose override that bind-mounts project data store directories.
 
     Each named store is mounted at its configured ``mount_path`` (or a default under
@@ -523,19 +666,22 @@ def build_data_store_override(data_stores: list[dict], data_base_dir: Path) -> s
     directories are located under ``data_base_dir/<name>/``.
 
     :param data_stores: List of data store entries from ``config.toml``.
-        Each entry must have a ``name`` key and may optionally have ``mount_path``
-        (default ``/home/node/.local/share/agent-circus/<name>``).
+        Each entry must have a ``name`` key and may optionally have ``mount_path``,
+        ``services``, ``seed_from``, and ``seed_mode``.
     :param data_base_dir: Base directory on the host under which per-store
         subdirectories reside.
     :returns: Compose override as a JSON string.
     """
-    volumes = []
+    services = {svc: {"volumes": []} for svc in AVAILABLE_SERVICES}
     for entry in data_stores:
         name = entry["name"]
-        mount_path = entry.get("mount_path", f"{DATA_STORE_DEFAULT_MOUNT_BASE}/{name}")
+        mount_path = _data_store_mount_path(entry)
         host_path = str(data_base_dir / name)
-        volumes.append(f"{host_path}:{mount_path}:cached")
-    services = {svc: {"volumes": volumes} for svc in AVAILABLE_SERVICES}
+        store_volumes = [f"{host_path}:{mount_path}:cached"]
+        if _data_store_seed_from(entry):
+            _data_store_seed_mode(entry)
+        for service in _data_store_services(entry):
+            services[service]["volumes"].extend(store_volumes)
     return json.dumps({"services": services})
 
 

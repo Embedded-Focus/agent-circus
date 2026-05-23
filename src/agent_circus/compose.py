@@ -9,11 +9,13 @@ and is passed in via :class:`ComposeContext`.
 import dataclasses
 import logging
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 from .exceptions import ComposeError
 from .state import (
     get_additional_dirs_override_path,
+    get_agent_config_mounts_override_path,
     get_agent_configs_override_path,
     get_ca_certs_override_path,
     get_data_store_override_path,
@@ -46,12 +48,15 @@ class ComposeContext:
     :param cwd: Working directory for the subprocess.
     :param env: Extra environment variables, or ``None`` to inherit.
     :param shadow_override: JSON string for shadow bind mounts, or ``None``.
+    :param agent_config_mounts_override: JSON string for default agent config
+        directory mounts, or ``None``.
     :param agent_configs_override: JSON string for agent config mounts, or ``None``.
     :param mcp_override: JSON string for MCP sidecar services, or ``None``.
     :param additional_dirs_override: JSON string for extra directory mounts, or ``None``.
     :param ssh_override: JSON string for SSH agent socket forwarding, or ``None``.
     :param git_override: JSON string for Git configuration forwarding, or ``None``.
     :param port_forwards_override: JSON string for published ports, or ``None``.
+    :param data_store_seeder: Optional callback run before ``docker compose up``.
     """
 
     workspace: Path
@@ -60,6 +65,7 @@ class ComposeContext:
     cwd: Path
     env: dict[str, str] | None = None
     shadow_override: str | None = None
+    agent_config_mounts_override: str | None = None
     agent_configs_override: str | None = None
     mcp_override: str | None = None
     additional_dirs_override: str | None = None
@@ -72,6 +78,7 @@ class ComposeContext:
     git_worktree_mirror_override: str | None = None
     data_store_override: str | None = None
     port_forwards_override: str | None = None
+    data_store_seeder: Callable[[], None] | None = None
 
 
 def _exec_compose(
@@ -107,13 +114,13 @@ def _exec_compose(
     else:
         shadow_path.unlink(missing_ok=True)
 
-    agent_configs_path = get_agent_configs_override_path(ctx.workspace)
-    if ctx.agent_configs_override:
-        agent_configs_path.write_text(ctx.agent_configs_override)
-        cmd.extend(["-f", str(agent_configs_path)])
-        logger.debug("Agent configs override: %s", agent_configs_path)
+    agent_config_mounts_path = get_agent_config_mounts_override_path(ctx.workspace)
+    if ctx.agent_config_mounts_override:
+        agent_config_mounts_path.write_text(ctx.agent_config_mounts_override)
+        cmd.extend(["-f", str(agent_config_mounts_path)])
+        logger.debug("Agent config mounts override: %s", agent_config_mounts_path)
     else:
-        agent_configs_path.unlink(missing_ok=True)
+        agent_config_mounts_path.unlink(missing_ok=True)
 
     mcp_path = get_mcp_override_path(ctx.workspace)
     if ctx.mcp_override:
@@ -195,6 +202,14 @@ def _exec_compose(
     else:
         data_store_path.unlink(missing_ok=True)
 
+    agent_configs_path = get_agent_configs_override_path(ctx.workspace)
+    if ctx.agent_configs_override:
+        agent_configs_path.write_text(ctx.agent_configs_override)
+        cmd.extend(["-f", str(agent_configs_path)])
+        logger.debug("Agent configs override: %s", agent_configs_path)
+    else:
+        agent_configs_path.unlink(missing_ok=True)
+
     port_forwards_path = get_port_forwards_override_path(ctx.workspace)
     if ctx.port_forwards_override:
         port_forwards_path.write_text(ctx.port_forwards_override)
@@ -270,6 +285,8 @@ def compose_up(
         args.extend(services)
 
     logger.info("Starting services: %s", ", ".join(services or ["all"]))
+    if ctx.data_store_seeder:
+        ctx.data_store_seeder()
     _exec_compose(args, ctx)
 
 

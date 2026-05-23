@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .config import (
     COMPOSE_ADDITIONAL_DIRS_FILE_NAME,
+    COMPOSE_AGENT_CONFIG_MOUNTS_FILE_NAME,
     COMPOSE_AGENT_CONFIGS_FILE_NAME,
     COMPOSE_CA_CERTS_FILE_NAME,
     COMPOSE_DATA_STORE_FILE_NAME,
@@ -69,6 +70,17 @@ def get_agent_configs_override_path(workspace: Path) -> Path:
     :rtype: Path
     """
     return get_state_dir(workspace) / COMPOSE_AGENT_CONFIGS_FILE_NAME
+
+
+def get_agent_config_mounts_override_path(workspace: Path) -> Path:
+    """Get the path for the default agent config mounts compose override file.
+
+    :param workspace: Workspace path.
+    :type workspace: Path
+    :returns: Path to ``compose.agent-config-mounts.json`` in the state directory.
+    :rtype: Path
+    """
+    return get_state_dir(workspace) / COMPOSE_AGENT_CONFIG_MOUNTS_FILE_NAME
 
 
 def get_agent_configs_dir(workspace: Path) -> Path:
