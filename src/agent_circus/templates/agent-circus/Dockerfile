@@ -161,7 +161,6 @@ FROM base AS mistral-vibe
 
 ENV UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
-    UV_PYTHON_DOWNLOADS=never \
     UV_PROJECT_ENVIRONMENT=/app \
     PATH=/app/bin:${PATH}
 
@@ -171,6 +170,7 @@ RUN --mount=type=cache,target=/root/.cache \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     uv sync \
+        --python 3.14 \
         --locked \
         --no-dev \
         --no-install-project

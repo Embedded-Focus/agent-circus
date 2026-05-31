@@ -3,7 +3,7 @@ name = "agent-circus"
 version = "0.1.0"
 description = "AI Agent Circus DevContainer"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = "==3.14.*"
 dependencies = [
     # https://github.com/mistralai/mistral-vibe
     "mistral-vibe>=2.13.0",
