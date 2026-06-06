@@ -42,6 +42,7 @@ from .config import (
     filter_env,
     filter_hosts,
     get_claimed_agent_config_mounts,
+    get_companion_services,
     load_config,
     match_files,
     parse_hosts_file,
@@ -283,6 +284,7 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
     ssh_config = config.get("ssh")
     git_config = config.get("git")
     llama_cpp_config = config.get("llama_cpp")
+    companion_services = tuple(get_companion_services(config))
     agent_config_additions = build_agent_config_additions(config)
 
     # Build override strings (None when not needed).
@@ -427,6 +429,7 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
             data_store_override=data_store_override,
             port_forwards_override=port_forwards_override,
             llama_cpp_override=llama_cpp_override,
+            companion_services=companion_services,
             data_store_seeder=data_store_seeder,
         )
     else:

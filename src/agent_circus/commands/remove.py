@@ -9,7 +9,9 @@ import typer
 from agent_circus.compose import compose_down
 from agent_circus.config import (
     AVAILABLE_SERVICES,
+    get_companion_services,
     get_workspace_path,
+    load_config,
     validate_services,
 )
 from agent_circus.context import build_compose_context
@@ -75,9 +77,10 @@ def remove(
         agent-circus remove --remove-orphans       # Also remove orphan containers
     """
     workspace = workspace or get_workspace_path()
+    companions = get_companion_services(load_config(workspace))
 
     try:
-        services_to_remove = validate_services(services or [])
+        services_to_remove = validate_services(services or [], companions)
     except AgentCircusError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e

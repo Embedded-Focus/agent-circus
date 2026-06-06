@@ -497,21 +497,52 @@ def _build_llama_cpp_opencode_provider(llama_cpp_config: dict) -> dict:
     }
 
 
-def validate_services(services: list[str]) -> list[str]:
+def get_companion_services(config: dict) -> list[str]:
+    """Return companion service names active in the given config.
+
+    Companion services are non-agent sidecars injected via Compose
+    overrides: MCP servers (``mcp-<name>``) and the llama.cpp server
+    (``llama-cpp``) when configured.
+
+    :param config: Merged Agent Circus configuration.
+    :returns: Docker Compose service names, in config order.
+    """
+    services: list[str] = []
+    for server in config.get("mcp_servers", []):
+        services.append(f"mcp-{server['name']}")
+    if config.get("llama_cpp") is not None:
+        services.append("llama-cpp")
+    return services
+
+
+def validate_services(
+    services: list[str],
+    companion_services: list[str] | None = None,
+) -> list[str]:
     """Validate and return service names.
 
+    When *services* is empty, all agent services are returned (companions
+    are excluded — they start automatically via ``depends_on``).  When
+    non-empty, names are validated against agent services plus any
+    *companion_services* active in the current configuration.
+
     :param services: List of service names to validate.
+    :param companion_services: Additional valid service names from the
+        active config (e.g. ``["mcp-myserver", "llama-cpp"]``).
     :returns: Validated list of services.
-    :raises ConfigurationError: If invalid service name provided.
+    :raises ConfigurationError: If any name is invalid.
     """
     if not services:
         return AVAILABLE_SERVICES.copy()
 
-    invalid = set(services) - set(AVAILABLE_SERVICES)
+    companions = companion_services or []
+    all_valid = set(AVAILABLE_SERVICES) | set(companions)
+    invalid = set(services) - all_valid
     if invalid:
+        available = [*AVAILABLE_SERVICES, *companions]
         raise ConfigurationError(
-            f"Invalid service(s): {', '.join(invalid)}. "
-            f"Available: {', '.join(AVAILABLE_SERVICES)}"
+            f"Invalid service(s): {', '.join(sorted(invalid))}. "
+            f"Available: {', '.join(available)}"
         )
     return services
 

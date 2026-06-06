@@ -9,7 +9,9 @@ import typer
 from agent_circus.compose import compose_up
 from agent_circus.config import (
     AVAILABLE_SERVICES,
+    get_companion_services,
     get_workspace_path,
+    load_config,
     validate_services,
 )
 from agent_circus.context import build_compose_context
@@ -58,9 +60,10 @@ def up(
         agent-circus up --build              # Build and start all
     """
     workspace = workspace or get_workspace_path()
+    companions = get_companion_services(load_config(workspace))
 
     try:
-        services_to_start = validate_services(services or [])
+        services_to_start = validate_services(services or [], companions)
 
         if services:
             typer.echo(f"Starting services: {', '.join(services_to_start)}")

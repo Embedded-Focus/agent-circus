@@ -80,6 +80,7 @@ class ComposeContext:
     data_store_override: str | None = None
     port_forwards_override: str | None = None
     llama_cpp_override: str | None = None
+    companion_services: tuple[str, ...] = ()
     data_store_seeder: Callable[[], None] | None = None
 
 

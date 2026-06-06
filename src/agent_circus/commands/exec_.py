@@ -12,7 +12,9 @@ import typer
 from agent_circus.compose import compose_exec, compose_is_service_running, compose_up
 from agent_circus.config import (
     AVAILABLE_SERVICES,
+    get_companion_services,
     get_workspace_path,
+    load_config,
     validate_services,
 )
 from agent_circus.context import build_compose_context
@@ -66,9 +68,10 @@ def exec_cmd(
         agent-circus exec -T claude-code -- echo hello         # Non-interactive
     """
     workspace = workspace or get_workspace_path()
+    companions = get_companion_services(load_config(workspace))
 
     try:
-        validate_services([service])
+        validate_services([service], companions)
         cmd = command or []
 
         with build_compose_context(workspace) as ctx:

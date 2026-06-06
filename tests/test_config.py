@@ -5,12 +5,15 @@ from pathlib import Path
 import pytest
 
 from agent_circus.config import (
+    AVAILABLE_SERVICES,
     build_env_profile_script,
     find_project_root,
+    get_companion_services,
     get_project_config_path,
     get_user_config_path,
     load_config,
     load_user_config,
+    validate_services,
 )
 from agent_circus.exceptions import ConfigurationError
 
@@ -196,3 +199,61 @@ def test_build_env_profile_script_escapes_double_quotes() -> None:
 def test_build_env_profile_script_ends_with_newline() -> None:
     script = build_env_profile_script({"X": "y"})
     assert script.endswith("\n")
+
+
+# ---------------------------------------------------------------------------
+# get_companion_services
+# ---------------------------------------------------------------------------
+
+
+def test_get_companion_services_empty_config() -> None:
+    assert get_companion_services({}) == []
+
+
+def test_get_companion_services_mcp_only() -> None:
+    config = {"mcp_servers": [{"name": "fs"}, {"name": "db"}]}
+    assert get_companion_services(config) == ["mcp-fs", "mcp-db"]
+
+
+def test_get_companion_services_llama_cpp_only() -> None:
+    assert get_companion_services({"llama_cpp": {}}) == ["llama-cpp"]
+
+
+def test_get_companion_services_both() -> None:
+    config = {"mcp_servers": [{"name": "fs"}], "llama_cpp": {}}
+    assert get_companion_services(config) == ["mcp-fs", "llama-cpp"]
+
+
+def test_get_companion_services_llama_cpp_none_excluded() -> None:
+    assert get_companion_services({"llama_cpp": None}) == []
+
+
+# ---------------------------------------------------------------------------
+# validate_services
+# ---------------------------------------------------------------------------
+
+
+def test_validate_services_empty_returns_all_agents() -> None:
+    assert validate_services([]) == AVAILABLE_SERVICES
+
+
+def test_validate_services_valid_agent() -> None:
+    assert validate_services(["claude-code"]) == ["claude-code"]
+
+
+def test_validate_services_invalid_raises() -> None:
+    with pytest.raises(ConfigurationError, match="not-a-service"):
+        validate_services(["not-a-service"])
+
+
+def test_validate_services_companion_accepted() -> None:
+    assert validate_services(["llama-cpp"], ["llama-cpp"]) == ["llama-cpp"]
+
+
+def test_validate_services_mcp_companion_accepted() -> None:
+    assert validate_services(["mcp-myserver"], ["mcp-myserver"]) == ["mcp-myserver"]
+
+
+def test_validate_services_unknown_companion_still_raises() -> None:
+    with pytest.raises(ConfigurationError, match="ghost"):
+        validate_services(["ghost"], ["llama-cpp"])
