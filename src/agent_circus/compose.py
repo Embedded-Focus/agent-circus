@@ -23,6 +23,7 @@ from .state import (
     get_git_override_path,
     get_git_worktree_mirror_override_path,
     get_hosts_override_path,
+    get_llama_cpp_override_path,
     get_mcp_override_path,
     get_port_forwards_override_path,
     get_shadow_override_path,
@@ -78,6 +79,7 @@ class ComposeContext:
     git_worktree_mirror_override: str | None = None
     data_store_override: str | None = None
     port_forwards_override: str | None = None
+    llama_cpp_override: str | None = None
     data_store_seeder: Callable[[], None] | None = None
 
 
@@ -217,6 +219,14 @@ def _exec_compose(
         logger.debug("Port forwards override: %s", port_forwards_path)
     else:
         port_forwards_path.unlink(missing_ok=True)
+
+    llama_cpp_path = get_llama_cpp_override_path(ctx.workspace)
+    if ctx.llama_cpp_override:
+        llama_cpp_path.write_text(ctx.llama_cpp_override)
+        cmd.extend(["-f", str(llama_cpp_path)])
+        logger.debug("llama.cpp override: %s", llama_cpp_path)
+    else:
+        llama_cpp_path.unlink(missing_ok=True)
 
     cmd.extend(args)
     logger.debug("Running: %s", " ".join(cmd))

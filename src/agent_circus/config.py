@@ -45,6 +45,15 @@ COMPOSE_DATA_STORE_FILE_NAME = "compose.data-store.json"
 
 COMPOSE_PORT_FORWARDS_FILE_NAME = "compose.port-forwards.json"
 
+COMPOSE_LLAMA_CPP_FILE_NAME = "compose.llama-cpp.json"
+
+LLAMA_CPP_IMAGE = "ghcr.io/ggml-org/llama.cpp:server"
+LLAMA_CPP_DEFAULT_MODEL = "ggml-org/gemma-3-1b-it-GGUF/gemma-3-1b-it-Q4_K_M.gguf"
+LLAMA_CPP_DEFAULT_MODELS_CACHE = "${HOME}/.cache/huggingface"
+LLAMA_CPP_DEFAULT_CONTEXT_SIZE = 2048
+LLAMA_CPP_CONTAINER_MODELS_PATH = "/models"
+LLAMA_CPP_PORT = 8080
+
 DATA_STORE_DEFAULT_MOUNT_BASE = "/home/node/.local/share/agent-circus"
 
 DATA_STORE_SEED_MODES = {"once"}
@@ -111,6 +120,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "env_passthrough": [],
     "hooks": None,
     "logging": {"level": "INFO", "file": None},
+    "llama_cpp": None,
 }
 
 logger = logging.getLogger(__name__)
@@ -410,43 +420,80 @@ def build_agent_config_additions(
 ) -> dict[str, dict]:
     """Build per-agent config additions from Agent Circus configuration.
 
-    Translates the ``mcp_servers`` list from ``config.toml`` into
+    Translates ``mcp_servers`` and ``llama_cpp`` from ``config.toml`` into
     per-agent additions dicts with the correct key names and formats.
 
     :param config: Merged Agent Circus configuration.
     :returns: Per-agent additions, keyed by agent service name.
     """
     mcp_servers = config.get("mcp_servers", [])
-    if not mcp_servers:
+    llama_cpp_config = config.get("llama_cpp")
+
+    if not mcp_servers and llama_cpp_config is None:
         return {}
 
-    # Claude Code: {"mcpServers": {"name": {"type": ..., "url": ...}}}
-    claude_mcp: dict[str, dict] = {}
-    # Codex: {"mcp_servers": {"name": {"url": ...}}}
-    codex_mcp: dict[str, dict] = {}
-    # Vibe: {"mcp_servers": [{"name": ..., "transport": ..., "url": ...}]}
-    vibe_mcp: list[dict] = []
-    # OpenCode: {"mcp": {"name": {"type": "remote", "url": ..., "enabled": true}}}
-    opencode_mcp: dict[str, dict] = {}
+    additions: dict[str, dict] = {}
 
-    for server in mcp_servers:
-        name = server["name"]
-        transport = server.get("transport", "streamable-http")
-        url = _mcp_server_url(name, server)
+    if mcp_servers:
+        # Claude Code: {"mcpServers": {"name": {"type": ..., "url": ...}}}
+        claude_mcp: dict[str, dict] = {}
+        # Codex: {"mcp_servers": {"name": {"url": ...}}}
+        codex_mcp: dict[str, dict] = {}
+        # Vibe: {"mcp_servers": [{"name": ..., "transport": ..., "url": ...}]}
+        vibe_mcp: list[dict] = []
+        # OpenCode: {"mcp": {"name": {"type": "remote", "url": ..., "enabled": true}}}
+        opencode_mcp: dict[str, dict] = {}
 
-        # Claude Code requires "http" transport; other agents use the
-        # configured transport (defaulting to "streamable-http").
-        claude_transport = "http" if transport == "streamable-http" else transport
-        claude_mcp[name] = {"type": claude_transport, "url": url}
-        codex_mcp[name] = {"url": url}
-        vibe_mcp.append({"name": name, "transport": transport, "url": url})
-        opencode_mcp[name] = {"type": "remote", "url": url, "enabled": True}
+        for server in mcp_servers:
+            name = server["name"]
+            transport = server.get("transport", "streamable-http")
+            url = _mcp_server_url(name, server)
 
+            # Claude Code requires "http" transport; other agents use the
+            # configured transport (defaulting to "streamable-http").
+            claude_transport = "http" if transport == "streamable-http" else transport
+            claude_mcp[name] = {"type": claude_transport, "url": url}
+            codex_mcp[name] = {"url": url}
+            vibe_mcp.append({"name": name, "transport": transport, "url": url})
+            opencode_mcp[name] = {"type": "remote", "url": url, "enabled": True}
+
+        additions["claude-code"] = {"mcpServers": claude_mcp}
+        additions["codex"] = {"mcp_servers": codex_mcp}
+        additions["mistral-vibe"] = {"mcp_servers": vibe_mcp}
+        additions["opencode"] = {"mcp": opencode_mcp}
+
+    if llama_cpp_config is not None:
+        opencode_additions = additions.setdefault("opencode", {})
+        opencode_additions["provider"] = _build_llama_cpp_opencode_provider(
+            llama_cpp_config
+        )
+
+    return additions
+
+
+def _build_llama_cpp_opencode_provider(llama_cpp_config: dict) -> dict:
+    """Build the OpenCode ``provider`` block for the llama.cpp integration.
+
+    :param llama_cpp_config: ``[llama_cpp]`` table from merged config.
+    :returns: Dict suitable for merging into the OpenCode ``provider`` key.
+    """
+    model = llama_cpp_config.get("model", LLAMA_CPP_DEFAULT_MODEL)
+    context_size = llama_cpp_config.get("context_size", LLAMA_CPP_DEFAULT_CONTEXT_SIZE)
+    model_id = Path(model).stem
     return {
-        "claude-code": {"mcpServers": claude_mcp},
-        "codex": {"mcp_servers": codex_mcp},
-        "mistral-vibe": {"mcp_servers": vibe_mcp},
-        "opencode": {"mcp": opencode_mcp},
+        "llama.cpp": {
+            "npm": "@ai-sdk/openai-compatible",
+            "name": "llama-server (local)",
+            "options": {
+                "baseURL": f"http://llama-cpp:{LLAMA_CPP_PORT}/v1",
+            },
+            "models": {
+                model_id: {
+                    "name": model_id,
+                    "limit": {"context": context_size, "output": context_size},
+                },
+            },
+        },
     }
 
 
@@ -1065,4 +1112,69 @@ def build_startup_hook_override(startup_script_path: Path) -> str:
     """
     volume = f"{startup_script_path}:/workspace/.agent-circus/hooks/startup.sh:ro"
     services = {svc: {"volumes": [volume]} for svc in AVAILABLE_SERVICES}
+    return json.dumps({"services": services})
+
+
+def build_llama_cpp_override(llama_cpp_config: dict) -> str:
+    """Build a Docker Compose override that adds a llama.cpp server sidecar.
+
+    Defines a ``llama-cpp`` service running the official llama.cpp server
+    image and injects a ``depends_on`` into the ``opencode`` service so it
+    waits for the sidecar to start.
+
+    Non-absolute model values are treated as HuggingFace references and
+    split at the last ``/`` into ``--hf-repo`` and ``--hf-file`` flags,
+    which work with the standard CPU server image.  Absolute paths
+    (starting with ``/``) are passed through unchanged via ``-m``.
+
+    Server configuration (host, port, context size) is applied via
+    ``LLAMA_ARG_*`` environment variables rather than CLI flags to avoid
+    conflicts with defaults already set in the upstream Docker image.
+
+    :param llama_cpp_config: ``[llama_cpp]`` table from merged config.
+    :returns: Compose override as a JSON string.
+    :raises ConfigurationError: If ``models_cache`` starts with ``~``.
+    """
+    model = llama_cpp_config.get("model", LLAMA_CPP_DEFAULT_MODEL)
+    models_cache = llama_cpp_config.get("models_cache", LLAMA_CPP_DEFAULT_MODELS_CACHE)
+    context_size = llama_cpp_config.get("context_size", LLAMA_CPP_DEFAULT_CONTEXT_SIZE)
+    extra_args: list[str] = llama_cpp_config.get("extra_args", [])
+
+    if isinstance(models_cache, str) and models_cache.startswith("~"):
+        raise ConfigurationError(
+            "llama_cpp models_cache must use an absolute path or Compose "
+            "environment interpolation like ${HOME}/.cache/huggingface; "
+            "'~' is not supported"
+        )
+
+    if model.startswith("/"):
+        # Absolute local path: pass directly to -m.
+        model_args: list[str] = ["-m", model]
+    elif model.endswith(".gguf"):
+        # "owner/repo/file.gguf": split at last slash into repo + file.
+        hf_repo, _, hf_file = model.rpartition("/")
+        model_args = ["--hf-repo", hf_repo, "--hf-file", hf_file]
+    else:
+        # Bare HF repo "owner/repo": let llama-server pick the best file.
+        model_args = ["--hf-repo", model]
+    command = [*model_args, *extra_args]
+
+    services: dict[str, Any] = {
+        "llama-cpp": {
+            "image": LLAMA_CPP_IMAGE,
+            "command": command,
+            "volumes": [
+                f"{models_cache}:{LLAMA_CPP_CONTAINER_MODELS_PATH}:cached",
+            ],
+            "environment": {
+                "HF_HOME": LLAMA_CPP_CONTAINER_MODELS_PATH,
+                "LLAMA_ARG_HOST": "0.0.0.0",
+                "LLAMA_ARG_PORT": str(LLAMA_CPP_PORT),
+                "LLAMA_ARG_CTX_SIZE": str(context_size),
+            },
+        },
+        "opencode": {
+            "depends_on": ["llama-cpp"],
+        },
+    }
     return json.dumps({"services": services})

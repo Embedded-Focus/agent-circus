@@ -19,6 +19,7 @@ from .config import (
     COMPOSE_GIT_FILE_NAME,
     COMPOSE_GIT_WORKTREE_MIRROR_FILE_NAME,
     COMPOSE_HOSTS_FILE_NAME,
+    COMPOSE_LLAMA_CPP_FILE_NAME,
     COMPOSE_MCP_FILE_NAME,
     COMPOSE_PORT_FORWARDS_FILE_NAME,
     COMPOSE_SHADOW_FILE_NAME,
@@ -247,3 +248,14 @@ def get_startup_hook_override_path(workspace: Path) -> Path:
     :rtype: Path
     """
     return get_state_dir(workspace) / COMPOSE_STARTUP_HOOK_FILE_NAME
+
+
+def get_llama_cpp_override_path(workspace: Path) -> Path:
+    """Get the path for the llama.cpp compose override file.
+
+    :param workspace: Workspace path.
+    :type workspace: Path
+    :returns: Path to ``compose.llama-cpp.json`` in the state directory.
+    :rtype: Path
+    """
+    return get_state_dir(workspace) / COMPOSE_LLAMA_CPP_FILE_NAME

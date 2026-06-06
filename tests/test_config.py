@@ -50,6 +50,7 @@ def test_load_config_no_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         "env_passthrough": [],
         "hooks": None,
         "logging": {"level": "INFO", "file": None},
+        "llama_cpp": None,
     }
 
 

@@ -34,6 +34,7 @@ from .config import (
     build_git_override,
     build_git_worktree_mirror_override,
     build_hosts_override,
+    build_llama_cpp_override,
     build_port_forwards_override,
     build_shadow_override,
     build_ssh_override,
@@ -281,6 +282,7 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
     data_stores: list[dict] = config.get("data_stores", [])
     ssh_config = config.get("ssh")
     git_config = config.get("git")
+    llama_cpp_config = config.get("llama_cpp")
     agent_config_additions = build_agent_config_additions(config)
 
     # Build override strings (None when not needed).
@@ -290,6 +292,11 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
     )
     port_forwards_override = (
         build_port_forwards_override(port_forwards) if port_forwards else None
+    )
+    llama_cpp_override = (
+        build_llama_cpp_override(llama_cpp_config)
+        if llama_cpp_config is not None
+        else None
     )
     claimed_agent_config_mounts = get_claimed_agent_config_mounts(data_stores)
     agent_config_mounts_override = build_agent_config_mounts_override(
@@ -419,6 +426,7 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
             git_worktree_mirror_override=git_worktree_mirror_override,
             data_store_override=data_store_override,
             port_forwards_override=port_forwards_override,
+            llama_cpp_override=llama_cpp_override,
             data_store_seeder=data_store_seeder,
         )
     else:
@@ -457,5 +465,6 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
                     git_worktree_mirror_override=git_worktree_mirror_override,
                     data_store_override=data_store_override,
                     port_forwards_override=port_forwards_override,
+                    llama_cpp_override=llama_cpp_override,
                     data_store_seeder=data_store_seeder,
                 )

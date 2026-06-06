@@ -225,6 +225,56 @@ Optional fields: `port` (default `8080`), `transport` (default
 
 Check running sidecars with `agent-circus ps --mcp`.
 
+### Local LLM via llama.cpp (OpenCode)
+
+Add a `[llama_cpp]` table to `config.toml` to run a
+[llama.cpp](https://github.com/ggml-org/llama.cpp) server as a sidecar
+container and wire it into OpenCode as a local provider. When enabled,
+Agent Circus starts the sidecar automatically alongside the `opencode`
+container and injects the provider configuration into `opencode.json` so
+OpenCode uses the local model without any manual setup.
+
+``` toml
+[llama_cpp]
+# All fields are optional — defaults shown below
+model = "ggml-org/gemma-3-1b-it-GGUF/gemma-3-1b-it-Q4_K_M.gguf"
+models_cache = "${HOME}/.cache/huggingface"
+context_size = 2048
+extra_args = []
+```
+
+Fields:
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `model` | no | `ggml-org/gemma-3-1b-it-GGUF/gemma-3-1b-it-Q4_K_M.gguf` | Model passed to `llama-server -m`. Accepts a HuggingFace path (`owner/repo/file.gguf`) or a local path inside the container. |
+| `models_cache` | no | `${HOME}/.cache/huggingface` | Host directory bind-mounted into the sidecar so downloaded models survive restarts. Use an absolute path or Compose environment interpolation (`${HOME}/…`); `~` is not supported. |
+| `context_size` | no | `2048` | Context window size passed to `--ctx-size`. |
+| `extra_args` | no | `[]` | List of additional raw flags appended to the `llama-server` command. |
+
+When `[llama_cpp]` is present, Agent Circus:
+
+1. Starts a `llama-cpp` sidecar using `ghcr.io/ggml-org/llama.cpp:server`.
+2. Bind-mounts `models_cache` to `/models` inside the sidecar and sets
+   `HF_HOME=/models` so the HuggingFace model cache is preserved across
+   restarts — models are only downloaded on first use.
+3. Adds `depends_on: llama-cpp` to the `opencode` service so the sidecar
+   starts first.
+4. Merges a `provider` block into `opencode.json` pointing OpenCode at
+   `http://llama-cpp:8080/v1`.
+
+The model identifier used inside OpenCode is derived from the filename stem
+of `model` — for example, `gemma-3-1b-it-Q4_K_M.gguf` becomes
+`gemma-3-1b-it-Q4_K_M`.
+
+> **CPU-only.** The `ghcr.io/ggml-org/llama.cpp:server` image runs on CPU.
+> GPU-enabled images (e.g. `server-cuda`) require additional Docker configuration
+> and are not currently supported by Agent Circus.
+
+> **OpenCode only.** The llama.cpp sidecar is started unconditionally when
+> `[llama_cpp]` is present, but the provider injection only targets the
+> `opencode` service. Other agents are unaffected.
+
 ### Additional Directories
 
 Use the `[[additional_dirs]]` array to mount extra host directories into
