@@ -57,7 +57,8 @@ class ComposeContext:
     :param ssh_override: JSON string for SSH agent socket forwarding, or ``None``.
     :param git_override: JSON string for Git configuration forwarding, or ``None``.
     :param port_forwards_override: JSON string for published ports, or ``None``.
-    :param data_store_seeder: Optional callback run before ``docker compose up``.
+    :param data_store_seeder: Optional callback that prepares writable state
+        before ``docker compose up`` and ``docker compose exec``.
     """
 
     workspace: Path
@@ -393,4 +394,6 @@ def compose_exec(
     args.append(service)
     args.extend(command)
 
+    if ctx.data_store_seeder:
+        ctx.data_store_seeder()
     _exec_compose(args, ctx)

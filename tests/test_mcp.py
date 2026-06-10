@@ -6,8 +6,11 @@ import pytest
 
 from agent_circus.mcp import (
     DEFAULT_MCP_PORT,
+    HOST_GATEWAY_ENTRY,
     SERVICE_PREFIX,
     build_compose_override,
+    requires_host_gateway,
+    service_names,
 )
 
 AGENTS = ["claude-code", "codex", "mistral-vibe", "opencode"]
@@ -89,6 +92,42 @@ class TestBuildComposeOverride:
         result = json.loads(build_compose_override([], AGENTS))
         assert result == {"services": {}}
 
+    def test_external_servers_do_not_create_services(self) -> None:
+        servers = [
+            {
+                "name": "existing",
+                "url": "http://host.docker.internal:9000/mcp",
+            }
+        ]
+        result = json.loads(build_compose_override(servers, AGENTS))
+        assert result == {"services": {}}
+
+    def test_stdio_servers_do_not_create_services(self) -> None:
+        servers = [
+            {
+                "name": "github",
+                "transport": "stdio",
+                "command": "github-mcp-server",
+                "args": ["stdio"],
+            }
+        ]
+        result = json.loads(build_compose_override(servers, AGENTS))
+        assert result == {"services": {}}
+
+    def test_mixed_servers_only_create_managed_sidecars(
+        self, single_server: list[dict]
+    ) -> None:
+        servers = [
+            *single_server,
+            {"name": "existing", "url": "https://mcp.example.com/mcp"},
+        ]
+        result = json.loads(build_compose_override(servers, AGENTS))
+
+        assert "mcp-filesystem" in result["services"]
+        assert "mcp-existing" not in result["services"]
+        for agent in AGENTS:
+            assert set(result["services"][agent]["depends_on"]) == {"mcp-filesystem"}
+
     def test_defaults_applied(self, defaults_only_server: list[dict]) -> None:
         result = json.loads(build_compose_override(defaults_only_server, AGENTS))
         svc = result["services"]["mcp-minimal"]
@@ -157,3 +196,22 @@ class TestBuildComposeOverride:
         result = json.loads(build_compose_override([], AGENTS))
         for agent in AGENTS:
             assert agent not in result["services"]
+
+
+def test_service_names_excludes_external_servers() -> None:
+    servers = [
+        {"name": "managed", "image": "mcp/managed:latest"},
+        {"name": "existing", "url": "https://mcp.example.com/mcp"},
+    ]
+    assert service_names(servers) == ["mcp-managed"]
+
+
+def test_requires_host_gateway_for_host_docker_internal() -> None:
+    servers = [{"name": "existing", "url": "http://host.docker.internal:9000/mcp"}]
+    assert requires_host_gateway(servers) is True
+    assert HOST_GATEWAY_ENTRY == "host.docker.internal:host-gateway"
+
+
+def test_requires_host_gateway_ignores_remote_urls() -> None:
+    servers = [{"name": "remote", "url": "https://mcp.example.com/mcp"}]
+    assert requires_host_gateway(servers) is False

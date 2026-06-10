@@ -15,6 +15,7 @@ from agent_circus.agent_config import (
     _merge_named_arrays,
     build_agent_configs_override,
     build_handler,
+    merge_agent_config_store,
 )
 
 # ---------------------------------------------------------------------------
@@ -489,6 +490,40 @@ class TestBuildAgentConfigsOverride:
         assert (tmp_path / "mistral-vibe.toml").is_file()
         assert (tmp_path / "opencode.json").is_file()
 
+    def test_excludes_agent_owned_by_data_store(self, tmp_path: Path) -> None:
+        additions = {
+            "codex": {"mcp_servers": {"github": {"command": "github-mcp"}}},
+            "opencode": {"mcp": {"github": {"type": "local"}}},
+        }
+
+        result = json.loads(
+            build_agent_configs_override(additions, tmp_path, {"codex"})
+        )
+
+        assert "codex" not in result["services"]
+        assert "opencode" in result["services"]
+        assert not (tmp_path / "codex.toml").exists()
+
+
+def test_merge_agent_config_store_preserves_codex_settings(tmp_path: Path) -> None:
+    store_dir = tmp_path / "codex-config"
+    config_path = store_dir / "config.toml"
+    _write_toml(config_path, {"sandbox_mode": "workspace-write"})
+
+    result_path = merge_agent_config_store(
+        "codex",
+        {"mcp_servers": {"github": {"command": "github-mcp", "args": ["stdio"]}}},
+        store_dir,
+    )
+
+    with open(result_path, "rb") as f:
+        config = tomllib.load(f)
+    assert config["sandbox_mode"] == "workspace-write"
+    assert config["mcp_servers"]["github"] == {
+        "command": "github-mcp",
+        "args": ["stdio"],
+    }
+
 
 # ---------------------------------------------------------------------------
 # _build_agent_config_additions (compose.py integration)
@@ -555,3 +590,57 @@ class TestBuildAgentConfigAdditions:
         # Vibe keeps the original default transport.
         vibe_srv = result["mistral-vibe"]["mcp_servers"][0]
         assert vibe_srv["transport"] == "streamable-http"
+
+    def test_external_server_uses_configured_url(self) -> None:
+        from agent_circus.config import build_agent_config_additions
+
+        url = "http://host.docker.internal:9000/mcp"
+        config = {
+            "mcp_servers": [
+                {"name": "existing", "url": url, "transport": "streamable-http"}
+            ]
+        }
+        result = build_agent_config_additions(config)
+
+        assert result["claude-code"]["mcpServers"]["existing"]["url"] == url
+        assert result["codex"]["mcp_servers"]["existing"]["url"] == url
+        assert result["mistral-vibe"]["mcp_servers"][0]["url"] == url
+        assert result["opencode"]["mcp"]["existing"]["url"] == url
+
+    def test_stdio_server_uses_native_agent_formats(self) -> None:
+        from agent_circus.config import build_agent_config_additions
+
+        config = {
+            "mcp_servers": [
+                {
+                    "name": "github",
+                    "transport": "stdio",
+                    "command": "github-mcp-server",
+                    "args": ["stdio"],
+                    "env_vars": ["GITHUB_PERSONAL_ACCESS_TOKEN", "GITHUB_HOST"],
+                }
+            ]
+        }
+        result = build_agent_config_additions(config)
+
+        assert result["claude-code"]["mcpServers"]["github"] == {
+            "type": "stdio",
+            "command": "github-mcp-server",
+            "args": ["stdio"],
+        }
+        assert result["codex"]["mcp_servers"]["github"] == {
+            "command": "github-mcp-server",
+            "args": ["stdio"],
+            "env_vars": ["GITHUB_PERSONAL_ACCESS_TOKEN", "GITHUB_HOST"],
+        }
+        assert result["mistral-vibe"]["mcp_servers"][0] == {
+            "name": "github",
+            "transport": "stdio",
+            "command": "github-mcp-server",
+            "args": ["stdio"],
+        }
+        assert result["opencode"]["mcp"]["github"] == {
+            "type": "local",
+            "command": ["github-mcp-server", "stdio"],
+            "enabled": True,
+        }

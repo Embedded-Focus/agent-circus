@@ -282,6 +282,7 @@ HANDLERS: list[type[AgentConfigHandler]] = [
 def build_agent_configs_override(
     additions: dict[str, dict[str, Any]],
     output_dir: Path,
+    excluded_agents: set[str] | None = None,
 ) -> str:
     """Build merged agent configs and return a Compose override JSON string.
 
@@ -302,14 +303,19 @@ def build_agent_configs_override(
 
     :param output_dir: Directory to write merged config files to.
     :type output_dir: Path
+    :param excluded_agents: Agents whose config is managed through another
+        writable mount, such as a project data store.
     :returns: Compose override as a JSON string.
     :rtype: str
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     services: dict[str, Any] = {}
+    excluded_agents = excluded_agents or set()
 
     for handler_cls in HANDLERS:
         handler = handler_cls()
+        if handler.agent_name in excluded_agents:
+            continue
         agent_additions = additions.get(handler.agent_name, {})
         if not agent_additions:
             continue
@@ -322,3 +328,30 @@ def build_agent_configs_override(
         }
 
     return json.dumps({"services": services})
+
+
+def merge_agent_config_store(
+    agent_name: str,
+    additions: dict[str, Any],
+    store_dir: Path,
+) -> Path:
+    """Merge generated additions into an agent config data store.
+
+    :param agent_name: Agent service whose native config should be updated.
+    :param additions: Values to merge into the native agent configuration.
+    :param store_dir: Host directory mounted at the agent's config directory.
+    :returns: Path to the updated native configuration file.
+    :raises ValueError: If ``agent_name`` has no configuration handler.
+    """
+    for handler_cls in HANDLERS:
+        handler = handler_cls()
+        if handler.agent_name != agent_name:
+            continue
+
+        config_path = store_dir / Path(handler.container_config_path).name
+        handler.host_config_path = config_path
+        merged = handler.merge(handler.read(), additions)
+        handler.write(merged, config_path)
+        return config_path
+
+    raise ValueError(f"Unsupported agent config store: {agent_name}")

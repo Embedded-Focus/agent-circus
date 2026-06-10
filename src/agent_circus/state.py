@@ -97,6 +97,31 @@ def get_agent_configs_dir(workspace: Path) -> Path:
     return configs_dir
 
 
+def get_agent_config_stores_dir(workspace: Path) -> Path:
+    """Get the directory containing writable per-agent configuration stores.
+
+    :param workspace: Workspace path.
+    :returns: Path to the ``agent-config/`` state subdirectory.
+    """
+    stores_dir = get_state_dir(workspace) / "agent-config"
+    stores_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    stores_dir.chmod(0o700)
+    return stores_dir
+
+
+def get_agent_config_store_dir(workspace: Path, agent_name: str) -> Path:
+    """Get the writable configuration store for an agent.
+
+    :param workspace: Workspace path.
+    :param agent_name: Agent service name.
+    :returns: Path to the agent's configuration store.
+    """
+    store_dir = get_agent_config_stores_dir(workspace) / agent_name
+    store_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    store_dir.chmod(0o700)
+    return store_dir
+
+
 def get_mcp_override_path(workspace: Path) -> Path:
     """Get the path for the MCP compose override file.
 

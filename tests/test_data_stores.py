@@ -10,6 +10,7 @@ from agent_circus.config import (
     DATA_STORE_DEFAULT_MOUNT_BASE,
     build_agent_config_mounts_override,
     build_data_store_override,
+    get_agent_config_data_stores,
     get_claimed_agent_config_mounts,
 )
 from agent_circus.context import _DATA_STORE_SEED_MARKER, _seed_data_stores
@@ -125,26 +126,32 @@ def test_build_data_store_override_rejects_tilde_seed_from(tmp_path: Path) -> No
         build_data_store_override(stores, tmp_path)
 
 
-def test_build_agent_config_mounts_override_includes_defaults() -> None:
-    result = json.loads(build_agent_config_mounts_override())
+def test_build_agent_config_mounts_override_includes_writable_stores(
+    tmp_path: Path,
+) -> None:
+    store_dirs = {service: tmp_path / service for service in AVAILABLE_SERVICES}
+    result = json.loads(build_agent_config_mounts_override(store_dirs))
 
     assert (
-        "${HOME}/.claude:/home/node/.claude:cached"
+        f"{tmp_path / 'claude-code'}:/home/node/.claude:cached"
         in result["services"]["claude-code"]["volumes"]
     )
     assert (
-        "${HOME}/.codex:/home/node/.codex:cached"
+        f"{tmp_path / 'codex'}:/home/node/.codex:cached"
         in result["services"]["codex"]["volumes"]
     )
 
 
-def test_build_agent_config_mounts_override_omits_claimed_mount() -> None:
+def test_build_agent_config_mounts_override_omits_claimed_mount(
+    tmp_path: Path,
+) -> None:
     claimed = {("codex", "/home/node/.codex")}
-    result = json.loads(build_agent_config_mounts_override(claimed))
+    store_dirs = {service: tmp_path / service for service in AVAILABLE_SERVICES}
+    result = json.loads(build_agent_config_mounts_override(store_dirs, claimed))
 
     assert result["services"]["codex"]["volumes"] == []
     assert (
-        "${HOME}/.claude:/home/node/.claude:cached"
+        f"{tmp_path / 'claude-code'}:/home/node/.claude:cached"
         in result["services"]["claude-code"]["volumes"]
     )
 
@@ -164,6 +171,19 @@ def test_get_claimed_agent_config_mounts() -> None:
     ]
 
     assert get_claimed_agent_config_mounts(stores) == {("codex", "/home/node/.codex")}
+
+
+def test_get_agent_config_data_stores() -> None:
+    stores = [
+        {
+            "name": "codex-config",
+            "mount_path": "/home/node/.codex",
+            "services": ["codex"],
+        },
+        {"name": "memory"},
+    ]
+
+    assert get_agent_config_data_stores(stores) == {"codex": "codex-config"}
 
 
 # ---------------------------------------------------------------------------

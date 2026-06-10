@@ -10,6 +10,7 @@ from agent_circus.compose import (
     ComposeContext,
     _exec_compose,
     compose_down,
+    compose_exec,
     compose_is_service_running,
     compose_up,
 )
@@ -120,6 +121,30 @@ def test_compose_up_runs_data_store_seeder_before_compose(
     ctx = dataclasses.replace(_make_ctx(tmp_path), data_store_seeder=seed)
 
     compose_up(ctx, ["codex"])
+
+    assert calls == ["seed", "compose"]
+
+
+@patch("agent_circus.compose._exec_compose")
+def test_compose_exec_runs_data_store_seeder_before_compose(
+    mock_exec: MagicMock,
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+
+    def seed() -> None:
+        calls.append("seed")
+
+    def run_compose(
+        *args: object, **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append("compose")
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout="")
+
+    mock_exec.side_effect = run_compose
+    ctx = dataclasses.replace(_make_ctx(tmp_path), data_store_seeder=seed)
+
+    compose_exec(ctx, "codex", ["codex-acp"])
 
     assert calls == ["seed", "compose"]
 

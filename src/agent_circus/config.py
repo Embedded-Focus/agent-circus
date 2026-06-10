@@ -8,6 +8,7 @@ import re
 import tomllib
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import tomli_w
 
@@ -293,18 +294,73 @@ def _load_toml(path: Path) -> dict[str, Any]:
 
 
 def validate_config(config: dict[str, Any]) -> None:
-    """Warn about unknown top-level keys in a loaded configuration dict.
+    """Validate known configuration structures and warn about unknown keys.
 
     Logs a WARNING for every key not present in :data:`DEFAULT_CONFIG`.
     Unknown keys are ignored rather than rejected so that older installs
     remain compatible with config files written for newer versions.
 
     :param config: Merged configuration dictionary.
+    :raises ConfigurationError: If a known configuration structure is invalid.
     """
     known = set(DEFAULT_CONFIG)
     for key in config:
         if key not in known:
             logger.warning("Unknown config key %r — ignoring", key)
+    _validate_mcp_servers(config.get("mcp_servers", []))
+
+
+def _validate_mcp_servers(mcp_servers: Any) -> None:
+    """Validate managed, external, and stdio MCP server definitions.
+
+    :param mcp_servers: Raw ``mcp_servers`` value from merged config.
+    :raises ConfigurationError: If an entry is malformed or does not define
+        exactly one of ``image`` and ``url``.
+    """
+    if not isinstance(mcp_servers, list):
+        raise ConfigurationError("mcp_servers must be a list of tables")
+
+    for server in mcp_servers:
+        if not isinstance(server, dict):
+            raise ConfigurationError("MCP server entries must be tables")
+        name = server.get("name")
+        if not isinstance(name, str) or not name:
+            raise ConfigurationError("MCP server name must be a non-empty string")
+
+        has_image = isinstance(server.get("image"), str) and bool(server["image"])
+        has_url = isinstance(server.get("url"), str) and bool(server["url"])
+        transport = server.get("transport", "streamable-http")
+
+        if transport == "stdio":
+            if has_image or has_url:
+                raise ConfigurationError(
+                    f"Stdio MCP server {name!r} must not define 'image' or 'url'"
+                )
+            if not isinstance(server.get("command"), str) or not server["command"]:
+                raise ConfigurationError(
+                    f"Stdio MCP server {name!r} command must be a non-empty string"
+                )
+            for field in ("args", "env_vars"):
+                value = server.get(field, [])
+                if not isinstance(value, list) or not all(
+                    isinstance(item, str) for item in value
+                ):
+                    raise ConfigurationError(
+                        f"Stdio MCP server {name!r} {field} must be a list of strings"
+                    )
+            continue
+
+        if has_image == has_url:
+            raise ConfigurationError(
+                f"MCP server {name!r} must define exactly one of 'image' or 'url'"
+            )
+
+        if has_url:
+            parsed = urlparse(server["url"])
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise ConfigurationError(
+                    f"External MCP server {name!r} URL must use http or https"
+                )
 
 
 def write_hook_script(content: str, dest: Path) -> None:
@@ -404,12 +460,14 @@ def write_project_config(workspace: Path, config: dict[str, Any]) -> None:
 
 
 def _mcp_server_url(name: str, server: dict) -> str:
-    """Build the Docker-network URL for an MCP sidecar server.
+    """Return the configured external URL or build a sidecar URL.
 
     :param name: MCP server name.
     :param server: Server definition from config.
     :returns: URL reachable from agent containers.
     """
+    if "url" in server:
+        return server["url"]
     port = server.get("port", 8080)
     path = server.get("path", "/mcp")
     return f"http://mcp-{name}:{port}{path}"
@@ -447,6 +505,40 @@ def build_agent_config_additions(
         for server in mcp_servers:
             name = server["name"]
             transport = server.get("transport", "streamable-http")
+            if transport == "stdio":
+                command = server["command"]
+                args = server.get("args", [])
+                env_vars = server.get("env_vars", [])
+
+                claude_server: dict[str, Any] = {
+                    "type": "stdio",
+                    "command": command,
+                    "args": args,
+                }
+                claude_mcp[name] = claude_server
+
+                codex_server: dict[str, Any] = {"command": command}
+                if args:
+                    codex_server["args"] = args
+                if env_vars:
+                    codex_server["env_vars"] = env_vars
+                codex_mcp[name] = codex_server
+
+                vibe_mcp.append(
+                    {
+                        "name": name,
+                        "transport": "stdio",
+                        "command": command,
+                        "args": args,
+                    }
+                )
+                opencode_mcp[name] = {
+                    "type": "local",
+                    "command": [command, *args],
+                    "enabled": True,
+                }
+                continue
+
             url = _mcp_server_url(name, server)
 
             # Claude Code requires "http" transport; other agents use the
@@ -509,7 +601,8 @@ def get_companion_services(config: dict) -> list[str]:
     """
     services: list[str] = []
     for server in config.get("mcp_servers", []):
-        services.append(f"mcp-{server['name']}")
+        if "image" in server:
+            services.append(f"mcp-{server['name']}")
     if config.get("llama_cpp") is not None:
         services.append("llama-cpp")
     return services
@@ -705,16 +798,34 @@ def get_claimed_agent_config_mounts(data_stores: list[dict]) -> set[tuple[str, s
     return claimed
 
 
+def get_agent_config_data_stores(data_stores: list[dict]) -> dict[str, str]:
+    """Return agents whose config directories are owned by data stores.
+
+    :param data_stores: Data store entries from ``config.toml``.
+    :returns: Mapping of agent service name to data store name.
+    """
+    owners: dict[str, str] = {}
+    for entry in data_stores:
+        mount_path = _data_store_mount_path(entry)
+        for service in _data_store_services(entry):
+            default_mount = DEFAULT_AGENT_CONFIG_MOUNTS.get(service)
+            if default_mount and mount_path == default_mount["container"]:
+                owners[service] = entry["name"]
+    return owners
+
+
 def build_agent_config_mounts_override(
+    store_dirs: dict[str, Path],
     claimed_mounts: set[tuple[str, str]] | None = None,
 ) -> str:
-    """Build default host agent configuration directory mounts.
+    """Build writable project-local agent configuration directory mounts.
 
     These mounts preserve the historical template behavior, except any
     ``(service, container_path)`` claimed by a data store is omitted so the
     container never receives duplicate mounts for the same agent config dir.
 
-    :param claimed_mounts: Service/path pairs claimed by data stores.
+    :param store_dirs: Per-service host directories containing writable config.
+    :param claimed_mounts: Service/path pairs claimed by explicit data stores.
     :returns: Compose override as a JSON string.
     """
     claimed_mounts = claimed_mounts or set()
@@ -726,9 +837,7 @@ def build_agent_config_mounts_override(
             default_mount
             and (service, default_mount["container"]) not in claimed_mounts
         ):
-            volumes.append(
-                f"{default_mount['host']}:{default_mount['container']}:cached"
-            )
+            volumes.append(f"{store_dirs[service]}:{default_mount['container']}:cached")
         services[service] = {"volumes": volumes}
     return json.dumps({"services": services})
 
@@ -1088,16 +1197,16 @@ def filter_env(environ: dict[str, str], patterns: list[str]) -> list[str]:
 def build_env_passthrough_override(var_names: list[str]) -> str:
     """Build a Docker Compose override that passes host env vars into containers.
 
-    Each variable is listed by name only (no value) so Docker Compose
-    inherits it from the host environment at container start time — values
-    never appear in the override file on disk.
+    Each variable uses Compose interpolation so its value is resolved from the
+    invoking environment at container creation time. Only placeholders are
+    written to disk; values never appear in the override file.
 
     :param var_names: Environment variable names to forward.
     :type var_names: list[str]
     :returns: Compose override as a JSON string.
     :rtype: str
     """
-    env_map = {name: None for name in var_names}
+    env_map = {name: f"${{{name}}}" for name in var_names}
     services = {svc: {"environment": env_map} for svc in AVAILABLE_SERVICES}
     return json.dumps({"services": services})
 

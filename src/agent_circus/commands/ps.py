@@ -10,7 +10,7 @@ from agent_circus.compose import compose_ps
 from agent_circus.config import AVAILABLE_SERVICES, get_workspace_path, load_config
 from agent_circus.context import build_compose_context
 from agent_circus.exceptions import AgentCircusError
-from agent_circus.mcp import SERVICE_PREFIX
+from agent_circus.mcp import service_names
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 def _mcp_service_names(workspace: Path) -> list[str]:
     """Derive MCP sidecar service names from the workspace config."""
     config = load_config(workspace)
-    return [f"{SERVICE_PREFIX}{s['name']}" for s in config.get("mcp_servers", [])]
+    return service_names(config.get("mcp_servers", []))
 
 
 def ps(
@@ -93,7 +93,7 @@ def ps(
     elif mcp_only:
         filter_services = _mcp_service_names(workspace)
         if not filter_services:
-            typer.echo("No MCP servers configured.")
+            typer.echo("No managed MCP sidecars configured.")
             return
 
     try:

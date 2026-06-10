@@ -5,7 +5,16 @@ from typing import Annotated
 
 import typer
 
-from agent_circus.commands import build, destroy, exec_, init, ps, remove, up
+from agent_circus.commands import (
+    build,
+    config_store,
+    destroy,
+    exec_,
+    init,
+    ps,
+    remove,
+    up,
+)
 from agent_circus.config import load_user_config
 from agent_circus.utils import setup_logging
 
@@ -52,6 +61,7 @@ app.command(name="exec")(exec_.exec_cmd)
 app.command()(remove.remove)
 app.command(name="rm", hidden=True)(remove.remove)
 app.command()(destroy.destroy)
+app.add_typer(config_store.app, name="config")
 
 
 def run_cli() -> None:

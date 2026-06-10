@@ -68,8 +68,8 @@ def test_build_env_passthrough_override_structure() -> None:
     for svc in AVAILABLE_SERVICES:
         env = result["services"][svc]["environment"]
         assert isinstance(env, dict)
-        assert env.get("FOO") is None
-        assert env.get("BAR") is None
+        assert env.get("FOO") == "${FOO}"
+        assert env.get("BAR") == "${BAR}"
 
 
 def test_build_env_passthrough_override_all_services() -> None:

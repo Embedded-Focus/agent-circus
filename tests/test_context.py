@@ -1,5 +1,7 @@
 """Tests for compose context assembly."""
 
+import json
+import tomllib
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -11,10 +13,10 @@ from agent_circus.context import (
     _inject_env_into_dockerfile,
     build_compose_context,
 )
+from agent_circus.state import get_agent_config_store_dir, get_data_store_dir
 
 
 @patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
-@patch("agent_circus.context.build_agent_configs_override", return_value="{}")
 @patch(
     "agent_circus.context.load_config",
     return_value={"shadow": [".env"], "mcp_servers": []},
@@ -23,7 +25,6 @@ from agent_circus.context import (
 def test_context_includes_shadow_override(
     mock_resolve: MagicMock,
     mock_load: MagicMock,
-    mock_agent_configs: MagicMock,
     mock_mcp: MagicMock,
     tmp_path: Path,
 ) -> None:
@@ -33,7 +34,6 @@ def test_context_includes_shadow_override(
 
 
 @patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
-@patch("agent_circus.context.build_agent_configs_override", return_value="{}")
 @patch(
     "agent_circus.context.load_config",
     return_value={"shadow": [], "mcp_servers": []},
@@ -42,7 +42,6 @@ def test_context_includes_shadow_override(
 def test_context_no_shadow_when_empty(
     mock_resolve: MagicMock,
     mock_load: MagicMock,
-    mock_agent_configs: MagicMock,
     mock_mcp: MagicMock,
     tmp_path: Path,
 ) -> None:
@@ -51,7 +50,36 @@ def test_context_no_shadow_when_empty(
 
 
 @patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
-@patch("agent_circus.context.build_agent_configs_override", return_value="{}")
+@patch(
+    "agent_circus.context.load_config",
+    return_value={
+        "shadow": [],
+        "mcp_servers": [
+            {
+                "name": "existing",
+                "url": "http://host.docker.internal:9000/mcp",
+            }
+        ],
+    },
+)
+@patch("agent_circus.context.resolve_config", return_value=None)
+def test_context_external_host_mcp_adds_host_gateway_without_sidecar(
+    mock_resolve: MagicMock,
+    mock_load: MagicMock,
+    mock_mcp: MagicMock,
+    tmp_path: Path,
+) -> None:
+    with build_compose_context(tmp_path) as ctx:
+        hosts = json.loads(ctx.hosts_override or "{}")
+        assert hosts["services"]["codex"]["extra_hosts"] == [
+            "host.docker.internal:host-gateway"
+        ]
+        assert ctx.mcp_override is None
+        assert ctx.companion_services == ()
+    mock_mcp.assert_not_called()
+
+
+@patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
 @patch(
     "agent_circus.context.load_config",
     return_value={
@@ -64,7 +92,6 @@ def test_context_no_shadow_when_empty(
 def test_context_includes_port_forwards_override(
     mock_resolve: MagicMock,
     mock_load: MagicMock,
-    mock_agent_configs: MagicMock,
     mock_mcp: MagicMock,
     tmp_path: Path,
 ) -> None:
@@ -74,7 +101,6 @@ def test_context_includes_port_forwards_override(
 
 
 @patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
-@patch("agent_circus.context.build_agent_configs_override", return_value="{}")
 @patch(
     "agent_circus.context.load_config",
     return_value={"shadow": [], "mcp_servers": []},
@@ -83,7 +109,6 @@ def test_context_includes_port_forwards_override(
 def test_context_deploy_mode(
     mock_resolve: MagicMock,
     mock_load: MagicMock,
-    mock_agent_configs: MagicMock,
     mock_mcp: MagicMock,
     tmp_path: Path,
 ) -> None:
@@ -119,7 +144,6 @@ def _make_template_dir(base: Path) -> Path:
 
 
 @patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
-@patch("agent_circus.context.build_agent_configs_override", return_value="{}")
 @patch(
     "agent_circus.context.load_config",
     return_value={"shadow": [], "mcp_servers": []},
@@ -130,7 +154,6 @@ def test_context_instant_mode_copies_root_hook(
     mock_tdc: MagicMock,
     mock_resolve: MagicMock,
     mock_load: MagicMock,
-    mock_agent_configs: MagicMock,
     mock_mcp: MagicMock,
     tmp_path: Path,
 ) -> None:
@@ -151,7 +174,6 @@ def test_context_instant_mode_copies_root_hook(
 
 
 @patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
-@patch("agent_circus.context.build_agent_configs_override", return_value="{}")
 @patch(
     "agent_circus.context.load_config",
     return_value={"shadow": [], "mcp_servers": []},
@@ -162,7 +184,6 @@ def test_context_instant_mode_copies_user_hook(
     mock_tdc: MagicMock,
     mock_resolve: MagicMock,
     mock_load: MagicMock,
-    mock_agent_configs: MagicMock,
     mock_mcp: MagicMock,
     tmp_path: Path,
 ) -> None:
@@ -182,7 +203,6 @@ def test_context_instant_mode_copies_user_hook(
 
 
 @patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
-@patch("agent_circus.context.build_agent_configs_override", return_value="{}")
 @patch(
     "agent_circus.context.load_config",
     return_value={"shadow": [], "mcp_servers": []},
@@ -193,7 +213,6 @@ def test_context_instant_mode_missing_hooks_dir_is_noop(
     mock_tdc: MagicMock,
     mock_resolve: MagicMock,
     mock_load: MagicMock,
-    mock_agent_configs: MagicMock,
     mock_mcp: MagicMock,
     tmp_path: Path,
 ) -> None:
@@ -333,7 +352,6 @@ def test_inject_env_dockerfile_contains_profile_d_copy(tmp_path: Path) -> None:
 
 
 @patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
-@patch("agent_circus.context.build_agent_configs_override", return_value="{}")
 @patch(
     "agent_circus.context.load_config",
     return_value={
@@ -348,7 +366,6 @@ def test_context_instant_mode_injects_env(
     mock_tdc: MagicMock,
     mock_resolve: MagicMock,
     mock_load: MagicMock,
-    mock_agent_configs: MagicMock,
     mock_mcp: MagicMock,
     tmp_path: Path,
 ) -> None:
@@ -362,3 +379,97 @@ def test_context_instant_mode_injects_env(
         content = (ctx.cwd / "Dockerfile").read_text()
         assert 'ENV PATH="/usr/local/go/bin:$PATH"' in content
         assert content.index("ENV PATH") < content.index("ENTRYPOINT")
+
+
+def test_context_merges_mcp_into_codex_config_data_store(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    host_codex = tmp_path / "host-codex"
+    host_codex.mkdir()
+    (host_codex / "config.toml").write_text('sandbox_mode = "workspace-write"\n')
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    config = {
+        "mcp_servers": [
+            {
+                "name": "github",
+                "transport": "stdio",
+                "command": "github-mcp-server",
+                "args": ["stdio"],
+            }
+        ],
+        "data_stores": [
+            {
+                "name": "codex-config",
+                "mount_path": "/home/node/.codex",
+                "seed_from": str(host_codex),
+                "services": ["codex"],
+            }
+        ],
+    }
+
+    with (
+        patch("agent_circus.context.load_config", return_value=config),
+        patch("agent_circus.context.resolve_config", return_value=config_dir),
+        build_compose_context(workspace) as ctx,
+    ):
+        assert ctx.agent_configs_override is None
+        assert ctx.data_store_seeder is not None
+        ctx.data_store_seeder()
+
+    config_path = get_data_store_dir(workspace, "codex-config") / "config.toml"
+    with open(config_path, "rb") as f:
+        codex_config = tomllib.load(f)
+    assert codex_config["sandbox_mode"] == "workspace-write"
+    assert codex_config["mcp_servers"]["github"] == {
+        "command": "github-mcp-server",
+        "args": ["stdio"],
+    }
+
+
+def test_context_uses_automatic_writable_codex_store_for_mcp(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    host_home = tmp_path / "home"
+    host_codex = host_home / ".codex"
+    host_codex.mkdir(parents=True)
+    (host_codex / "config.toml").write_text('sandbox_mode = "workspace-write"\n')
+    monkeypatch.setenv("HOME", str(host_home))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    config = {
+        "mcp_servers": [
+            {
+                "name": "github",
+                "transport": "stdio",
+                "command": "github-mcp-server",
+            }
+        ]
+    }
+
+    with (
+        patch("agent_circus.context.load_config", return_value=config),
+        patch("agent_circus.context.resolve_config", return_value=config_dir),
+        build_compose_context(workspace) as ctx,
+    ):
+        override = json.loads(ctx.agent_config_mounts_override or "{}")
+        volumes = override["services"]["codex"]["volumes"]
+        assert volumes == [
+            f"{get_agent_config_store_dir(workspace, 'codex')}:/home/node/.codex:cached"
+        ]
+        assert all("/home/node/.codex/config.toml" not in volume for volume in volumes)
+        assert ctx.agent_configs_override is None
+        assert ctx.data_store_seeder is not None
+        ctx.data_store_seeder()
+
+    config_path = get_agent_config_store_dir(workspace, "codex") / "config.toml"
+    with open(config_path, "rb") as f:
+        codex_config = tomllib.load(f)
+    assert codex_config["sandbox_mode"] == "workspace-write"
+    assert codex_config["mcp_servers"]["github"] == {"command": "github-mcp-server"}

@@ -10,6 +10,7 @@ native config format) is handled by :mod:`agent_circus.agent_config`.
 import json
 import logging
 from typing import Any
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,9 @@ DEFAULT_MCP_TRANSPORT = "streamable-http"
 
 # Prefix for MCP sidecar service names in Docker Compose.
 SERVICE_PREFIX = "mcp-"
+
+HOST_DOCKER_INTERNAL = "host.docker.internal"
+HOST_GATEWAY_ENTRY = f"{HOST_DOCKER_INTERNAL}:host-gateway"
 
 _INSTALL_CA_CERTS_COMMAND = (
     "for cert in /run/ca-host/*.crt; do "
@@ -44,13 +48,38 @@ def _service_name(name: str) -> str:
     return f"{SERVICE_PREFIX}{name}"
 
 
+def managed_servers(mcp_servers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return MCP servers managed as Compose sidecars.
+
+    :param mcp_servers: MCP server definitions from config.
+    :returns: Entries that define a container image.
+    """
+    return [
+        server
+        for server in mcp_servers
+        if "image" in server and server.get("transport") != "stdio"
+    ]
+
+
 def service_names(mcp_servers: list[dict[str, Any]]) -> list[str]:
     """Return Compose service names for configured MCP servers.
 
     :param mcp_servers: MCP server definitions from config.
     :returns: Prefixed Compose service names in config order.
     """
-    return [_service_name(server["name"]) for server in mcp_servers]
+    return [_service_name(server["name"]) for server in managed_servers(mcp_servers)]
+
+
+def requires_host_gateway(mcp_servers: list[dict[str, Any]]) -> bool:
+    """Return whether an external MCP URL targets the Docker host alias.
+
+    :param mcp_servers: MCP server definitions from config.
+    :returns: ``True`` when an external URL uses ``host.docker.internal``.
+    """
+    return any(
+        urlparse(server.get("url", "")).hostname == HOST_DOCKER_INTERNAL
+        for server in mcp_servers
+    )
 
 
 def _server_url(name: str, port: int, path: str) -> str:
@@ -93,7 +122,7 @@ def build_compose_override(
     services: dict[str, Any] = {}
     sidecar_names: list[str] = []
 
-    for server in mcp_servers:
+    for server in managed_servers(mcp_servers):
         name = server["name"]
         svc_name = _service_name(name)
         sidecar_names.append(svc_name)

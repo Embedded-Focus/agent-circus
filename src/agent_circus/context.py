@@ -14,13 +14,14 @@ import tempfile
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
-from .agent_config import build_agent_configs_override
+from .agent_config import merge_agent_config_store
 from .compose import ComposeContext
 from .config import (
     AVAILABLE_SERVICES,
     CA_CERTS_DEFAULT_DIR,
     COMPOSE_FILE_NAME,
     CONFIG_DIR_NAME,
+    DEFAULT_AGENT_CONFIG_MOUNTS,
     DOCKERFILE_NAME,
     HOOKS_DIR_NAME,
     build_additional_dirs_override,
@@ -41,6 +42,7 @@ from .config import (
     build_startup_hook_override,
     filter_env,
     filter_hosts,
+    get_agent_config_data_stores,
     get_claimed_agent_config_mounts,
     get_companion_services,
     load_config,
@@ -51,12 +53,16 @@ from .config import (
     write_hook_script,
 )
 from .exceptions import ConfigurationError
+from .mcp import HOST_GATEWAY_ENTRY, requires_host_gateway
 from .mcp import build_compose_override as build_mcp_compose_override
+from .mcp import managed_servers as get_managed_mcp_servers
 from .mcp import service_names as get_mcp_service_names
 from .state import (
-    get_agent_configs_dir,
+    get_agent_config_store_dir,
+    get_agent_config_stores_dir,
     get_data_store_dir,
     get_startup_hook_path,
+    get_state_dir,
 )
 from .templates import template_dir_context
 
@@ -278,6 +284,7 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
     config = load_config(workspace)
     shadow = config.get("shadow", [])
     mcp_servers = config.get("mcp_servers", [])
+    managed_mcp_servers = get_managed_mcp_servers(mcp_servers)
     mcp_service_names = get_mcp_service_names(mcp_servers)
     env_vars: dict[str, str] = config.get("env", {})
     additional_dirs: list[dict] = config.get("additional_dirs", [])
@@ -303,8 +310,14 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
         else None
     )
     claimed_agent_config_mounts = get_claimed_agent_config_mounts(data_stores)
+    agent_config_data_stores = get_agent_config_data_stores(data_stores)
+    agent_config_store_dirs = {
+        service: get_agent_config_store_dir(workspace, service)
+        for service in AVAILABLE_SERVICES
+    }
     agent_config_mounts_override = build_agent_config_mounts_override(
-        claimed_agent_config_mounts
+        agent_config_store_dirs,
+        claimed_agent_config_mounts,
     )
 
     ssh_override: str | None = None
@@ -345,15 +358,18 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
                 )
 
     hosts_override: str | None = None
+    extra_hosts = [HOST_GATEWAY_ENTRY] if requires_host_gateway(mcp_servers) else []
     hosts_config = config.get("hosts")
     if hosts_config is not None:
         hosts_file = hosts_config.get("file", "/etc/hosts")
         patterns: list[str] = hosts_config.get("patterns", [])
         if patterns:
             entries = parse_hosts_file(hosts_file)
-            extra_hosts = filter_hosts(entries, patterns)
-            if extra_hosts:
-                hosts_override = build_hosts_override(extra_hosts, mcp_service_names)
+            extra_hosts.extend(filter_hosts(entries, patterns))
+    if extra_hosts:
+        hosts_override = build_hosts_override(
+            list(dict.fromkeys(extra_hosts)), mcp_service_names
+        )
 
     git_override: str | None = None
     if git_config is not None:
@@ -365,16 +381,16 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
             git_signing_key = str(Path(git_signing_key).expanduser())
         git_override = build_git_override(git_config_path, git_signing_key)
 
+    # Config additions are merged into writable directory stores before startup.
+    # Individual config-file mounts are intentionally avoided because agents may
+    # persist settings by atomically replacing their config file.
     agent_configs_override: str | None = None
-    if agent_config_additions and any(agent_config_additions.values()):
-        configs_dir = get_agent_configs_dir(workspace)
-        agent_configs_override = build_agent_configs_override(
-            agent_config_additions, configs_dir
-        )
 
     mcp_override: str | None = None
-    if mcp_servers:
-        mcp_override = build_mcp_compose_override(mcp_servers, AVAILABLE_SERVICES)
+    if managed_mcp_servers:
+        mcp_override = build_mcp_compose_override(
+            managed_mcp_servers, AVAILABLE_SERVICES
+        )
 
     project_name = sanitize_project_name(workspace.name)
 
@@ -391,16 +407,43 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
         git_worktree_mirror_override = build_git_worktree_mirror_override(workspace)
 
     data_store_override: str | None = None
-    data_store_seeder: Callable[[], None] | None = None
     if data_stores:
         store_dirs = [get_data_store_dir(workspace, e["name"]) for e in data_stores]
         data_base_dir = store_dirs[0].parent
         data_store_override = build_data_store_override(data_stores, data_base_dir)
 
-        def seed_data_stores() -> None:
+    else:
+        data_base_dir = get_state_dir(workspace) / "data"
+
+    automatic_agent_stores = [
+        {
+            "name": service,
+            "seed_from": DEFAULT_AGENT_CONFIG_MOUNTS[service]["host"],
+        }
+        for service in AVAILABLE_SERVICES
+        if service not in agent_config_data_stores
+    ]
+
+    def seed_runtime_stores() -> None:
+        _seed_data_stores(
+            automatic_agent_stores, get_agent_config_stores_dir(workspace)
+        )
+        if data_stores:
             _seed_data_stores(data_stores, data_base_dir)
 
-        data_store_seeder = seed_data_stores
+        for agent_name in AVAILABLE_SERVICES:
+            additions = agent_config_additions.get(agent_name)
+            if not additions:
+                continue
+            explicit_store = agent_config_data_stores.get(agent_name)
+            store_dir = (
+                data_base_dir / explicit_store
+                if explicit_store
+                else agent_config_store_dirs[agent_name]
+            )
+            merge_agent_config_store(agent_name, additions, store_dir)
+
+    data_store_seeder: Callable[[], None] | None = seed_runtime_stores
 
     config_dir = resolve_config(workspace)
 

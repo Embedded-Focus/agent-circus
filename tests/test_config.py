@@ -211,8 +211,36 @@ def test_get_companion_services_empty_config() -> None:
 
 
 def test_get_companion_services_mcp_only() -> None:
-    config = {"mcp_servers": [{"name": "fs"}, {"name": "db"}]}
+    config = {
+        "mcp_servers": [
+            {"name": "fs", "image": "mcp/fs:latest"},
+            {"name": "db", "image": "mcp/db:latest"},
+        ]
+    }
     assert get_companion_services(config) == ["mcp-fs", "mcp-db"]
+
+
+def test_get_companion_services_external_mcp_excluded() -> None:
+    config = {
+        "mcp_servers": [
+            {"name": "managed", "image": "mcp/managed:latest"},
+            {"name": "existing", "url": "https://mcp.example.com/mcp"},
+        ]
+    }
+    assert get_companion_services(config) == ["mcp-managed"]
+
+
+def test_get_companion_services_stdio_mcp_excluded() -> None:
+    config = {
+        "mcp_servers": [
+            {
+                "name": "local",
+                "transport": "stdio",
+                "command": "local-mcp",
+            }
+        ]
+    }
+    assert get_companion_services(config) == []
 
 
 def test_get_companion_services_llama_cpp_only() -> None:
@@ -220,7 +248,10 @@ def test_get_companion_services_llama_cpp_only() -> None:
 
 
 def test_get_companion_services_both() -> None:
-    config = {"mcp_servers": [{"name": "fs"}], "llama_cpp": {}}
+    config = {
+        "mcp_servers": [{"name": "fs", "image": "mcp/fs:latest"}],
+        "llama_cpp": {},
+    }
     assert get_companion_services(config) == ["mcp-fs", "llama-cpp"]
 
 

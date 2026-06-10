@@ -36,20 +36,34 @@ to connect tools and services into agent workflows.
 ## Authentication
 
 Each agent authenticates against its vendor's API using the
-credentials already present on the host. Agent Circus bind-mounts the
-vendor-specific configuration directory from the host into the
-corresponding container:
+credentials already present on the host. Agent Circus seeds a private,
+project-local writable copy of each vendor configuration directory and mounts
+that copy into the corresponding container:
 
-| Agent       | Host directory       | Container path                |
+| Agent       | Seed source          | Container path                |
 |-------------|----------------------|-------------------------------|
 | Claude Code | `~/.claude`          | `/home/node/.claude`          |
 | Codex       | `~/.codex`           | `/home/node/.codex`           |
 | Vibe CLI    | `~/.vibe`            | `/home/node/.vibe`            |
 | OpenCode    | `~/.config/opencode` | `/home/node/.config/opencode` |
 
-This means you only need to authenticate once on the host (e.g. by
-running `claude`, `codex`, or `opencode` locally) and the containerized agents will
-pick up the same session and API keys automatically.
+The copies are stored under
+`~/.local/state/agent-circus/<project>/agent-config/<agent>/` with directory
+permissions restricted to the current user. They are seeded only once, so
+container changes do not modify host configuration and later host changes are
+not copied automatically. Agent Circus merges generated settings such as MCP
+servers into these writable copies before startup.
+
+To discard a copy and seed it again from the current host configuration on the
+next start, first stop the affected service and run:
+
+```shell
+agent-circus config reset codex
+agent-circus config reset --all
+```
+
+Use `--force` to skip the confirmation prompt. Reset refuses to delete a config
+store while its service is running.
 
 ## Getting Started
 
@@ -231,6 +245,69 @@ disabled for images that use another trust-store mechanism.
 
 Check running sidecars with `agent-circus ps --mcp`.
 
+To use an MCP server that is already running, configure its network URL instead
+of an image:
+
+```toml
+[[mcp_servers]]
+name = "existing"
+url = "http://host.docker.internal:9000/mcp"
+transport = "streamable-http"
+```
+
+Each entry must define exactly one of `image` or `url`. URL-based entries only
+inject agent configuration; Agent Circus does not create, start, stop, or show a
+sidecar for them. On Linux, `host.docker.internal` is mapped through Docker's
+`host-gateway`. The host server must listen on an address reachable from Docker,
+such as `0.0.0.0`; a service bound only to host `127.0.0.1` is generally not
+reachable from a bridge-network container.
+
+External MCP servers currently support unauthenticated HTTP or HTTPS access
+only. Authentication headers, tokens, OAuth, client certificates, and access to
+an existing host stdio process are not supported.
+
+To run an MCP server as a local stdio child process inside each agent container,
+install its executable in the agent image and configure it without `image` or
+`url`:
+
+```toml
+env_passthrough = ["re:^GITHUB_"]
+
+[[mcp_servers]]
+name = "github"
+transport = "stdio"
+command = "github-mcp-server"
+args = ["stdio"]
+env_vars = ["GITHUB_PERSONAL_ACCESS_TOKEN", "GITHUB_HOST"]
+```
+
+Install the GitHub MCP server in every agent image with a `base_root` build
+hook. This example installs version 1.2.0 for x86-64 agent images:
+
+```toml
+[hooks]
+base_root = """
+curl -fsSL \
+  https://github.com/github/github-mcp-server/releases/download/v1.2.0/github-mcp-server_Linux_x86_64.tar.gz \
+  | tar -xz -C /usr/local/bin github-mcp-server
+chmod 0755 /usr/local/bin/github-mcp-server
+"""
+```
+
+If the configuration already defines `hooks.base_root`, append these commands
+to that hook instead of adding a second `[hooks]` table. Rebuild the agent images
+after changing a build hook.
+
+Stdio entries require `command`; `args` and `env_vars` are optional lists of
+strings. They do not create Compose sidecars. The command must be available in
+every agent image, for example through a build hook.
+
+Environment forwarding has two steps: `env_passthrough` makes variables from the
+host available in the agent container, while `env_vars` tells MCP clients such
+as Codex which variable names may be forwarded to the stdio child process. Only
+the names are written to generated agent configuration; secret values remain in
+the environment.
+
 ### Local LLM via llama.cpp (OpenCode)
 
 Add a `[llama_cpp]` table to `config.toml` to run a
@@ -324,12 +401,6 @@ name = "memory"
 [[data_stores]]
 name = "bashhistory"
 mount_path = "/commandhistory"
-
-[[data_stores]]
-name = "codex-config-sandbox"
-mount_path = "/home/node/.codex"
-seed_from = "${HOME}/.codex"
-services = ["codex"]
 ```
 
 Fields:
@@ -342,18 +413,15 @@ Fields:
 | `seed_from` | no | unset | Host directory copied into the store before first container start; use an absolute path or environment interpolation like `${HOME}/.codex` |
 | `seed_mode` | no | `once` | Seed copy behavior; currently only `once` is supported |
 
-Seeded stores are useful when you want a writable, project-local copy of host
-state. For example, mounting a data store at `/home/node/.codex` and setting
-`seed_from = "${HOME}/.codex"` gives Codex its own writable sandbox copy of the
-host config. In that case Agent Circus omits the default host config bind mount
-for `codex`, so the container does not receive duplicate mounts for
-`/home/node/.codex`. Tilde paths such as `~/.codex` are rejected; use an
-absolute path or environment interpolation such as `${HOME}/.codex`.
+Seeded stores are useful when you want a writable, project-local copy of other
+host state. Tilde paths such as `~/.local/share/tool` are rejected; use an
+absolute path or environment interpolation such as
+`${HOME}/.local/share/tool`.
 
 Seeding currently happens only once per data store. After the first successful
 seed copy, later container starts keep the data store's existing contents and do
 not re-copy from `seed_from`. Optional always-on seeding will be added in a
-future release. To re-initiate seeding today, remove the store directory
+future release. To re-initiate seeding for a user-defined data store, remove the store directory
 (`~/.local/state/agent-circus/<project>/data/<name>/`) before starting the
 container again. If you want to keep the existing store contents and only allow
 another seed copy into it, remove the store's `.agent-circus-seeded` marker

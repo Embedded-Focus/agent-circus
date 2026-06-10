@@ -104,7 +104,6 @@ def _make_template_dir(base: Path) -> Path:
 
 
 @patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
-@patch("agent_circus.context.build_agent_configs_override", return_value="{}")
 @patch(
     "agent_circus.context.load_config",
     return_value={
@@ -119,7 +118,6 @@ def test_config_hooks_override_project_hooks_in_instant_mode(
     mock_tdc: MagicMock,
     mock_resolve: MagicMock,
     mock_load: MagicMock,
-    mock_agent_configs: MagicMock,
     mock_mcp: MagicMock,
     tmp_path: Path,
 ) -> None:
@@ -141,7 +139,6 @@ def test_config_hooks_override_project_hooks_in_instant_mode(
 
 
 @patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
-@patch("agent_circus.context.build_agent_configs_override", return_value="{}")
 @patch(
     "agent_circus.context.load_config",
     return_value={
@@ -154,7 +151,6 @@ def test_config_hooks_override_project_hooks_in_instant_mode(
 def test_deploy_mode_warns_on_config_build_hooks(
     mock_resolve: MagicMock,
     mock_load: MagicMock,
-    mock_agent_configs: MagicMock,
     mock_mcp: MagicMock,
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
@@ -173,7 +169,6 @@ def test_deploy_mode_warns_on_config_build_hooks(
 
 
 @patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
-@patch("agent_circus.context.build_agent_configs_override", return_value="{}")
 @patch(
     "agent_circus.context.load_config",
     return_value={
@@ -188,7 +183,6 @@ def test_startup_hook_sets_override_in_instant_mode(
     mock_tdc: MagicMock,
     mock_resolve: MagicMock,
     mock_load: MagicMock,
-    mock_agent_configs: MagicMock,
     mock_mcp: MagicMock,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -207,7 +201,6 @@ def test_startup_hook_sets_override_in_instant_mode(
 
 
 @patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
-@patch("agent_circus.context.build_agent_configs_override", return_value="{}")
 @patch(
     "agent_circus.context.load_config",
     return_value={
@@ -222,7 +215,6 @@ def test_startup_hook_written_to_state_dir(
     mock_tdc: MagicMock,
     mock_resolve: MagicMock,
     mock_load: MagicMock,
-    mock_agent_configs: MagicMock,
     mock_mcp: MagicMock,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
