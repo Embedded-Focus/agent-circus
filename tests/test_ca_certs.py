@@ -75,6 +75,13 @@ def test_build_ca_certs_override_all_services(tmp_path: Path) -> None:
     assert set(result["services"].keys()) == set(AVAILABLE_SERVICES)
 
 
+def test_build_ca_certs_override_additional_services(tmp_path: Path) -> None:
+    cert = str(tmp_path / "ca.crt")
+    result = json.loads(build_ca_certs_override([cert], ["mcp-filesystem"]))
+    volumes = result["services"]["mcp-filesystem"]["volumes"]
+    assert volumes == [f"{cert}:/run/ca-host/ca.crt:ro"]
+
+
 def test_build_ca_certs_override_returns_valid_json(tmp_path: Path) -> None:
     output = build_ca_certs_override([str(tmp_path / "a.crt"), str(tmp_path / "b.crt")])
     parsed = json.loads(output)

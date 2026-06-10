@@ -125,6 +125,11 @@ def test_build_hosts_override_all_services() -> None:
     assert set(result["services"].keys()) == set(AVAILABLE_SERVICES)
 
 
+def test_build_hosts_override_additional_services() -> None:
+    result = json.loads(build_hosts_override(["h:1.2.3.4"], ["mcp-filesystem"]))
+    assert result["services"]["mcp-filesystem"]["extra_hosts"] == ["h:1.2.3.4"]
+
+
 def test_build_hosts_override_returns_valid_json() -> None:
     output = build_hosts_override(["a:1.1.1.1", "b:2.2.2.2"])
     parsed = json.loads(output)

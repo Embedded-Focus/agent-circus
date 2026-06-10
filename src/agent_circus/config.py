@@ -1038,21 +1038,27 @@ def match_files(directory: str, patterns: list[str]) -> list[str]:
     return sorted(result)
 
 
-def build_ca_certs_override(cert_paths: list[str]) -> str:
+def build_ca_certs_override(
+    cert_paths: list[str], additional_services: list[str] | None = None
+) -> str:
     """Build a Docker Compose override that bind-mounts CA certificate files.
 
     Each certificate is mounted read-only at
-    ``/run/ca-host/<basename>`` inside every agent container.  The
-    container entrypoint copies them into the system certificate store
-    and runs ``update-ca-certificates`` at startup.
+    ``/run/ca-host/<basename>`` inside every agent container and any
+    explicitly supplied companion services.  The agent container entrypoint
+    copies them into the system certificate store and runs
+    ``update-ca-certificates`` at startup.
 
     :param cert_paths: Absolute host paths to ``.crt`` files to forward.
     :type cert_paths: list[str]
+    :param additional_services: Additional Compose services that should receive
+        the certificate mounts.
     :returns: Compose override as a JSON string.
     :rtype: str
     """
     volumes = [f"{p}:/run/ca-host/{Path(p).name}:ro" for p in cert_paths]
-    services = {svc: {"volumes": volumes} for svc in AVAILABLE_SERVICES}
+    service_names = [*AVAILABLE_SERVICES, *(additional_services or [])]
+    services = {svc: {"volumes": volumes} for svc in service_names}
     return json.dumps({"services": services})
 
 
@@ -1096,19 +1102,24 @@ def build_env_passthrough_override(var_names: list[str]) -> str:
     return json.dumps({"services": services})
 
 
-def build_hosts_override(extra_hosts: list[str]) -> str:
+def build_hosts_override(
+    extra_hosts: list[str], additional_services: list[str] | None = None
+) -> str:
     """Build a Docker Compose override that injects extra ``/etc/hosts`` entries.
 
-    Applies the same ``extra_hosts`` list to every agent service so that
-    selected host entries from the host machine are resolvable inside
-    containers.
+    Applies the same ``extra_hosts`` list to every agent service and any
+    explicitly supplied companion services so that selected host entries from
+    the host machine are resolvable inside containers.
 
     :param extra_hosts: List of ``"hostname:ip"`` strings to inject.
     :type extra_hosts: list[str]
+    :param additional_services: Additional Compose services that should receive
+        the host entries.
     :returns: Compose override as a JSON string.
     :rtype: str
     """
-    services = {svc: {"extra_hosts": extra_hosts} for svc in AVAILABLE_SERVICES}
+    service_names = [*AVAILABLE_SERVICES, *(additional_services or [])]
+    services = {svc: {"extra_hosts": extra_hosts} for svc in service_names}
     return json.dumps({"services": services})
 
 

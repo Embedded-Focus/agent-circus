@@ -221,7 +221,13 @@ image = "mcp/filesystem:latest"
 
 Optional fields: `port` (default `8080`), `transport` (default
 `streamable-http`), `path` (default `/mcp`), `env`, `command`,
-`volumes`.
+`volumes`, and `install_ca_certs` (default `false`).
+
+Configured `[hosts]` entries and `[ca_certs]` files are also forwarded to MCP
+sidecars. Set `install_ca_certs = true` for an MCP image that provides
+`/bin/sh`, `cp`, and `update-ca-certificates`; Agent Circus then installs the
+mounted certificates as root using a Docker Compose `post_start` hook. Leave it
+disabled for images that use another trust-store mechanism.
 
 Check running sidecars with `agent-circus ps --mcp`.
 

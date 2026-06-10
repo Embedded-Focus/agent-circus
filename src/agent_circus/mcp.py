@@ -25,6 +25,13 @@ DEFAULT_MCP_TRANSPORT = "streamable-http"
 # Prefix for MCP sidecar service names in Docker Compose.
 SERVICE_PREFIX = "mcp-"
 
+_INSTALL_CA_CERTS_COMMAND = (
+    "for cert in /run/ca-host/*.crt; do "
+    '[ -f "$cert" ] || continue; '
+    'cp "$cert" "/usr/local/share/ca-certificates/$(basename "$cert")"; '
+    "done; update-ca-certificates"
+)
+
 
 def _service_name(name: str) -> str:
     """Return the Docker Compose service name for an MCP server.
@@ -35,6 +42,15 @@ def _service_name(name: str) -> str:
     :rtype: str
     """
     return f"{SERVICE_PREFIX}{name}"
+
+
+def service_names(mcp_servers: list[dict[str, Any]]) -> list[str]:
+    """Return Compose service names for configured MCP servers.
+
+    :param mcp_servers: MCP server definitions from config.
+    :returns: Prefixed Compose service names in config order.
+    """
+    return [_service_name(server["name"]) for server in mcp_servers]
 
 
 def _server_url(name: str, port: int, path: str) -> str:
@@ -99,6 +115,14 @@ def build_compose_override(
         volumes = server.get("volumes")
         if volumes:
             svc["volumes"] = volumes
+
+        if server.get("install_ca_certs", False):
+            svc["post_start"] = [
+                {
+                    "command": ["/bin/sh", "-c", _INSTALL_CA_CERTS_COMMAND],
+                    "user": "root",
+                }
+            ]
 
         services[svc_name] = svc
 

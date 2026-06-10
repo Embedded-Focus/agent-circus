@@ -115,6 +115,25 @@ class TestBuildComposeOverride:
         svc = result["services"]["mcp-filesystem"]
         assert "command" not in svc
 
+    def test_ca_certificate_install_is_opt_in(self, single_server: list[dict]) -> None:
+        result = json.loads(build_compose_override(single_server, AGENTS))
+        assert "post_start" not in result["services"]["mcp-filesystem"]
+
+    def test_ca_certificate_install_hook(self) -> None:
+        servers = [
+            {
+                "name": "internal",
+                "image": "mcp/internal:latest",
+                "install_ca_certs": True,
+            }
+        ]
+        result = json.loads(build_compose_override(servers, AGENTS))
+        hook = result["services"]["mcp-internal"]["post_start"][0]
+
+        assert hook["user"] == "root"
+        assert hook["command"][:2] == ["/bin/sh", "-c"]
+        assert "update-ca-certificates" in hook["command"][2]
+
     def test_service_name_prefix(self, single_server: list[dict]) -> None:
         result = json.loads(build_compose_override(single_server, AGENTS))
         sidecar_names = [n for n in result["services"] if n not in AGENTS]

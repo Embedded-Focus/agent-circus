@@ -52,6 +52,7 @@ from .config import (
 )
 from .exceptions import ConfigurationError
 from .mcp import build_compose_override as build_mcp_compose_override
+from .mcp import service_names as get_mcp_service_names
 from .state import (
     get_agent_configs_dir,
     get_data_store_dir,
@@ -277,6 +278,7 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
     config = load_config(workspace)
     shadow = config.get("shadow", [])
     mcp_servers = config.get("mcp_servers", [])
+    mcp_service_names = get_mcp_service_names(mcp_servers)
     env_vars: dict[str, str] = config.get("env", {})
     additional_dirs: list[dict] = config.get("additional_dirs", [])
     port_forwards: list[dict] = config.get("port_forwards", [])
@@ -338,7 +340,9 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
         if cert_patterns:
             cert_paths = match_files(certs_dir, cert_patterns)
             if cert_paths:
-                ca_certs_override = build_ca_certs_override(cert_paths)
+                ca_certs_override = build_ca_certs_override(
+                    cert_paths, mcp_service_names
+                )
 
     hosts_override: str | None = None
     hosts_config = config.get("hosts")
@@ -349,7 +353,7 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
             entries = parse_hosts_file(hosts_file)
             extra_hosts = filter_hosts(entries, patterns)
             if extra_hosts:
-                hosts_override = build_hosts_override(extra_hosts)
+                hosts_override = build_hosts_override(extra_hosts, mcp_service_names)
 
     git_override: str | None = None
     if git_config is not None:
