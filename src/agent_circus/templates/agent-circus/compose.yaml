@@ -31,9 +31,9 @@ services:
       target: claude-code
       args:
         <<: *common-build-args
-        CLAUDE_CODE_VERSION: 2.1.197
+        CLAUDE_CODE_VERSION: 2.1.202
         # https://github.com/agentclientprotocol/claude-agent-acp
-        CLAUDE_AGENT_ACP_VERSION: 0.54.1
+        CLAUDE_AGENT_ACP_VERSION: 0.57.0
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
     - ${HOME}/.cache:/home/node/.cache
@@ -81,7 +81,7 @@ services:
       args:
         <<: *common-build-args
         # https://www.npmjs.com/package/opencode-ai
-        OPENCODE_VERSION: 1.17.13
+        OPENCODE_VERSION: 1.17.14
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
     - ${HOME}/.cache:/home/node/.cache
