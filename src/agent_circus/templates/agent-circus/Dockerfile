@@ -148,7 +148,7 @@ ARG CODEX_ACP_VERSION
 
 RUN npm install -g \
     @openai/codex@${CODEX_VERSION} \
-    @zed-industries/codex-acp@${CODEX_ACP_VERSION}
+    @agentclientprotocol/codex-acp@${CODEX_ACP_VERSION}
 
 FROM base AS opencode
 
