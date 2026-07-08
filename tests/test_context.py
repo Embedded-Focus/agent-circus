@@ -105,6 +105,68 @@ def test_context_includes_port_forwards_override(
     "agent_circus.context.load_config",
     return_value={"shadow": [], "mcp_servers": []},
 )
+@patch("agent_circus.context.resolve_config", return_value=None)
+def test_context_host_config_replaces_default_agent_config_mount(
+    mock_resolve: MagicMock,
+    mock_load: MagicMock,
+    mock_mcp: MagicMock,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    with build_compose_context(tmp_path, host_config_service="codex") as ctx:
+        default_mounts = json.loads(ctx.agent_config_mounts_override or "{}")
+        host_config = json.loads(ctx.host_config_override or "{}")
+
+    assert default_mounts["services"]["codex"]["volumes"] == []
+    assert host_config["services"]["codex"]["volumes"] == [
+        "${HOME}/.codex:/home/node/.codex:cached"
+    ]
+    assert (tmp_path / "home" / ".codex").is_dir()
+
+
+@patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
+@patch(
+    "agent_circus.context.load_config",
+    return_value={
+        "shadow": [],
+        "mcp_servers": [
+            {
+                "name": "github",
+                "transport": "stdio",
+                "command": "github-mcp-server",
+            }
+        ],
+    },
+)
+@patch("agent_circus.context.resolve_config", return_value=None)
+def test_context_host_config_does_not_merge_mcp_into_host_config(
+    mock_resolve: MagicMock,
+    mock_load: MagicMock,
+    mock_mcp: MagicMock,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    codex_dir = home / ".codex"
+    codex_dir.mkdir(parents=True)
+    config_path = codex_dir / "config.toml"
+    config_path.write_text('model = "gpt-5"\n')
+    monkeypatch.setenv("HOME", str(home))
+
+    with build_compose_context(tmp_path, host_config_service="codex") as ctx:
+        assert ctx.data_store_seeder is not None
+        ctx.data_store_seeder()
+
+    assert config_path.read_text() == 'model = "gpt-5"\n'
+
+
+@patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
+@patch(
+    "agent_circus.context.load_config",
+    return_value={"shadow": [], "mcp_servers": []},
+)
 @patch("agent_circus.context.resolve_config")
 def test_context_deploy_mode(
     mock_resolve: MagicMock,

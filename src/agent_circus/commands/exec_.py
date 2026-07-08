@@ -18,7 +18,7 @@ from agent_circus.config import (
     validate_services,
 )
 from agent_circus.context import build_compose_context
-from agent_circus.exceptions import AgentCircusError
+from agent_circus.exceptions import AgentCircusError, ConfigurationError
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,13 @@ def exec_cmd(
             help="Disable pseudo-TTY allocation.",
         ),
     ] = False,
+    host_config: Annotated[
+        bool,
+        typer.Option(
+            "--host-config",
+            help="Mount the real host provider config directory writable for this service.",
+        ),
+    ] = False,
 ) -> None:
     """Execute a command in an agent container.
 
@@ -74,8 +81,16 @@ def exec_cmd(
         validate_services([service], companions)
         cmd = command or []
 
-        with build_compose_context(workspace) as ctx:
-            if not compose_is_service_running(ctx, service):
+        with build_compose_context(
+            workspace, host_config_service=service if host_config else None
+        ) as ctx:
+            service_running = compose_is_service_running(ctx, service)
+            if host_config and service_running:
+                raise ConfigurationError(
+                    f"Cannot use --host-config because {service} is already running. "
+                    f"Remove it first with: agent-circus remove {service}"
+                )
+            if not service_running:
                 typer.echo(f"Service {service} is not running. Starting it...")
                 compose_up(ctx, [service])
 

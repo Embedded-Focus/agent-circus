@@ -65,6 +65,24 @@ agent-circus config reset --all
 Use `--force` to skip the confirmation prompt. Reset refuses to delete a config
 store while its service is running.
 
+For credential refresh or other explicit edits to the real host provider
+configuration, run a command with `--host-config`. This bypasses the
+project-local copy and mounts the host configuration directory writable for that
+single service. Agent Circus does not merge generated MCP settings into the
+host configuration while this mode is active.
+
+```shell
+agent-circus remove --force codex
+agent-circus exec codex --host-config -- codex login
+agent-circus remove --force codex
+agent-circus config reset codex --force
+agent-circus up codex
+```
+
+The second `remove` is needed because `exec` starts a stopped service and leaves
+it running. After `config reset`, the next normal startup seeds a fresh
+project-local copy from the updated host configuration.
+
 ## Getting Started
 
 ### Installing the `agent-circus` Tool

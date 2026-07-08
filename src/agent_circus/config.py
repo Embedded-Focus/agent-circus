@@ -24,6 +24,8 @@ COMPOSE_AGENT_CONFIGS_FILE_NAME = "compose.agent-configs.json"
 
 COMPOSE_AGENT_CONFIG_MOUNTS_FILE_NAME = "compose.agent-config-mounts.json"
 
+COMPOSE_HOST_CONFIG_FILE_NAME = "compose.host-config.json"
+
 COMPOSE_MCP_FILE_NAME = "compose.mcp.json"
 
 COMPOSE_ADDITIONAL_DIRS_FILE_NAME = "compose.additional-dirs.json"
@@ -840,6 +842,29 @@ def build_agent_config_mounts_override(
             volumes.append(f"{store_dirs[service]}:{default_mount['container']}:cached")
         services[service] = {"volumes": volumes}
     return json.dumps({"services": services})
+
+
+def build_host_config_override(service: str) -> str:
+    """Build a Docker Compose override that mounts one host config directory.
+
+    :param service: Agent service that should receive its real host config.
+    :returns: Compose override as a JSON string.
+    :raises ConfigurationError: If the service has no default config mount.
+    """
+    default_mount = DEFAULT_AGENT_CONFIG_MOUNTS.get(service)
+    if default_mount is None:
+        raise ConfigurationError(f"Service has no host config mount: {service}")
+    return json.dumps(
+        {
+            "services": {
+                service: {
+                    "volumes": [
+                        f"{default_mount['host']}:{default_mount['container']}:cached"
+                    ]
+                }
+            }
+        }
+    )
 
 
 def build_data_store_override(

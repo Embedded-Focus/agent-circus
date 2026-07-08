@@ -34,6 +34,7 @@ from .config import (
     build_env_profile_script,
     build_git_override,
     build_git_worktree_mirror_override,
+    build_host_config_override,
     build_hosts_override,
     build_llama_cpp_override,
     build_port_forwards_override,
@@ -269,8 +270,29 @@ def _inject_env_into_dockerfile(build_context: Path, env: dict[str, str]) -> Non
     dockerfile.write_text(text)
 
 
+def _ensure_host_config_dir(service: str) -> None:
+    """Create a service's host config directory before Docker bind-mounts it.
+
+    :param service: Agent service whose default host config directory is used.
+    :raises ConfigurationError: If the service has no configured host path.
+    """
+    default_mount = DEFAULT_AGENT_CONFIG_MOUNTS.get(service)
+    if default_mount is None:
+        raise ConfigurationError(f"Service has no host config mount: {service}")
+    source = Path(os.path.expandvars(default_mount["host"])).expanduser()
+    if not source.is_absolute():
+        raise ConfigurationError(
+            f"Host config path for {service} did not resolve to an absolute path"
+        )
+    source.mkdir(parents=True, exist_ok=True, mode=0o700)
+    source.chmod(0o700)
+
+
 @contextlib.contextmanager
-def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
+def build_compose_context(
+    workspace: Path,
+    host_config_service: str | None = None,
+) -> Iterator[ComposeContext]:
     """Load configuration and assemble a :class:`ComposeContext`.
 
     Resolves deploy vs instant mode, loads the merged configuration,
@@ -279,6 +301,8 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
     bundled template files.
 
     :param workspace: Workspace path.
+    :param host_config_service: Optional service whose real host config
+        directory should be mounted directly instead of the project-local copy.
     :yields: Fully assembled :class:`ComposeContext`.
     """
     config = load_config(workspace)
@@ -311,6 +335,23 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
     )
     claimed_agent_config_mounts = get_claimed_agent_config_mounts(data_stores)
     agent_config_data_stores = get_agent_config_data_stores(data_stores)
+    host_config_override: str | None = None
+    if host_config_service is not None:
+        default_mount = DEFAULT_AGENT_CONFIG_MOUNTS.get(host_config_service)
+        if default_mount is None:
+            raise ConfigurationError(
+                f"Service has no host config mount: {host_config_service}"
+            )
+        if host_config_service in agent_config_data_stores:
+            raise ConfigurationError(
+                f"Cannot use --host-config for {host_config_service}: "
+                "its config directory is already managed by a data store"
+            )
+        _ensure_host_config_dir(host_config_service)
+        claimed_agent_config_mounts.add(
+            (host_config_service, default_mount["container"])
+        )
+        host_config_override = build_host_config_override(host_config_service)
     agent_config_store_dirs = {
         service: get_agent_config_store_dir(workspace, service)
         for service in AVAILABLE_SERVICES
@@ -421,7 +462,7 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
             "seed_from": DEFAULT_AGENT_CONFIG_MOUNTS[service]["host"],
         }
         for service in AVAILABLE_SERVICES
-        if service not in agent_config_data_stores
+        if service not in agent_config_data_stores and service != host_config_service
     ]
 
     def seed_runtime_stores() -> None:
@@ -432,6 +473,8 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
             _seed_data_stores(data_stores, data_base_dir)
 
         for agent_name in AVAILABLE_SERVICES:
+            if agent_name == host_config_service:
+                continue
             additions = agent_config_additions.get(agent_name)
             if not additions:
                 continue
@@ -463,6 +506,7 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
             cwd=config_dir,
             shadow_override=shadow_override,
             agent_config_mounts_override=agent_config_mounts_override,
+            host_config_override=host_config_override,
             agent_configs_override=agent_configs_override,
             mcp_override=mcp_override,
             additional_dirs_override=additional_dirs_override,
@@ -483,38 +527,36 @@ def build_compose_context(workspace: Path) -> Iterator[ComposeContext]:
         # Instant mode: copy bundled templates into a fresh temp directory so
         # that project-specific mutations (hook scripts, ENV injection) never
         # touch the installed package files.
-        with template_dir_context() as src_dir:
-            with tempfile.TemporaryDirectory() as _tmp:
-                build_context = Path(_tmp)
-                shutil.copytree(
-                    src_dir, build_context, symlinks=True, dirs_exist_ok=True
-                )
-                _copy_project_hooks(workspace, build_context)
-                if hooks_config is not None:
-                    _write_config_hooks(hooks_config, build_context)
-                _inject_env_into_dockerfile(build_context, env_vars)
-                env = os.environ.copy()
-                env["AGENT_CIRCUS_WORKSPACE"] = str(workspace)
-                yield ComposeContext(
-                    workspace=workspace,
-                    project_name=project_name,
-                    compose_file=build_context / COMPOSE_FILE_NAME,
-                    cwd=build_context,
-                    env=env,
-                    shadow_override=shadow_override,
-                    agent_config_mounts_override=agent_config_mounts_override,
-                    agent_configs_override=agent_configs_override,
-                    mcp_override=mcp_override,
-                    additional_dirs_override=additional_dirs_override,
-                    ssh_override=ssh_override,
-                    git_override=git_override,
-                    hosts_override=hosts_override,
-                    ca_certs_override=ca_certs_override,
-                    env_passthrough_override=env_passthrough_override,
-                    startup_hook_override=startup_hook_override,
-                    git_worktree_mirror_override=git_worktree_mirror_override,
-                    data_store_override=data_store_override,
-                    port_forwards_override=port_forwards_override,
-                    llama_cpp_override=llama_cpp_override,
-                    data_store_seeder=data_store_seeder,
-                )
+        with template_dir_context() as src_dir, tempfile.TemporaryDirectory() as _tmp:
+            build_context = Path(_tmp)
+            shutil.copytree(src_dir, build_context, symlinks=True, dirs_exist_ok=True)
+            _copy_project_hooks(workspace, build_context)
+            if hooks_config is not None:
+                _write_config_hooks(hooks_config, build_context)
+            _inject_env_into_dockerfile(build_context, env_vars)
+            env = os.environ.copy()
+            env["AGENT_CIRCUS_WORKSPACE"] = str(workspace)
+            yield ComposeContext(
+                workspace=workspace,
+                project_name=project_name,
+                compose_file=build_context / COMPOSE_FILE_NAME,
+                cwd=build_context,
+                env=env,
+                shadow_override=shadow_override,
+                agent_config_mounts_override=agent_config_mounts_override,
+                host_config_override=host_config_override,
+                agent_configs_override=agent_configs_override,
+                mcp_override=mcp_override,
+                additional_dirs_override=additional_dirs_override,
+                ssh_override=ssh_override,
+                git_override=git_override,
+                hosts_override=hosts_override,
+                ca_certs_override=ca_certs_override,
+                env_passthrough_override=env_passthrough_override,
+                startup_hook_override=startup_hook_override,
+                git_worktree_mirror_override=git_worktree_mirror_override,
+                data_store_override=data_store_override,
+                port_forwards_override=port_forwards_override,
+                llama_cpp_override=llama_cpp_override,
+                data_store_seeder=data_store_seeder,
+            )
