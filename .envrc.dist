@@ -1,1 +1,3 @@
-use flake "path:."
+eval "$(devenv direnvrc)"
+
+use devenv
