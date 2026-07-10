@@ -61,6 +61,13 @@ def ps(
             help="Show only MCP sidecar containers.",
         ),
     ] = False,
+    runtime: Annotated[
+        str | None,
+        typer.Option(
+            "--runtime",
+            help="Container runtime backend to use: docker or podman.",
+        ),
+    ] = None,
 ) -> None:
     """Show status of agent containers.
 
@@ -97,7 +104,8 @@ def ps(
             return
 
     try:
-        with build_compose_context(workspace) as ctx:
+        context_kwargs = {"runtime": runtime} if runtime is not None else {}
+        with build_compose_context(workspace, **context_kwargs) as ctx:
             output = compose_ps(ctx, filter_services, all_containers=all_containers)
         typer.echo(output, nl=False)
     except AgentCircusError as e:

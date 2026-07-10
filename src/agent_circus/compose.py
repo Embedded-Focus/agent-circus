@@ -14,6 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .exceptions import ComposeError
+from .runtime import ContainerRuntime, compose_command
 from .state import (
     get_additional_dirs_override_path,
     get_agent_config_mounts_override_path,
@@ -28,6 +29,7 @@ from .state import (
     get_hosts_override_path,
     get_llama_cpp_override_path,
     get_mcp_override_path,
+    get_podman_runtime_override_path,
     get_port_forwards_override_path,
     get_shadow_override_path,
     get_ssh_override_path,
@@ -47,7 +49,8 @@ class ComposeContext:
     modules.
 
     :param workspace: Workspace path.
-    :param project_name: Sanitized Docker Compose project name.
+    :param project_name: Sanitized Compose project name.
+    :param runtime: Container runtime used to execute Compose commands.
     :param compose_file: Absolute path to the base compose file.
     :param cwd: Working directory for the subprocess.
     :param env: Extra environment variables, or ``None`` to inherit.
@@ -63,6 +66,8 @@ class ComposeContext:
     :param git_override: JSON string for Git configuration forwarding, or ``None``.
     :param claude_mem_override: JSON string for Claude-Mem activation, or ``None``.
     :param port_forwards_override: JSON string for published ports, or ``None``.
+    :param podman_runtime_override: JSON string for Podman-specific service
+        settings, or ``None``.
     :param data_store_seeder: Optional callback that prepares writable state
         before ``docker compose up`` and ``docker compose exec``.
     """
@@ -71,6 +76,7 @@ class ComposeContext:
     project_name: str
     compose_file: Path
     cwd: Path
+    runtime: ContainerRuntime = "docker"
     env: dict[str, str] | None = None
     shadow_override: str | None = None
     agent_config_mounts_override: str | None = None
@@ -89,6 +95,7 @@ class ComposeContext:
     claude_mem_override: str | None = None
     port_forwards_override: str | None = None
     llama_cpp_override: str | None = None
+    podman_runtime_override: str | None = None
     companion_services: tuple[str, ...] = ()
     data_store_seeder: Callable[[], None] | None = None
 
@@ -98,20 +105,19 @@ def _exec_compose(
     ctx: ComposeContext,
     capture_output: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    """Execute a docker compose command.
+    """Execute a Compose command.
 
     Writes any override strings from *ctx* to the runtime state
     directory and passes them as additional ``-f`` flags.
 
-    :param args: Arguments to pass after ``docker compose -p ... -f ...``.
+    :param args: Arguments to pass after ``<runtime> compose -p ... -f ...``.
     :param ctx: Pre-assembled compose context.
     :param capture_output: Capture stdout/stderr instead of streaming.
     :returns: Completed process result.
     :raises ComposeError: If command fails.
     """
     cmd = [
-        "docker",
-        "compose",
+        *compose_command(ctx.runtime),
         "-p",
         ctx.project_name,
         "-f",
@@ -254,6 +260,14 @@ def _exec_compose(
     else:
         llama_cpp_path.unlink(missing_ok=True)
 
+    podman_runtime_path = get_podman_runtime_override_path(ctx.workspace)
+    if ctx.podman_runtime_override:
+        podman_runtime_path.write_text(ctx.podman_runtime_override)
+        cmd.extend(["-f", str(podman_runtime_path)])
+        logger.debug("Podman runtime override: %s", podman_runtime_path)
+    else:
+        podman_runtime_path.unlink(missing_ok=True)
+
     cmd.extend(args)
     logger.debug("Running: %s", " ".join(cmd))
 
@@ -276,12 +290,19 @@ def _exec_compose(
         )
         if result.returncode != 0:
             error_msg = result.stderr if capture_output else "Command failed"
-            raise ComposeError(f"docker compose failed: {error_msg}")
+            raise ComposeError(f"{ctx.runtime} compose failed: {error_msg}")
         return result
     except FileNotFoundError as e:
-        raise ComposeError("docker compose not found. Is Docker installed?") from e
+        if ctx.runtime == "podman":
+            message = (
+                "podman compose not found. Is Podman installed with a Compose "
+                "provider such as podman-compose or Docker Compose?"
+            )
+        else:
+            message = "docker compose not found. Is Docker installed?"
+        raise ComposeError(message) from e
     except subprocess.SubprocessError as e:
-        raise ComposeError(f"Failed to run docker compose: {e}") from e
+        raise ComposeError(f"Failed to run {ctx.runtime} compose: {e}") from e
 
 
 def compose_build(

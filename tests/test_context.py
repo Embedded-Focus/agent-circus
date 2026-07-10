@@ -106,6 +106,28 @@ def test_context_includes_port_forwards_override(
     return_value={"shadow": [], "mcp_servers": []},
 )
 @patch("agent_circus.context.resolve_config", return_value=None)
+def test_context_uses_podman_keep_id_for_agent_config_mounts(
+    mock_resolve: MagicMock,
+    mock_load: MagicMock,
+    mock_mcp: MagicMock,
+    tmp_path: Path,
+) -> None:
+    with build_compose_context(tmp_path, runtime="podman") as ctx:
+        default_mounts = json.loads(ctx.agent_config_mounts_override or "{}")
+        podman_runtime = json.loads(ctx.podman_runtime_override or "{}")
+
+    assert default_mounts["services"]["codex"]["volumes"] == [
+        f"{get_agent_config_store_dir(tmp_path, 'codex')}:/home/node/.codex:cached"
+    ]
+    assert podman_runtime["services"]["codex"]["userns_mode"] == "keep-id"
+
+
+@patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
+@patch(
+    "agent_circus.context.load_config",
+    return_value={"shadow": [], "mcp_servers": []},
+)
+@patch("agent_circus.context.resolve_config", return_value=None)
 def test_context_host_config_replaces_default_agent_config_mount(
     mock_resolve: MagicMock,
     mock_load: MagicMock,

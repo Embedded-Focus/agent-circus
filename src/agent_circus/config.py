@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import tomli_w
 
 from .exceptions import ConfigurationError
+from .runtime import ContainerRuntime, validate_runtime
 
 CONFIG_DIR_NAME = ".agent-circus"
 
@@ -51,6 +52,8 @@ COMPOSE_PORT_FORWARDS_FILE_NAME = "compose.port-forwards.json"
 COMPOSE_LLAMA_CPP_FILE_NAME = "compose.llama-cpp.json"
 
 COMPOSE_CLAUDE_MEM_FILE_NAME = "compose.claude-mem.json"
+
+COMPOSE_PODMAN_RUNTIME_FILE_NAME = "compose.podman-runtime.json"
 
 LLAMA_CPP_IMAGE = "ghcr.io/ggml-org/llama.cpp:server"
 LLAMA_CPP_DEFAULT_MODEL = "ggml-org/gemma-3-1b-it-GGUF/gemma-3-1b-it-Q4_K_M.gguf"
@@ -129,6 +132,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "env_passthrough": [],
     "hooks": None,
     "logging": {"level": "INFO", "file": None},
+    "runtime": None,
     "llama_cpp": None,
     "claude_mem": None,
 }
@@ -317,7 +321,26 @@ def validate_config(config: dict[str, Any]) -> None:
         if key not in known:
             logger.warning("Unknown config key %r — ignoring", key)
     _validate_mcp_servers(config.get("mcp_servers", []))
+    _validate_runtime_config(config.get("runtime"))
     _validate_claude_mem(config.get("claude_mem"))
+
+
+def _validate_runtime_config(runtime_config: Any) -> None:
+    """Validate the optional runtime configuration.
+
+    :param runtime_config: Raw ``runtime`` value from merged config.
+    :raises ConfigurationError: If the runtime config is malformed.
+    """
+    if runtime_config is None:
+        return
+    if not isinstance(runtime_config, dict):
+        raise ConfigurationError("runtime must be a table")
+    engine = runtime_config.get("engine")
+    if engine is None:
+        return
+    if not isinstance(engine, str):
+        raise ConfigurationError("runtime.engine must be a string")
+    validate_runtime(engine)
 
 
 def _validate_mcp_servers(mcp_servers: Any) -> None:
@@ -870,18 +893,23 @@ def get_agent_config_data_stores(data_stores: list[dict]) -> dict[str, str]:
 def build_agent_config_mounts_override(
     store_dirs: dict[str, Path],
     claimed_mounts: set[tuple[str, str]] | None = None,
+    runtime: ContainerRuntime = "docker",
 ) -> str:
     """Build writable project-local agent configuration directory mounts.
 
     These mounts preserve the historical template behavior, except any
     ``(service, container_path)`` claimed by a data store is omitted so the
     container never receives duplicate mounts for the same agent config dir.
+    Podman-specific user namespace handling is applied by
+    :func:`build_podman_runtime_override`, so the mount syntax remains portable.
 
     :param store_dirs: Per-service host directories containing writable config.
     :param claimed_mounts: Service/path pairs claimed by explicit data stores.
+    :param runtime: Container runtime used for generated volume options.
     :returns: Compose override as a JSON string.
     """
     claimed_mounts = claimed_mounts or set()
+    options = "cached"
     services: dict[str, dict[str, list[str]]] = {}
     for service in AVAILABLE_SERVICES:
         default_mount = DEFAULT_AGENT_CONFIG_MOUNTS.get(service)
@@ -890,7 +918,9 @@ def build_agent_config_mounts_override(
             default_mount
             and (service, default_mount["container"]) not in claimed_mounts
         ):
-            volumes.append(f"{store_dirs[service]}:{default_mount['container']}:cached")
+            volumes.append(
+                f"{store_dirs[service]}:{default_mount['container']}:{options}"
+            )
         services[service] = {"volumes": volumes}
     return json.dumps({"services": services})
 
@@ -921,6 +951,7 @@ def build_host_config_override(service: str) -> str:
 def build_data_store_override(
     data_stores: list[dict],
     data_base_dir: Path,
+    runtime: ContainerRuntime = "docker",
 ) -> str:
     """Build a Docker Compose override that bind-mounts project data store directories.
 
@@ -933,18 +964,34 @@ def build_data_store_override(
         ``services``, ``seed_from``, and ``seed_mode``.
     :param data_base_dir: Base directory on the host under which per-store
         subdirectories reside.
+    :param runtime: Container runtime used for generated volume options.
     :returns: Compose override as a JSON string.
     """
+    options = "cached"
     services = {svc: {"volumes": []} for svc in AVAILABLE_SERVICES}
     for entry in data_stores:
         name = entry["name"]
         mount_path = _data_store_mount_path(entry)
         host_path = str(data_base_dir / name)
-        store_volumes = [f"{host_path}:{mount_path}:cached"]
+        store_volumes = [f"{host_path}:{mount_path}:{options}"]
         if _data_store_seed_from(entry):
             _data_store_seed_mode(entry)
         for service in _data_store_services(entry):
             services[service]["volumes"].extend(store_volumes)
+    return json.dumps({"services": services})
+
+
+def build_podman_runtime_override() -> str:
+    """Build a Compose override for rootless Podman user namespace behavior.
+
+    ``userns_mode: keep-id`` preserves the invoking user's UID/GID mapping
+    inside rootless Podman containers.  That keeps host-owned state directories
+    writable by the image's ``node`` user on typical UID 1000 developer systems
+    without recursively changing host ownership with Podman's ``U`` volume option.
+
+    :returns: Compose override as a JSON string.
+    """
+    services = {service: {"userns_mode": "keep-id"} for service in AVAILABLE_SERVICES}
     return json.dumps({"services": services})
 
 

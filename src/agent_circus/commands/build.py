@@ -43,6 +43,13 @@ def build(
             help="Build without using cache.",
         ),
     ] = False,
+    runtime: Annotated[
+        str | None,
+        typer.Option(
+            "--runtime",
+            help="Container runtime backend to use: docker or podman.",
+        ),
+    ] = None,
 ) -> None:
     """Build agent container images.
 
@@ -65,7 +72,8 @@ def build(
         else:
             typer.echo("Building all services...")
 
-        with build_compose_context(workspace) as ctx:
+        context_kwargs = {"runtime": runtime} if runtime is not None else {}
+        with build_compose_context(workspace, **context_kwargs) as ctx:
             compose_build(ctx, services_to_build, no_cache=no_cache)
         typer.echo("Build completed successfully.")
 

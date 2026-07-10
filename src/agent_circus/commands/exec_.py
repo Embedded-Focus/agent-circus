@@ -68,6 +68,13 @@ def exec_cmd(
             help="Mount the real host provider config directory writable for this service.",
         ),
     ] = False,
+    runtime: Annotated[
+        str | None,
+        typer.Option(
+            "--runtime",
+            help="Container runtime backend to use: docker or podman.",
+        ),
+    ] = None,
 ) -> None:
     """Execute a command in an agent container.
 
@@ -87,9 +94,10 @@ def exec_cmd(
         validate_services([service], companions)
         cmd = command or []
 
-        with build_compose_context(
-            workspace, host_config_service=service if host_config else None
-        ) as ctx:
+        context_kwargs = {"host_config_service": service if host_config else None}
+        if runtime is not None:
+            context_kwargs["runtime"] = runtime
+        with build_compose_context(workspace, **context_kwargs) as ctx:
             service_running = compose_is_service_running(ctx, service)
             if host_config and service_running:
                 raise ConfigurationError(
@@ -101,7 +109,7 @@ def exec_cmd(
                 "exec: service=%s runtime=%s service_running=%s "
                 "no_tty=%s (stdin_isatty=%s) command=%s",
                 service,
-                "docker",
+                ctx.runtime,
                 service_running,
                 effective_no_tty,
                 sys.stdin.isatty(),

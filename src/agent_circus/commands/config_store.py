@@ -62,6 +62,13 @@ def reset(
         bool,
         typer.Option("--force", "-f", help="Skip the confirmation prompt."),
     ] = False,
+    runtime: Annotated[
+        str | None,
+        typer.Option(
+            "--runtime",
+            help="Container runtime backend to use: docker or podman.",
+        ),
+    ] = None,
 ) -> None:
     """Delete writable config stores so the next start seeds them again."""
     workspace = workspace or get_workspace_path()
@@ -71,7 +78,8 @@ def reset(
             raise ConfigurationError("Specify exactly one agent or --all")
         agents = AVAILABLE_SERVICES if all_agents else validate_services([agent or ""])
 
-        with build_compose_context(workspace) as ctx:
+        context_kwargs = {"runtime": runtime} if runtime is not None else {}
+        with build_compose_context(workspace, **context_kwargs) as ctx:
             running = [name for name in agents if compose_is_service_running(ctx, name)]
         if running:
             raise ConfigurationError(

@@ -38,6 +38,7 @@ from .config import (
     build_host_config_override,
     build_hosts_override,
     build_llama_cpp_override,
+    build_podman_runtime_override,
     build_port_forwards_override,
     build_shadow_override,
     build_ssh_override,
@@ -60,7 +61,7 @@ from .mcp import HOST_GATEWAY_ENTRY, requires_host_gateway
 from .mcp import build_compose_override as build_mcp_compose_override
 from .mcp import managed_servers as get_managed_mcp_servers
 from .mcp import service_names as get_mcp_service_names
-from .runtime import log_runtime_diagnostics
+from .runtime import log_runtime_diagnostics, resolve_runtime, warn_if_experimental
 from .state import (
     get_agent_config_store_dir,
     get_agent_config_stores_dir,
@@ -296,6 +297,7 @@ def _ensure_host_config_dir(service: str) -> None:
 def build_compose_context(
     workspace: Path,
     host_config_service: str | None = None,
+    runtime: str | None = None,
 ) -> Iterator[ComposeContext]:
     """Load configuration and assemble a :class:`ComposeContext`.
 
@@ -307,10 +309,13 @@ def build_compose_context(
     :param workspace: Workspace path.
     :param host_config_service: Optional service whose real host config
         directory should be mounted directly instead of the project-local copy.
+    :param runtime: Optional CLI-selected runtime, overriding environment and config.
     :yields: Fully assembled :class:`ComposeContext`.
     """
     config = load_config(workspace)
-    log_runtime_diagnostics()
+    selected_runtime = resolve_runtime(runtime, config)
+    warn_if_experimental(selected_runtime)
+    log_runtime_diagnostics(selected_runtime)
     shadow = config.get("shadow", [])
     mcp_servers = config.get("mcp_servers", [])
     managed_mcp_servers = get_managed_mcp_servers(mcp_servers)
@@ -373,6 +378,7 @@ def build_compose_context(
     agent_config_mounts_override = build_agent_config_mounts_override(
         agent_config_store_dirs,
         claimed_agent_config_mounts,
+        runtime=selected_runtime,
     )
 
     ssh_override: str | None = None
@@ -465,7 +471,9 @@ def build_compose_context(
     if data_stores:
         store_dirs = [get_data_store_dir(workspace, e["name"]) for e in data_stores]
         data_base_dir = store_dirs[0].parent
-        data_store_override = build_data_store_override(data_stores, data_base_dir)
+        data_store_override = build_data_store_override(
+            data_stores, data_base_dir, runtime=selected_runtime
+        )
 
     else:
         data_base_dir = get_state_dir(workspace) / "data"
@@ -476,6 +484,9 @@ def build_compose_context(
             get_claude_mem_dir(workspace),
             get_claude_mem_services(claude_mem_config),
         )
+    podman_runtime_override = (
+        build_podman_runtime_override() if selected_runtime == "podman" else None
+    )
 
     automatic_agent_stores = [
         {
@@ -525,6 +536,7 @@ def build_compose_context(
             project_name=project_name,
             compose_file=config_dir / COMPOSE_FILE_NAME,
             cwd=config_dir,
+            runtime=selected_runtime,
             shadow_override=shadow_override,
             agent_config_mounts_override=agent_config_mounts_override,
             host_config_override=host_config_override,
@@ -542,6 +554,7 @@ def build_compose_context(
             claude_mem_override=claude_mem_override,
             port_forwards_override=port_forwards_override,
             llama_cpp_override=llama_cpp_override,
+            podman_runtime_override=podman_runtime_override,
             companion_services=companion_services,
             data_store_seeder=data_store_seeder,
         )
@@ -563,6 +576,7 @@ def build_compose_context(
                 project_name=project_name,
                 compose_file=build_context / COMPOSE_FILE_NAME,
                 cwd=build_context,
+                runtime=selected_runtime,
                 env=env,
                 shadow_override=shadow_override,
                 agent_config_mounts_override=agent_config_mounts_override,
@@ -581,5 +595,6 @@ def build_compose_context(
                 claude_mem_override=claude_mem_override,
                 port_forwards_override=port_forwards_override,
                 llama_cpp_override=llama_cpp_override,
+                podman_runtime_override=podman_runtime_override,
                 data_store_seeder=data_store_seeder,
             )

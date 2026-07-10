@@ -16,7 +16,10 @@ from agent_circus.compose import (
 )
 from agent_circus.config import build_shadow_override
 from agent_circus.exceptions import ComposeError
-from agent_circus.state import get_port_forwards_override_path
+from agent_circus.state import (
+    get_podman_runtime_override_path,
+    get_port_forwards_override_path,
+)
 
 
 def _make_ctx(tmp_path: Path) -> ComposeContext:
@@ -175,6 +178,67 @@ def test_exec_compose_writes_port_forwards_override(
     assert override_path.read_text() == override
     assert "-f" in called_cmd
     assert str(override_path) in called_cmd
+
+
+@patch("agent_circus.compose.subprocess.run")
+def test_exec_compose_writes_podman_runtime_override(
+    mock_run: MagicMock,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    override = '{"services":{"codex":{"userns_mode":"keep-id"}}}'
+    ctx = ComposeContext(
+        workspace=tmp_path / "workspace",
+        project_name="test-project",
+        compose_file=tmp_path / "compose.yaml",
+        cwd=tmp_path,
+        runtime="podman",
+        podman_runtime_override=override,
+    )
+    mock_run.return_value = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout=""
+    )
+
+    _exec_compose(["ps"], ctx, capture_output=True)
+
+    override_path = get_podman_runtime_override_path(ctx.workspace)
+    called_cmd = mock_run.call_args[0][0]
+    assert override_path.read_text() == override
+    assert "-f" in called_cmd
+    assert str(override_path) in called_cmd
+
+
+@patch("agent_circus.compose.subprocess.run")
+def test_exec_compose_uses_docker_compose_by_default(
+    mock_run: MagicMock,
+    tmp_path: Path,
+) -> None:
+    ctx = _make_ctx(tmp_path)
+    mock_run.return_value = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout=""
+    )
+
+    _exec_compose(["ps"], ctx, capture_output=True)
+
+    called_cmd = mock_run.call_args[0][0]
+    assert called_cmd[:2] == ["docker", "compose"]
+
+
+@patch("agent_circus.compose.subprocess.run")
+def test_exec_compose_uses_podman_compose_when_selected(
+    mock_run: MagicMock,
+    tmp_path: Path,
+) -> None:
+    ctx = dataclasses.replace(_make_ctx(tmp_path), runtime="podman")
+    mock_run.return_value = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout=""
+    )
+
+    _exec_compose(["ps"], ctx, capture_output=True)
+
+    called_cmd = mock_run.call_args[0][0]
+    assert called_cmd[:2] == ["podman", "compose"]
 
 
 def test_build_shadow_override_produces_valid_json() -> None:

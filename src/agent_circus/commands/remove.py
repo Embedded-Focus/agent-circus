@@ -61,6 +61,13 @@ def remove(
             help="Skip confirmation prompt.",
         ),
     ] = False,
+    runtime: Annotated[
+        str | None,
+        typer.Option(
+            "--runtime",
+            help="Container runtime backend to use: docker or podman.",
+        ),
+    ] = None,
 ) -> None:
     """Remove agent containers and associated resources.
 
@@ -104,7 +111,8 @@ def remove(
 
     try:
         typer.echo("Removing containers...")
-        with build_compose_context(workspace) as ctx:
+        context_kwargs = {"runtime": runtime} if runtime is not None else {}
+        with build_compose_context(workspace, **context_kwargs) as ctx:
             compose_down(
                 ctx,
                 services=services_to_remove if services else None,

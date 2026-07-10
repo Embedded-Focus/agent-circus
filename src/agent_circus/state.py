@@ -23,6 +23,7 @@ from .config import (
     COMPOSE_HOSTS_FILE_NAME,
     COMPOSE_LLAMA_CPP_FILE_NAME,
     COMPOSE_MCP_FILE_NAME,
+    COMPOSE_PODMAN_RUNTIME_FILE_NAME,
     COMPOSE_PORT_FORWARDS_FILE_NAME,
     COMPOSE_SHADOW_FILE_NAME,
     COMPOSE_SSH_FILE_NAME,
@@ -291,6 +292,15 @@ def get_port_forwards_override_path(workspace: Path) -> Path:
     :rtype: Path
     """
     return get_state_dir(workspace) / COMPOSE_PORT_FORWARDS_FILE_NAME
+
+
+def get_podman_runtime_override_path(workspace: Path) -> Path:
+    """Get the path for the Podman runtime compose override file.
+
+    :param workspace: Workspace path.
+    :returns: Path to ``compose.podman-runtime.json`` in the state directory.
+    """
+    return get_state_dir(workspace) / COMPOSE_PODMAN_RUNTIME_FILE_NAME
 
 
 def get_startup_hook_override_path(workspace: Path) -> Path:

@@ -30,7 +30,7 @@
 Run AI coding agents in sandboxed containers with full control over
 what they can see, reach, and inherit from your host environment.
 
-Agent Circus wraps each agent in its own Docker container, giving you
+Agent Circus wraps each agent in its own container, giving you
 a reproducible, isolated environment that works across machines and
 projects. You decide which files agents can access, secrets stay on
 the host, and a built-in firewall restricts outbound network access to
@@ -43,7 +43,7 @@ ports, and data stores are declared once in project config and applied
 across supported agents.
 
 Getting started takes two commands. No files are written to your
-project, no manual Docker setup required. Customize per-project only
+project, no manual container setup required. Customize per-project only
 when you need to.
 
 Currently supported agents:
@@ -283,6 +283,49 @@ existing `config.toml` without overwriting unrelated keys.
 | `--ca-cert-pattern TEXT` | Append a pattern to `ca_certs.patterns` (repeatable) |
 | `--env-pattern TEXT` | Append a pattern to `env_passthrough` (repeatable) |
 | `--git-worktree-mirror` | Set `git.worktree_mirror = true` and write `AGENTS.md` |
+
+### Container Runtime
+
+Docker is the default runtime. Podman is also available as an experimental
+backend through `podman compose`.
+
+Select the runtime with, in priority order:
+
+1. CLI option:
+   ``` shell
+   agent-circus up --runtime podman
+   agent-circus build --runtime docker
+   ```
+2. Environment variable:
+   ``` shell
+   AGENT_CIRCUS_RUNTIME=podman agent-circus up
+   ```
+3. Config file:
+   ``` toml
+   [runtime]
+   engine = "podman"
+   ```
+4. Default:
+   ``` text
+   docker
+   ```
+
+The CLI option always wins over the environment. For example, this uses Docker:
+
+``` shell
+AGENT_CIRCUS_RUNTIME=podman agent-circus up --runtime docker
+```
+
+When Podman is selected, Agent Circus logs an experimental support warning.
+Some Docker Compose features may behave differently under Podman Compose, so
+production use should be validated for your environment first.
+
+For Agent Circus-managed writable state, such as project-local agent config
+stores and data stores, Podman services use `userns_mode: keep-id` so rootless
+containers can access host-owned state directories without recursively changing
+host ownership with Podman's `U` volume option. Direct `--host-config` mounts
+use the same Podman user namespace behavior, but still point at the real host
+provider configuration directory.
 
 ### Shadowing Files
 
@@ -1067,7 +1110,7 @@ Works in both instant mode and deploy mode."
 
 Planned areas of work include:
 
-- Support for alternative container engines such as Podman.
+- Continued hardening of alternative container engine support.
 - A plugin mechanism that keeps core isolation features small and focused while
   making integrations easier to add, share, and select per project.
 

@@ -46,6 +46,13 @@ def up(
             help="Build images before starting containers.",
         ),
     ] = False,
+    runtime: Annotated[
+        str | None,
+        typer.Option(
+            "--runtime",
+            help="Container runtime backend to use: docker or podman.",
+        ),
+    ] = None,
 ) -> None:
     """Start agent containers.
 
@@ -70,7 +77,8 @@ def up(
         else:
             typer.echo("Starting all services...")
 
-        with build_compose_context(workspace) as ctx:
+        context_kwargs = {"runtime": runtime} if runtime is not None else {}
+        with build_compose_context(workspace, **context_kwargs) as ctx:
             compose_up(ctx, services_to_start, build=build)
 
     except AgentCircusError as e:

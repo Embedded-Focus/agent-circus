@@ -10,6 +10,7 @@ from agent_circus.config import (
     DATA_STORE_DEFAULT_MOUNT_BASE,
     build_agent_config_mounts_override,
     build_data_store_override,
+    build_podman_runtime_override,
     get_agent_config_data_stores,
     get_claimed_agent_config_mounts,
 )
@@ -38,6 +39,21 @@ def test_build_data_store_override_custom_mount_path(tmp_path: Path) -> None:
     stores = [{"name": "bashhistory", "mount_path": "/commandhistory"}]
     result = json.loads(build_data_store_override(stores, data_base_dir))
     expected_volume = f"{data_base_dir / 'bashhistory'}:/commandhistory:cached"
+    for svc in AVAILABLE_SERVICES:
+        assert expected_volume in result["services"][svc]["volumes"]
+
+
+def test_build_data_store_override_keeps_portable_mount_options_for_podman(
+    tmp_path: Path,
+) -> None:
+    data_base_dir = tmp_path / "data"
+    stores = [{"name": "memory"}]
+    result = json.loads(
+        build_data_store_override(stores, data_base_dir, runtime="podman")
+    )
+    expected_volume = (
+        f"{data_base_dir / 'memory'}:{DATA_STORE_DEFAULT_MOUNT_BASE}/memory:cached"
+    )
     for svc in AVAILABLE_SERVICES:
         assert expected_volume in result["services"][svc]["volumes"]
 
@@ -154,6 +170,32 @@ def test_build_agent_config_mounts_override_omits_claimed_mount(
         f"{tmp_path / 'claude-code'}:/home/node/.claude:cached"
         in result["services"]["claude-code"]["volumes"]
     )
+
+
+def test_build_agent_config_mounts_override_keeps_portable_mount_options_for_podman(
+    tmp_path: Path,
+) -> None:
+    store_dirs = {service: tmp_path / service for service in AVAILABLE_SERVICES}
+    result = json.loads(
+        build_agent_config_mounts_override(store_dirs, runtime="podman")
+    )
+
+    assert (
+        f"{tmp_path / 'claude-code'}:/home/node/.claude:cached"
+        in result["services"]["claude-code"]["volumes"]
+    )
+    assert (
+        f"{tmp_path / 'codex'}:/home/node/.codex:cached"
+        in result["services"]["codex"]["volumes"]
+    )
+
+
+def test_build_podman_runtime_override_uses_keep_id_user_namespace() -> None:
+    result = json.loads(build_podman_runtime_override())
+
+    assert set(result["services"]) == set(AVAILABLE_SERVICES)
+    for service in AVAILABLE_SERVICES:
+        assert result["services"][service]["userns_mode"] == "keep-id"
 
 
 def test_get_claimed_agent_config_mounts() -> None:

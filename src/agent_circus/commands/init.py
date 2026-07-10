@@ -66,6 +66,13 @@ def init(
             help="Start containers after initialization.",
         ),
     ] = False,
+    runtime: Annotated[
+        str | None,
+        typer.Option(
+            "--runtime",
+            help="Container runtime backend to use with --up: docker or podman.",
+        ),
+    ] = None,
     ssh: Annotated[
         bool,
         typer.Option(
@@ -187,6 +194,10 @@ def init(
     if shadow is None:
         shadow = []
     workspace = workspace or get_workspace_path()
+    shadow = shadow or []
+    hosts_pattern = hosts_pattern or []
+    ca_cert_pattern = ca_cert_pattern or []
+    env_pattern = env_pattern or []
 
     _apply_config_options(
         workspace,
@@ -225,7 +236,7 @@ def init(
         _init_config(workspace)
 
     if up:
-        up_command(workspace=workspace)
+        up_command(workspace=workspace, runtime=runtime)
 
 
 def _apply_config_options(
