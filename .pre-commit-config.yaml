@@ -6,14 +6,13 @@ repos:
   - id: ruff-check
     args: [--fix]
   - id: ruff-format
-- repo: local
+- repo: https://github.com/astral-sh/ty-pre-commit
+  # ty version.
+  rev: v0.0.58
   hooks:
   - id: ty
-    name: ty check
-    entry: ty check
-    language: system
-    types: [python]
-    pass_filenames: false
+- repo: local
+  hooks:
   - id: pytest
     name: pytest
     entry: uv run pytest
