@@ -10,12 +10,14 @@ readme = "README.md"
 requires-python = "==3.14.*"
 dependencies = [
     "docker>=7.0.0",
+    "pygithub>=2.9.1",
     "tomli-w>=1.2.0",
     "typer>=0.21.1",
 ]
 
 [project.scripts]
 agent-circus = "agent_circus.cli:run_cli"
+agent-circus-update-templates = "agent_circus.update_versions:run"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_circus"]
