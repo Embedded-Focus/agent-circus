@@ -1,3 +1,9 @@
 eval "$(devenv direnvrc)"
 
 use devenv
+
+if [ -f .env.enc ]; then
+    set -a
+    eval $(sops --decrypt --input-type dotenv --output-type dotenv .env.enc)
+    set +a
+fi
