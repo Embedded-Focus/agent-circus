@@ -1,4 +1,26 @@
+<div align="center">
+
+<img src="assets/agent_circus_logo.png" alt="AI Agents Circus" width="260">
+
 # AI Agents Circus
+
+*Run AI coding agents in disposable Docker sandboxes, not your workstation.*
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.14](https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white)](pyproject.toml)
+[![Docker](https://img.shields.io/badge/Docker-required-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![uv](https://img.shields.io/badge/uv-supported-DE5FE9)](https://docs.astral.sh/uv/)
+[![Last commit](https://img.shields.io/github/last-commit/Embedded-Focus/agent-circus?logo=github)](https://github.com/Embedded-Focus/agent-circus/commits/main)
+![Agents: Claude Code · Codex · Vibe CLI · OpenCode](https://img.shields.io/badge/agents-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Vibe%20CLI%20%C2%B7%20OpenCode-lightgrey)
+
+**[Getting Started](#getting-started)** ·
+**[Open Protocols](#open-protocols)** ·
+**[Authentication](#authentication)** ·
+**[Configuration](#configuration)** ·
+**[Hooks](#hooks)** ·
+**[Editors](#setting-up-editors-to-work-with-acp)**
+
+</div>
 
 Run AI coding agents in sandboxed containers with full control over
 what they can see and reach.
@@ -30,7 +52,7 @@ between editors and coding agents, while MCP provides a standard way
 to connect tools and services into agent workflows.
 
 <p align="center">
-  <img src="./open_protocols.svg" alt="Open protocols map showing ACP and MCP relationships" width="680" />
+  <img src="assets/open_protocols.svg" alt="Open protocols map showing ACP and MCP relationships" width="680" />
 </p>
 
 ## Authentication
