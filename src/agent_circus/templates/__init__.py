@@ -14,6 +14,17 @@ TEMPLATE_MAPPINGS = [
     ("agent-circus", ".agent-circus"),
 ]
 
+IGNORED_TEMPLATE_NAMES = frozenset(
+    {
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".venv",
+        "__pycache__",
+        "venv",
+    }
+)
+
 
 def _deploy_dir(
     src_dir: Path,
@@ -34,6 +45,9 @@ def _deploy_dir(
     """
     dst_dir.mkdir(exist_ok=True)
     for item in src_dir.iterdir():
+        if item.name in IGNORED_TEMPLATE_NAMES:
+            continue
+
         dst_item = dst_dir / item.name
         if dst_item.exists() and not force:
             continue

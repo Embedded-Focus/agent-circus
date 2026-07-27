@@ -9,6 +9,7 @@ def test_deploy_templates_copies_files(tmp_path: Path) -> None:
     assert len(deployed) > 0
     for path in deployed:
         assert path.is_file()
+    assert not (tmp_path / ".agent-circus" / ".venv").exists()
 
 
 def test_deploy_templates_skips_existing(tmp_path: Path) -> None:
