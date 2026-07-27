@@ -162,9 +162,11 @@ def test_deploy_mode_warns_on_config_build_hooks(
 
     import logging
 
-    with caplog.at_level(logging.WARNING, logger="agent_circus.context"):
-        with build_compose_context(tmp_path):
-            pass
+    with (
+        caplog.at_level(logging.WARNING, logger="agent_circus.context"),
+        build_compose_context(tmp_path),
+    ):
+        pass
     assert any("deploy mode" in msg for msg in caplog.messages)
 
 

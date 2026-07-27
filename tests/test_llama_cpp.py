@@ -153,7 +153,7 @@ class TestBuildAgentConfigAdditionsLlamaCpp:
     def test_context_size_reflected_in_model_limit(self) -> None:
         cfg = {"llama_cpp": {"context_size": 8192}}
         result = build_agent_config_additions(cfg)
-        model_id = list(result["opencode"]["provider"]["llama.cpp"]["models"])[0]
+        model_id = next(iter(result["opencode"]["provider"]["llama.cpp"]["models"]))
         limit = result["opencode"]["provider"]["llama.cpp"]["models"][model_id]["limit"]
         assert limit["context"] == 8192
         assert limit["output"] == 8192

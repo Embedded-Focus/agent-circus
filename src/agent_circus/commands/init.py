@@ -96,12 +96,12 @@ def init(
         ),
     ] = None,
     shadow: Annotated[
-        list[str],
+        list[str] | None,
         typer.Option(
             "--shadow",
             help="Shadow a workspace-relative path with /dev/null (repeatable).",
         ),
-    ] = [],
+    ] = None,
     git: Annotated[
         bool,
         typer.Option(
@@ -132,30 +132,30 @@ def init(
         ),
     ] = None,
     hosts_pattern: Annotated[
-        list[str],
+        list[str] | None,
         typer.Option(
             "--hosts-pattern",
             help="Forward /etc/hosts entries matching this pattern (repeatable). "
             "Glob by default; prefix with 're:' for regex.",
         ),
-    ] = [],
+    ] = None,
     ca_cert_pattern: Annotated[
-        list[str],
+        list[str] | None,
         typer.Option(
             "--ca-cert-pattern",
             help="Forward CA certificates from /usr/local/share/ca-certificates "
             "whose filename matches this pattern (repeatable). "
             "Glob by default; prefix with 're:' for regex.",
         ),
-    ] = [],
+    ] = None,
     env_pattern: Annotated[
-        list[str],
+        list[str] | None,
         typer.Option(
             "--env-pattern",
             help="Forward host environment variables whose name matches this pattern "
             "(repeatable). Glob by default; prefix with 're:' for regex.",
         ),
-    ] = [],
+    ] = None,
     git_worktree_mirror: Annotated[
         bool,
         typer.Option(
@@ -178,6 +178,14 @@ def init(
     --git-worktree-mirror to write configuration options to
     .agent-circus/config.toml without a full deploy.
     """
+    if env_pattern is None:
+        env_pattern = []
+    if ca_cert_pattern is None:
+        ca_cert_pattern = []
+    if hosts_pattern is None:
+        hosts_pattern = []
+    if shadow is None:
+        shadow = []
     workspace = workspace or get_workspace_path()
 
     _apply_config_options(

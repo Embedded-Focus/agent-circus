@@ -83,6 +83,8 @@ def test_ssh_config_present_without_agent_raises(tmp_path, monkeypatch) -> None:
 
     from agent_circus.context import build_compose_context
 
-    with pytest.raises(ConfigurationError, match="SSH_AUTH_SOCK"):
-        with build_compose_context(tmp_path):
-            pass
+    with (
+        pytest.raises(ConfigurationError, match="SSH_AUTH_SOCK"),
+        build_compose_context(tmp_path),
+    ):
+        pass
