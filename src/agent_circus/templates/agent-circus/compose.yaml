@@ -33,7 +33,7 @@ services:
         <<: *common-build-args
         CLAUDE_CODE_VERSION: 2.1.220
         # https://github.com/agentclientprotocol/claude-agent-acp
-        CLAUDE_AGENT_ACP_VERSION: 0.64.0
+        CLAUDE_AGENT_ACP_VERSION: 0.64.2
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
     - ${HOME}/.cache:/home/node/.cache
@@ -53,7 +53,7 @@ services:
         # https://github.com/openai/codex
         CODEX_VERSION: 0.146.0
         # https://github.com/agentclientprotocol/codex-acp
-        CODEX_ACP_VERSION: 1.1.8
+        CODEX_ACP_VERSION: 1.1.9
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
     - ${HOME}/.cache:/home/node/.cache
