@@ -69,12 +69,6 @@ PINS: list[VersionPin] = [
         pattern=re.compile(r"ghcr\.io/astral-sh/uv:(\S+)"),
     ),
     VersionPin(
-        name="git-delta",
-        repo="dandavison/delta",
-        file=TEMPLATE_DIR / "compose.yaml",
-        pattern=re.compile(r"GIT_DELTA_VERSION:\s*(\S+)"),
-    ),
-    VersionPin(
         name="zsh-in-docker",
         repo="deluan/zsh-in-docker",
         file=TEMPLATE_DIR / "compose.yaml",

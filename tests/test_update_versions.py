@@ -121,25 +121,29 @@ def test_build_report_records_error_and_continues(
 
 
 def test_apply_changes_only_writes_outdated_files(tmp_path: Path) -> None:
-    shutil.copytree(TEMPLATE_DIR, tmp_path / "agent-circus")
+    shutil.copytree(
+        TEMPLATE_DIR,
+        tmp_path / "agent-circus",
+        ignore=shutil.ignore_patterns(".venv"),
+    )
     dockerfile = tmp_path / "agent-circus" / "Dockerfile"
     compose = tmp_path / "agent-circus" / "compose.yaml"
 
     mcp_pin = next(p for p in PINS if p.name == "mcp-inspector")
-    delta_pin = next(p for p in PINS if p.name == "git-delta")
+    opencode_pin = next(p for p in PINS if p.name == "opencode")
 
     local_mcp_pin = replace(mcp_pin, file=dockerfile)
-    local_delta_pin = replace(delta_pin, file=compose)
+    local_opencode_pin = replace(opencode_pin, file=compose)
 
     current_mcp = read_current_version(dockerfile.read_text(), local_mcp_pin)
-    current_delta = read_current_version(compose.read_text(), local_delta_pin)
+    current_opencode = read_current_version(compose.read_text(), local_opencode_pin)
 
     results = [
         PinResult(
             pin=local_mcp_pin, current=current_mcp, latest=current_mcp
         ),  # unchanged
         PinResult(
-            pin=local_delta_pin, current=current_delta, latest="999.0.0"
+            pin=local_opencode_pin, current=current_opencode, latest="999.0.0"
         ),  # outdated
     ]
 
@@ -148,7 +152,7 @@ def test_apply_changes_only_writes_outdated_files(tmp_path: Path) -> None:
 
     assert changed == [compose]
     assert dockerfile.read_text() == dockerfile_mtime_before
-    assert read_current_version(compose.read_text(), local_delta_pin) == "999.0.0"
+    assert read_current_version(compose.read_text(), local_opencode_pin) == "999.0.0"
 
 
 def test_sync_template_lockfile_invokes_uv_sync_in_template_dir(
