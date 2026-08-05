@@ -1,7 +1,6 @@
 ---
 x-common-build-args: &common-build-args
   TZ: ${TZ:-Europe/Vienna}
-  ZSH_IN_DOCKER_VERSION: 1.2.1
 
 x-common-build: &common-build
   context: .

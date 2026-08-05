@@ -69,13 +69,6 @@ PINS: list[VersionPin] = [
         pattern=re.compile(r"ghcr\.io/astral-sh/uv:(\S+)"),
     ),
     VersionPin(
-        name="zsh-in-docker",
-        repo="deluan/zsh-in-docker",
-        file=TEMPLATE_DIR / "compose.yaml",
-        pattern=re.compile(r"ZSH_IN_DOCKER_VERSION:\s*(\S+)"),
-        strip_prefix="v",
-    ),
-    VersionPin(
         name="claude-code",
         repo="anthropics/claude-code",
         file=TEMPLATE_DIR / "compose.yaml",
