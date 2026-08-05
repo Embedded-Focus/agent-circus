@@ -25,6 +25,28 @@ Always prefix any python-related command with `uv run`, e.g.:
 - Collect tests: `uv run pytest --co`
 - Lint/format: `uv run ruff check`, `uv run ruff format --check`, `uv run ty check`
 
+## Commit Messages
+
+For agent template dependency update commits, use this format:
+
+```text
+chore: update agent template dependencies
+
+Updated versions:
+
+- <tool>: <old> -> <new>
+
+Python dependency updates:
+
+- <package>: <old> -> <new>
+
+Signed-off-by: <name> <email>
+```
+
+- Omit a section if there are no entries for it.
+- Use the package/tool names as they appear in the project where practical, preserving established capitalization from previous dependency update commits.
+- Include transitive Python dependency changes from `uv.lock` under "Python dependency updates".
+
 ## Testing Patterns
 
 - Naming: `test_<feature>_<scenario>.py`, test functions `test_<action>_<expected_outcome>`
