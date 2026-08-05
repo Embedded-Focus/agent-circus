@@ -3,8 +3,6 @@ FROM node:26-trixie AS base
 ARG TZ
 ENV TZ="$TZ"
 
-ARG MCP_INSPECTOR_VERSION=2.0.0
-
 # Install basic development tools and iptables/ipset
 RUN apt-get update && apt-get install -y --no-install-recommends \
   ca-certificates \
@@ -100,11 +98,6 @@ RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/install-ca-certs.sh 
 COPY --from=ghcr.io/astral-sh/uv:0.12.1 /uv /uvx /usr/local/bin/
 RUN curl -L https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_linux_amd64 -o /usr/local/bin/yq \
     && chmod a+x /usr/local/bin/yq
-
-USER node
-
-RUN npm install -g \
-    @modelcontextprotocol/inspector@${MCP_INSPECTOR_VERSION}
 
 # Hook: user-level customization (e.g. npm packages, uv/pip tools)
 COPY --chown=node:node hooks/base-user.sh /tmp/hook-base-user.sh

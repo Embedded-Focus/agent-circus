@@ -51,12 +51,6 @@ class VersionPin:
 
 PINS: list[VersionPin] = [
     VersionPin(
-        name="mcp-inspector",
-        repo="modelcontextprotocol/inspector",
-        file=TEMPLATE_DIR / "Dockerfile",
-        pattern=re.compile(r"ARG MCP_INSPECTOR_VERSION=(\S+)"),
-    ),
-    VersionPin(
         name="yq",
         repo="mikefarah/yq",
         file=TEMPLATE_DIR / "Dockerfile",

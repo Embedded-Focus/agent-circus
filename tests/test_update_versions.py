@@ -129,19 +129,17 @@ def test_apply_changes_only_writes_outdated_files(tmp_path: Path) -> None:
     dockerfile = tmp_path / "agent-circus" / "Dockerfile"
     compose = tmp_path / "agent-circus" / "compose.yaml"
 
-    mcp_pin = next(p for p in PINS if p.name == "mcp-inspector")
+    yq_pin = next(p for p in PINS if p.name == "yq")
     opencode_pin = next(p for p in PINS if p.name == "opencode")
 
-    local_mcp_pin = replace(mcp_pin, file=dockerfile)
+    local_yq_pin = replace(yq_pin, file=dockerfile)
     local_opencode_pin = replace(opencode_pin, file=compose)
 
-    current_mcp = read_current_version(dockerfile.read_text(), local_mcp_pin)
+    current_yq = read_current_version(dockerfile.read_text(), local_yq_pin)
     current_opencode = read_current_version(compose.read_text(), local_opencode_pin)
 
     results = [
-        PinResult(
-            pin=local_mcp_pin, current=current_mcp, latest=current_mcp
-        ),  # unchanged
+        PinResult(pin=local_yq_pin, current=current_yq, latest=current_yq),  # unchanged
         PinResult(
             pin=local_opencode_pin, current=current_opencode, latest="999.0.0"
         ),  # outdated
