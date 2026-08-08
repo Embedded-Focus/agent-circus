@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 DOTENV        := .env
 
-.PHONY: help test lint format check-format type-check pre-commit update-templates update-templates-apply sops-edit sops-decrypt sops-encrypt sops-updatekeys
+.PHONY: help test lint format check-format type-check pre-commit update-templates update-templates-dryrun sops-edit sops-decrypt sops-encrypt sops-updatekeys
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-24s\033[0m %s\n", $$1, $$2}'
@@ -24,10 +24,10 @@ type-check: ## Run type checks
 pre-commit: ## Run pre-commit hooks on all tracked files
 	uv run pre-commit run --all-files
 
-update-templates: ## Print current vs. latest pinned versions in the agent-circus template
+update-templates-dryrun: ## Print current vs. latest pinned versions in the agent-circus template
 	uv run agent-circus-update-templates
 
-update-templates-apply: ## Write latest pinned versions into the agent-circus template
+update-templates: ## Write latest pinned versions into the agent-circus template
 	uv run agent-circus-update-templates --apply
 
 sops-edit: ## Edit a SOPS-encrypted file
