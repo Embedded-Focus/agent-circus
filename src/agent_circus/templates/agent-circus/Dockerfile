@@ -95,7 +95,7 @@ RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/install-ca-certs.sh 
   chmod 0440 /etc/sudoers.d/node-firewall
 
 # install additional tools
-COPY --from=ghcr.io/astral-sh/uv:0.12.1 /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /uvx /usr/local/bin/
 RUN curl -L https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_linux_amd64 -o /usr/local/bin/yq \
     && chmod a+x /usr/local/bin/yq
 
