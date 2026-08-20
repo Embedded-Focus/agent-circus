@@ -1,4 +1,4 @@
-"""Utility functions for remove_containers."""
+"""Utility functions for agent-circus."""
 
 import logging
 import sys
@@ -13,11 +13,11 @@ def setup_logging(
 
     :param level: Log level name (DEBUG, INFO, WARNING, ERROR, CRITICAL).
     :param log_file: Optional path to a log file. When set, logs are written
-        to both stdout and the file.
+        to both stderr and the file.
     :returns: None
     :rtype: None
     """
-    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stderr)]
     if log_file is not None:
         handlers.append(logging.FileHandler(log_file))
 

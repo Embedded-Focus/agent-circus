@@ -291,6 +291,7 @@ def compose_up(
     services: list[str] | None = None,
     detach: bool = True,
     build: bool = False,
+    capture_output: bool = False,
 ) -> None:
     """Start services using docker compose.
 
@@ -298,6 +299,7 @@ def compose_up(
     :param services: Services to start, or ``None`` for all.
     :param detach: Run in detached mode.
     :param build: Build images before starting.
+    :param capture_output: Capture stdout/stderr instead of streaming.
     :raises ComposeError: If up fails.
     """
     args = ["up"]
@@ -311,7 +313,7 @@ def compose_up(
     logger.info("Starting services: %s", ", ".join(services or ["all"]))
     if ctx.data_store_seeder:
         ctx.data_store_seeder()
-    _exec_compose(args, ctx)
+    _exec_compose(args, ctx, capture_output=capture_output)
 
 
 def compose_down(

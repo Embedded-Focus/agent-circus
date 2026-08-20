@@ -52,7 +52,7 @@ def test_exec_starts_service_when_not_running(
 
     assert result.exit_code == 0
     mock_is_running.assert_called_once_with(ctx, "claude-code")
-    mock_up.assert_called_once_with(ctx, ["claude-code"])
+    mock_up.assert_called_once_with(ctx, ["claude-code"], capture_output=True)
     mock_exec.assert_called_once_with(
         ctx, "claude-code", ["echo", "hello"], no_tty=True
     )
@@ -117,7 +117,7 @@ def test_exec_auto_up_starts_only_requested_service(
     )
 
     assert result.exit_code == 0
-    mock_up.assert_called_once_with(ctx, ["codex"])
+    mock_up.assert_called_once_with(ctx, ["codex"], capture_output=True)
 
 
 @patch("agent_circus.commands.exec_.compose_exec")
@@ -153,7 +153,7 @@ def test_exec_host_config_passes_service_to_context(
     assert result.exit_code == 0
     mock_build_ctx.assert_called_once_with(tmp_path, host_config_service="codex")
     mock_is_running.assert_called_once_with(ctx, "codex")
-    mock_up.assert_called_once_with(ctx, ["codex"])
+    mock_up.assert_called_once_with(ctx, ["codex"], capture_output=True)
     mock_exec.assert_called_once_with(ctx, "codex", ["codex", "login"], no_tty=True)
 
 

@@ -4,6 +4,7 @@ Note: exec is a reserved keyword; that's why this module is called exec_.
 """
 
 import logging
+import sys
 from pathlib import Path
 from typing import Annotated
 
@@ -90,11 +91,15 @@ def exec_cmd(
                     f"Cannot use --host-config because {service} is already running. "
                     f"Remove it first with: agent-circus remove {service}"
                 )
+            effective_no_tty = no_tty or not sys.stdin.isatty()
             if not service_running:
-                typer.echo(f"Service {service} is not running. Starting it...")
-                compose_up(ctx, [service])
+                typer.echo(
+                    f"Service {service} is not running. Starting it...",
+                    err=True,
+                )
+                compose_up(ctx, [service], capture_output=True)
 
-            compose_exec(ctx, service, cmd, no_tty=no_tty)
+            compose_exec(ctx, service, cmd, no_tty=effective_no_tty)
     except AgentCircusError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
