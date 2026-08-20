@@ -96,7 +96,7 @@ RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/install-ca-certs.sh 
 
 # install additional tools
 COPY --from=ghcr.io/astral-sh/uv:0.12.5 /uv /uvx /usr/local/bin/
-RUN curl -L https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_linux_amd64 -o /usr/local/bin/yq \
+RUN curl -L https://github.com/mikefarah/yq/releases/download/v4.53.6/yq_linux_amd64 -o /usr/local/bin/yq \
     && chmod a+x /usr/local/bin/yq
 
 # Hook: user-level customization (e.g. npm packages, uv/pip tools)
