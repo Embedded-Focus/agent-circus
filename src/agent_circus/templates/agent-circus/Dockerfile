@@ -100,6 +100,7 @@ RUN curl -L https://github.com/mikefarah/yq/releases/download/v4.53.6/yq_linux_a
     && chmod a+x /usr/local/bin/yq
 
 # Hook: user-level customization (e.g. npm packages, uv/pip tools)
+USER node
 COPY --chown=node:node hooks/base-user.sh /tmp/hook-base-user.sh
 RUN if [ -s /tmp/hook-base-user.sh ]; then bash /tmp/hook-base-user.sh; fi \
     && rm -f /tmp/hook-base-user.sh

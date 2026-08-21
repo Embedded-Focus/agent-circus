@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from agent_circus.templates import deploy_templates
+from agent_circus.templates import deploy_templates, template_dir_context
 
 
 def test_deploy_templates_copies_files(tmp_path: Path) -> None:
@@ -33,3 +33,18 @@ def test_deploy_templates_includes_hooks_dir(tmp_path: Path) -> None:
     assert hooks_dir.is_dir()
     assert (hooks_dir / "base-root.sh").is_file()
     assert (hooks_dir / "base-user.sh").is_file()
+
+
+def test_base_user_hook_runs_after_switching_to_node() -> None:
+    with template_dir_context() as template_dir:
+        dockerfile = (template_dir / "Dockerfile").read_text()
+
+    hook_run_index = dockerfile.index("bash /tmp/hook-base-user.sh")
+    before_hook_run = dockerfile[:hook_run_index]
+    last_user_line = [
+        line.strip()
+        for line in before_hook_run.splitlines()
+        if line.startswith("USER ")
+    ][-1]
+
+    assert last_user_line == "USER node"
