@@ -29,7 +29,7 @@ services:
       target: claude-code
       args:
         <<: *common-build-args
-        CLAUDE_CODE_VERSION: 2.1.250
+        CLAUDE_CODE_VERSION: 2.1.251
         # https://github.com/agentclientprotocol/claude-agent-acp
         CLAUDE_AGENT_ACP_VERSION: 0.70.0
     volumes:
