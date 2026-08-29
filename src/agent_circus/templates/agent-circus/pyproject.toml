@@ -8,3 +8,6 @@ dependencies = [
     # https://github.com/mistralai/mistral-vibe
     "mistral-vibe>=2.24.5",
 ]
+
+[tool.uv]
+preview-features = ["audit-command"]

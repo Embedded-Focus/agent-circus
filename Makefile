@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 DOTENV        := .env
 
-.PHONY: help test lint format check-format type-check pre-commit update-templates update-templates-dryrun sops-edit sops-decrypt sops-encrypt sops-updatekeys
+.PHONY: help test lint format check-format type-check check audit pre-commit update-templates update-templates-dryrun sops-edit sops-decrypt sops-encrypt sops-updatekeys
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-24s\033[0m %s\n", $$1, $$2}'
@@ -20,6 +20,12 @@ check-format: ## Check Python formatting with Ruff
 
 type-check: ## Run type checks
 	uv run ty check
+
+check: check-format lint type-check test ## Run all checks
+
+audit: ## Audit locked Python dependencies
+	uv audit --locked
+	uv --directory src/agent_circus/templates/agent-circus audit --locked
 
 pre-commit: ## Run pre-commit hooks on all tracked files
 	uv run pre-commit run --all-files

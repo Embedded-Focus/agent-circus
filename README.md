@@ -7,6 +7,9 @@
 *Run AI coding agents in disposable Docker sandboxes, not your workstation.*
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/Embedded-Focus/agent-circus/actions/workflows/ci.yml/badge.svg)](https://github.com/Embedded-Focus/agent-circus/actions/workflows/ci.yml)
+[![Security](https://github.com/Embedded-Focus/agent-circus/actions/workflows/security.yml/badge.svg)](https://github.com/Embedded-Focus/agent-circus/actions/workflows/security.yml)
+[![Dependabot](https://img.shields.io/badge/dependabot-enabled-025e8c?logo=dependabot)](https://github.com/Embedded-Focus/agent-circus/security/dependabot)
 [![Python 3.14](https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white)](pyproject.toml)
 [![Docker](https://img.shields.io/badge/Docker-required-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 [![uv](https://img.shields.io/badge/uv-supported-DE5FE9)](https://docs.astral.sh/uv/)

@@ -1,0 +1,38 @@
+name: Security
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  schedule:
+    - cron: "27 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  uv-audit:
+    name: uv audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+          version: latest-known
+
+      - name: Install Python
+        run: uv python install 3.14
+
+      - name: Audit locked dependencies
+        run: make audit

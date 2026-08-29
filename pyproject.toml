@@ -22,6 +22,9 @@ agent-circus-update-templates = "agent_circus.update_versions:run"
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_circus"]
 
+[tool.uv]
+preview-features = ["audit-command"]
+
 [dependency-groups]
 dev = [
     "hatchling>=1.28.0",
