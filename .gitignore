@@ -169,6 +169,7 @@ cython_debug/
 
 # others
 .direnv/
+.devenv/
 
 # Node
 node_modules/
