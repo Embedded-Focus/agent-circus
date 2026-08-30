@@ -401,6 +401,62 @@ of `model` — for example, `gemma-3-1b-it-Q4_K_M.gguf` becomes
 > `[llama_cpp]` is present, but the provider injection only targets the
 > `opencode` service. Other agents are unaffected.
 
+### Claude-Mem (Claude Code)
+
+Add a `[claude_mem]` table to `config.toml` to enable
+[Claude-Mem](https://docs.claude-mem.ai/) for Claude Code. Claude-Mem captures
+observations from Claude Code sessions and makes project knowledge available to
+future sessions.
+
+``` toml
+[claude_mem]
+enabled = true
+```
+
+When enabled, Agent Circus:
+
+1. Mounts a workspace-scoped Claude-Mem data directory at
+   `/home/node/.claude-mem`.
+2. Sets `CLAUDE_MEM_DATA_DIR=/home/node/.claude-mem` for the `claude-code`
+   service.
+3. Runs Claude-Mem setup idempotently when the `claude-code` container starts.
+4. Starts the Claude-Mem worker if it is not already running.
+
+Claude-Mem data is stored under
+`~/.local/state/agent-circus/<project>/data/claude-mem/` on the host. Each
+workspace gets its own memory store, so knowledge from different projects or
+customers is not mixed. Disabling `[claude_mem]` stops mounting and starting
+Claude-Mem, but does not delete the existing memory data.
+
+Fields:
+
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `enabled` | no | `false` | Enable Claude-Mem for supported services |
+| `scope` | no | `workspace` | Memory scope; currently only `workspace` is supported |
+| `services` | no | `["claude-code"]` | Services that receive Claude-Mem; currently only `claude-code` is supported |
+
+Claude-Mem uses its own default provider configuration. If you configure
+provider API keys with Claude-Mem, forward them with `env_passthrough` so secret
+values remain outside Agent Circus config files.
+
+``` toml
+env_passthrough = ["CLAUDE_MEM_GEMINI_API_KEY", "CLAUDE_MEM_OPENROUTER_API_KEY"]
+```
+
+> **Claude Code only.** Claude-Mem support currently targets the `claude-code`
+> service. Other supported Claude-Mem IDEs and CLIs are not wired up by Agent
+> Circus yet.
+
+> **Rebuild required**: Claude-Mem and Bun are installed in the `claude-code`
+> image. Run `agent-circus build claude-code` after enabling `[claude_mem]` for
+> the first time or after updating Agent Circus.
+
+> **Host config isolation**: `agent-circus exec claude-code --host-config` is
+> rejected while `[claude_mem].enabled = true`, because Claude-Mem setup writes
+> Claude Code plugin files and should only modify the workspace-local config
+> store.
+
 ### Additional Directories
 
 Use the `[[additional_dirs]]` array to mount extra host directories into

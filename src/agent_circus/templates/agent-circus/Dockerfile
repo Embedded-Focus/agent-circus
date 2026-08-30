@@ -82,10 +82,10 @@ ENV EDITOR=nano
 ENV VISUAL=nano
 
 # Copy and set up firewall and CA cert scripts
-COPY init-firewall.sh install-ca-certs.sh /usr/local/bin/
+COPY init-firewall.sh install-ca-certs.sh setup-claude-mem.sh /usr/local/bin/
 COPY docker-entrypoint.sh /
 USER root
-RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/install-ca-certs.sh && \
+RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/install-ca-certs.sh /usr/local/bin/setup-claude-mem.sh && \
   { \
     echo 'Defaults env_keep += "AGENT_TYPE"'; \
     echo 'Defaults secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"'; \
@@ -115,7 +115,9 @@ ARG CLAUDE_AGENT_ACP_VERSION
 
 RUN npm install -g \
     @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
-    @agentclientprotocol/claude-agent-acp@${CLAUDE_AGENT_ACP_VERSION}
+    @agentclientprotocol/claude-agent-acp@${CLAUDE_AGENT_ACP_VERSION} \
+    bun@1.4.0 \
+    claude-mem@13.18.0
 
 FROM base AS codex
 

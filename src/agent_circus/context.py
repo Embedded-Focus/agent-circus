@@ -28,6 +28,7 @@ from .config import (
     build_agent_config_additions,
     build_agent_config_mounts_override,
     build_ca_certs_override,
+    build_claude_mem_override,
     build_data_store_override,
     build_env_dockerfile_lines,
     build_env_passthrough_override,
@@ -45,6 +46,7 @@ from .config import (
     filter_hosts,
     get_agent_config_data_stores,
     get_claimed_agent_config_mounts,
+    get_claude_mem_services,
     get_companion_services,
     load_config,
     match_files,
@@ -61,6 +63,7 @@ from .mcp import service_names as get_mcp_service_names
 from .state import (
     get_agent_config_store_dir,
     get_agent_config_stores_dir,
+    get_claude_mem_dir,
     get_data_store_dir,
     get_startup_hook_path,
     get_state_dir,
@@ -317,8 +320,17 @@ def build_compose_context(
     ssh_config = config.get("ssh")
     git_config = config.get("git")
     llama_cpp_config = config.get("llama_cpp")
+    claude_mem_config = config.get("claude_mem")
     companion_services = tuple(get_companion_services(config))
     agent_config_additions = build_agent_config_additions(config)
+    claude_mem_enabled = bool(
+        claude_mem_config and claude_mem_config.get("enabled", False)
+    )
+    if claude_mem_enabled and host_config_service == "claude-code":
+        raise ConfigurationError(
+            "Cannot use --host-config for claude-code when claude_mem is enabled; "
+            "Claude-Mem setup must write to the workspace-scoped config store"
+        )
 
     # Build override strings (None when not needed).
     shadow_override = build_shadow_override(shadow) if shadow else None
@@ -456,6 +468,13 @@ def build_compose_context(
     else:
         data_base_dir = get_state_dir(workspace) / "data"
 
+    claude_mem_override: str | None = None
+    if claude_mem_enabled:
+        claude_mem_override = build_claude_mem_override(
+            get_claude_mem_dir(workspace),
+            get_claude_mem_services(claude_mem_config),
+        )
+
     automatic_agent_stores = [
         {
             "name": service,
@@ -518,6 +537,7 @@ def build_compose_context(
             startup_hook_override=startup_hook_override,
             git_worktree_mirror_override=git_worktree_mirror_override,
             data_store_override=data_store_override,
+            claude_mem_override=claude_mem_override,
             port_forwards_override=port_forwards_override,
             llama_cpp_override=llama_cpp_override,
             companion_services=companion_services,
@@ -556,6 +576,7 @@ def build_compose_context(
                 startup_hook_override=startup_hook_override,
                 git_worktree_mirror_override=git_worktree_mirror_override,
                 data_store_override=data_store_override,
+                claude_mem_override=claude_mem_override,
                 port_forwards_override=port_forwards_override,
                 llama_cpp_override=llama_cpp_override,
                 data_store_seeder=data_store_seeder,

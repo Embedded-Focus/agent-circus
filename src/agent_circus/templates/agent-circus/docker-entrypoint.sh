@@ -52,4 +52,6 @@ if [[ -s /workspace/.agent-circus/hooks/startup.sh ]]; then
   bash /workspace/.agent-circus/hooks/startup.sh
 fi
 
+/usr/local/bin/setup-claude-mem.sh
+
 exec "${@}"

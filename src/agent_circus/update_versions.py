@@ -77,6 +77,20 @@ PINS: list[VersionPin] = [
         strip_prefix="v",
     ),
     VersionPin(
+        name="bun",
+        repo="oven-sh/bun",
+        file=TEMPLATE_DIR / "Dockerfile",
+        pattern=re.compile(r"bun@([0-9.]+)"),
+        strip_prefix="bun-v",
+    ),
+    VersionPin(
+        name="claude-mem",
+        repo="thedotmack/claude-mem",
+        file=TEMPLATE_DIR / "Dockerfile",
+        pattern=re.compile(r"claude-mem@([0-9.]+)"),
+        strip_prefix="v",
+    ),
+    VersionPin(
         name="codex",
         repo="openai/codex",
         file=TEMPLATE_DIR / "compose.yaml",

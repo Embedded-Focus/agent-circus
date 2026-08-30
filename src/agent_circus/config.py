@@ -50,6 +50,8 @@ COMPOSE_PORT_FORWARDS_FILE_NAME = "compose.port-forwards.json"
 
 COMPOSE_LLAMA_CPP_FILE_NAME = "compose.llama-cpp.json"
 
+COMPOSE_CLAUDE_MEM_FILE_NAME = "compose.claude-mem.json"
+
 LLAMA_CPP_IMAGE = "ghcr.io/ggml-org/llama.cpp:server"
 LLAMA_CPP_DEFAULT_MODEL = "ggml-org/gemma-3-1b-it-GGUF/gemma-3-1b-it-Q4_K_M.gguf"
 LLAMA_CPP_DEFAULT_MODELS_CACHE = "${HOME}/.cache/huggingface"
@@ -58,6 +60,10 @@ LLAMA_CPP_CONTAINER_MODELS_PATH = "/models"
 LLAMA_CPP_PORT = 8080
 
 DATA_STORE_DEFAULT_MOUNT_BASE = "/home/node/.local/share/agent-circus"
+
+CLAUDE_MEM_CONTAINER_DATA_DIR = "/home/node/.claude-mem"
+
+CLAUDE_MEM_SUPPORTED_SERVICES = ["claude-code"]
 
 DATA_STORE_SEED_MODES = {"once"}
 
@@ -124,6 +130,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "hooks": None,
     "logging": {"level": "INFO", "file": None},
     "llama_cpp": None,
+    "claude_mem": None,
 }
 
 logger = logging.getLogger(__name__)
@@ -310,6 +317,7 @@ def validate_config(config: dict[str, Any]) -> None:
         if key not in known:
             logger.warning("Unknown config key %r — ignoring", key)
     _validate_mcp_servers(config.get("mcp_servers", []))
+    _validate_claude_mem(config.get("claude_mem"))
 
 
 def _validate_mcp_servers(mcp_servers: Any) -> None:
@@ -363,6 +371,40 @@ def _validate_mcp_servers(mcp_servers: Any) -> None:
                 raise ConfigurationError(
                     f"External MCP server {name!r} URL must use http or https"
                 )
+
+
+def _validate_claude_mem(claude_mem: Any) -> None:
+    """Validate the optional ``[claude_mem]`` configuration table.
+
+    :param claude_mem: Raw ``claude_mem`` value from merged config.
+    :raises ConfigurationError: If the table has unsupported values.
+    """
+    if claude_mem is None:
+        return
+    if not isinstance(claude_mem, dict):
+        raise ConfigurationError("claude_mem must be a table")
+
+    enabled = claude_mem.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ConfigurationError("claude_mem.enabled must be a boolean")
+
+    scope = claude_mem.get("scope", "workspace")
+    if scope != "workspace":
+        raise ConfigurationError("claude_mem.scope must be 'workspace'")
+
+    services = claude_mem.get("services", CLAUDE_MEM_SUPPORTED_SERVICES)
+    if (
+        not isinstance(services, list)
+        or not services
+        or any(not isinstance(service, str) for service in services)
+    ):
+        raise ConfigurationError("claude_mem.services must be a non-empty list")
+    unsupported = set(services) - set(CLAUDE_MEM_SUPPORTED_SERVICES)
+    if unsupported:
+        raise ConfigurationError(
+            "claude_mem.services only supports: "
+            f"{', '.join(CLAUDE_MEM_SUPPORTED_SERVICES)}"
+        )
 
 
 def write_hook_script(content: str, dest: Path) -> None:
@@ -608,6 +650,15 @@ def get_companion_services(config: dict) -> list[str]:
     if config.get("llama_cpp") is not None:
         services.append("llama-cpp")
     return services
+
+
+def get_claude_mem_services(claude_mem_config: dict) -> list[str]:
+    """Return validated agent services with Claude-Mem enabled.
+
+    :param claude_mem_config: ``[claude_mem]`` table from merged config.
+    :returns: Supported service names, defaulting to Claude Code.
+    """
+    return claude_mem_config.get("services", CLAUDE_MEM_SUPPORTED_SERVICES).copy()
 
 
 def validate_services(
@@ -895,6 +946,28 @@ def build_data_store_override(
         for service in _data_store_services(entry):
             services[service]["volumes"].extend(store_volumes)
     return json.dumps({"services": services})
+
+
+def build_claude_mem_override(claude_mem_dir: Path, services: list[str]) -> str:
+    """Build a Compose override enabling workspace-scoped Claude-Mem.
+
+    :param claude_mem_dir: Host state directory for this workspace's memory.
+    :param services: Supported agent services that should receive Claude-Mem.
+    :returns: Compose override as a JSON string.
+    """
+    service_defs = {
+        service: {
+            "environment": {
+                "AGENT_CIRCUS_CLAUDE_MEM_ENABLED": "true",
+                "CLAUDE_MEM_DATA_DIR": CLAUDE_MEM_CONTAINER_DATA_DIR,
+            },
+            "volumes": [
+                f"{claude_mem_dir}:{CLAUDE_MEM_CONTAINER_DATA_DIR}:cached",
+            ],
+        }
+        for service in services
+    }
+    return json.dumps({"services": service_defs})
 
 
 def build_git_worktree_mirror_override(workspace: Path) -> str:

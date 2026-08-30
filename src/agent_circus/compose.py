@@ -18,6 +18,7 @@ from .state import (
     get_agent_config_mounts_override_path,
     get_agent_configs_override_path,
     get_ca_certs_override_path,
+    get_claude_mem_override_path,
     get_data_store_override_path,
     get_env_passthrough_override_path,
     get_git_override_path,
@@ -59,6 +60,7 @@ class ComposeContext:
     :param additional_dirs_override: JSON string for extra directory mounts, or ``None``.
     :param ssh_override: JSON string for SSH agent socket forwarding, or ``None``.
     :param git_override: JSON string for Git configuration forwarding, or ``None``.
+    :param claude_mem_override: JSON string for Claude-Mem activation, or ``None``.
     :param port_forwards_override: JSON string for published ports, or ``None``.
     :param data_store_seeder: Optional callback that prepares writable state
         before ``docker compose up`` and ``docker compose exec``.
@@ -83,6 +85,7 @@ class ComposeContext:
     startup_hook_override: str | None = None
     git_worktree_mirror_override: str | None = None
     data_store_override: str | None = None
+    claude_mem_override: str | None = None
     port_forwards_override: str | None = None
     llama_cpp_override: str | None = None
     companion_services: tuple[str, ...] = ()
@@ -217,6 +220,14 @@ def _exec_compose(
         logger.debug("Data store override: %s", data_store_path)
     else:
         data_store_path.unlink(missing_ok=True)
+
+    claude_mem_path = get_claude_mem_override_path(ctx.workspace)
+    if ctx.claude_mem_override:
+        claude_mem_path.write_text(ctx.claude_mem_override)
+        cmd.extend(["-f", str(claude_mem_path)])
+        logger.debug("Claude-Mem override: %s", claude_mem_path)
+    else:
+        claude_mem_path.unlink(missing_ok=True)
 
     agent_configs_path = get_agent_configs_override_path(ctx.workspace)
     if ctx.agent_configs_override:

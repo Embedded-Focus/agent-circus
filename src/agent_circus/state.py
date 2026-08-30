@@ -14,6 +14,7 @@ from .config import (
     COMPOSE_AGENT_CONFIG_MOUNTS_FILE_NAME,
     COMPOSE_AGENT_CONFIGS_FILE_NAME,
     COMPOSE_CA_CERTS_FILE_NAME,
+    COMPOSE_CLAUDE_MEM_FILE_NAME,
     COMPOSE_DATA_STORE_FILE_NAME,
     COMPOSE_ENV_PASSTHROUGH_FILE_NAME,
     COMPOSE_GIT_FILE_NAME,
@@ -252,6 +253,15 @@ def get_data_store_dir(workspace: Path, name: str) -> Path:
     return data_dir
 
 
+def get_claude_mem_dir(workspace: Path) -> Path:
+    """Get the workspace-scoped Claude-Mem data directory.
+
+    :param workspace: Workspace path.
+    :returns: Path to the ``data/claude-mem/`` state subdirectory.
+    """
+    return get_data_store_dir(workspace, "claude-mem")
+
+
 def get_data_store_override_path(workspace: Path) -> Path:
     """Get the path for the data store compose override file.
 
@@ -261,6 +271,15 @@ def get_data_store_override_path(workspace: Path) -> Path:
     :rtype: Path
     """
     return get_state_dir(workspace) / COMPOSE_DATA_STORE_FILE_NAME
+
+
+def get_claude_mem_override_path(workspace: Path) -> Path:
+    """Get the path for the Claude-Mem compose override file.
+
+    :param workspace: Workspace path.
+    :returns: Path to ``compose.claude-mem.json`` in the state directory.
+    """
+    return get_state_dir(workspace) / COMPOSE_CLAUDE_MEM_FILE_NAME
 
 
 def get_port_forwards_override_path(workspace: Path) -> Path:
