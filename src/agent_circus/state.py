@@ -30,6 +30,22 @@ from .config import (
     sanitize_project_name,
 )
 
+CONFIG_STORE_MODE = 0o777
+
+
+def _agent_config_store_mode() -> int:
+    """Return host directory permissions for writable agent config stores.
+
+    Agent config stores are bind-mounted into containers and written by the
+    container user.  On Linux bind mounts preserve host ownership, so these
+    directories must be writable without assuming the host uid matches the
+    container uid.
+
+    :returns: Directory mode suitable for agent config store bind mounts.
+    :rtype: int
+    """
+    return CONFIG_STORE_MODE
+
 
 def get_state_dir(workspace: Path) -> Path:
     """Get the runtime state directory for a workspace.
@@ -114,9 +130,10 @@ def get_agent_config_stores_dir(workspace: Path) -> Path:
     :param workspace: Workspace path.
     :returns: Path to the ``agent-config/`` state subdirectory.
     """
+    mode = _agent_config_store_mode()
     stores_dir = get_state_dir(workspace) / "agent-config"
-    stores_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    stores_dir.chmod(0o700)
+    stores_dir.mkdir(parents=True, exist_ok=True, mode=mode)
+    stores_dir.chmod(mode)
     return stores_dir
 
 
@@ -127,9 +144,10 @@ def get_agent_config_store_dir(workspace: Path, agent_name: str) -> Path:
     :param agent_name: Agent service name.
     :returns: Path to the agent's configuration store.
     """
+    mode = _agent_config_store_mode()
     store_dir = get_agent_config_stores_dir(workspace) / agent_name
-    store_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    store_dir.chmod(0o700)
+    store_dir.mkdir(parents=True, exist_ok=True, mode=mode)
+    store_dir.chmod(mode)
     return store_dir
 
 
