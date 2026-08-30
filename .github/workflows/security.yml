@@ -3,20 +3,39 @@ name: Security
 on:
   push:
     branches:
+      - develop
       - main
   pull_request:
+    branches:
+      - develop
+      - main
   schedule:
     - cron: "27 5 * * 1"
   workflow_dispatch:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: security-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  dependency-review:
+    name: Dependency review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@v5
+        with:
+          fail-on-severity: moderate
+
   uv-audit:
     name: uv audit
     runs-on: ubuntu-latest
