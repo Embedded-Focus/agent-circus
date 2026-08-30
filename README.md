@@ -353,6 +353,8 @@ the environment.
 
 ### Local LLM via llama.cpp (OpenCode)
 
+**Note**: Experimental feature; might change when implementing a future plugin mechanism.
+
 Add a `[llama_cpp]` table to `config.toml` to run a
 [llama.cpp](https://github.com/ggml-org/llama.cpp) server as a sidecar
 container and wire it into OpenCode as a local provider. When enabled,
@@ -402,6 +404,8 @@ of `model` — for example, `gemma-3-1b-it-Q4_K_M.gguf` becomes
 > `opencode` service. Other agents are unaffected.
 
 ### Claude-Mem (Claude Code)
+
+**Note**: Experimental feature; might change when implementing a future plugin mechanism.
 
 Add a `[claude_mem]` table to `config.toml` to enable
 [Claude-Mem](https://docs.claude-mem.ai/) for Claude Code. Claude-Mem captures
