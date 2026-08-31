@@ -1176,10 +1176,7 @@ def _match_pattern(
     for pat in glob_patterns:
         if fnmatch.fnmatch(name_lower, pat):
             return True
-    for rx in compiled_re:
-        if rx.search(name):
-            return True
-    return False
+    return any(rx.search(name) for rx in compiled_re)
 
 
 def filter_hosts(

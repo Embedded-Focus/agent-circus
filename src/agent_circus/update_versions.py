@@ -287,9 +287,7 @@ def format_report(results: list[PinResult]) -> str:
     current_width = max(len(r.current) for r in results)
     lines = []
     for r in results:
-        status = (
-            r.error if r.error else ("update available" if r.outdated else "up to date")
-        )
+        status = r.error or ("update available" if r.outdated else "up to date")
         latest = r.latest if r.latest is not None else "?"
         lines.append(
             f"{r.pin.name:<{name_width}}  {r.current:<{current_width}}  {latest:<{current_width}}  {status}"
