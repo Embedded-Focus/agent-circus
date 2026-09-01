@@ -1,8 +1,9 @@
 """Refresh pinned tool versions in the ``templates/agent-circus`` template.
 
-Looks up the latest GitHub release for each pinned component and rewrites the
+Looks up the latest release for each pinned component and rewrites the
 corresponding version string in the template's Dockerfile, compose.yaml, and
-pyproject.toml.
+pyproject.toml. Most components are backed by GitHub releases; npm itself is
+resolved from the npm registry.
 
 Installed as its own console script (``agent-circus-update-templates``),
 separate from the ``agent-circus`` CLI, since it edits template *source*
@@ -14,12 +15,16 @@ an editable/source checkout (e.g. via ``uv run``). Running it from an
 installed wheel would edit the installed copy, not the repository.
 """
 
+import json
 import os
 import re
 import subprocess
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import typer
 from github import Auth, Github
@@ -33,13 +38,15 @@ class VersionPin:
     """A single pinned version location tied to a GitHub repository.
 
     :param name: Human-readable component name.
-    :param repo: GitHub repository as ``"owner/repo"``.
+    :param repo: GitHub repository as ``"owner/repo"``, or npm package name
+        when :attr:`source` is ``"npm"``.
     :param file: Template file containing the pinned version.
     :param pattern: Regex whose first capture group spans exactly the
         version substring to read/replace.
     :param strip_prefix: Prefix removed from the release tag name before
         it is written into the file (e.g. ``"v"``, ``"rust-v"``). An empty
         string keeps the raw tag name.
+    :param source: Version lookup backend.
     """
 
     name: str
@@ -47,9 +54,17 @@ class VersionPin:
     file: Path
     pattern: re.Pattern[str]
     strip_prefix: str = ""
+    source: Literal["github", "npm"] = "github"
 
 
 PINS: list[VersionPin] = [
+    VersionPin(
+        name="npm",
+        repo="npm",
+        file=TEMPLATE_DIR / "compose.yaml",
+        pattern=re.compile(r"NPM_VERSION:\s*(\S+)"),
+        source="npm",
+    ),
     VersionPin(
         name="yq",
         repo="mikefarah/yq",
@@ -179,6 +194,37 @@ def fetch_latest_tag(gh: Github, repo: str) -> str:
     return gh.get_repo(repo).get_latest_release().tag_name
 
 
+def fetch_latest_npm_version(package: str) -> str:
+    """Return the npm registry ``latest`` dist-tag for *package*.
+
+    :param package: npm package name.
+    :returns: Latest published version string.
+    :raises ValueError: If the registry response does not contain a latest tag.
+    :raises urllib.error.URLError: If the registry request fails.
+    """
+    url = f"https://registry.npmjs.org/{urllib.parse.quote(package, safe='@/')}"
+    with urllib.request.urlopen(url, timeout=30) as response:
+        data = response.read()
+    metadata = json.loads(data)
+    latest = metadata.get("dist-tags", {}).get("latest")
+    if not isinstance(latest, str) or not latest:
+        raise ValueError(f"Could not locate npm latest dist-tag for {package!r}")
+    return latest
+
+
+def fetch_latest_version(gh: Github, pin: VersionPin) -> str:
+    """Return the latest normalized version for *pin*.
+
+    :param gh: Authenticated or anonymous GitHub client.
+    :param pin: Pin to check.
+    :returns: Latest normalized version string.
+    """
+    if pin.source == "npm":
+        return fetch_latest_npm_version(pin.repo)
+    tag = fetch_latest_tag(gh, pin.repo)
+    return normalize_tag(tag, pin.strip_prefix)
+
+
 @dataclass
 class PinResult:
     """Outcome of checking one :class:`VersionPin` against GitHub.
@@ -218,13 +264,12 @@ def build_report(pins: list[VersionPin], gh: Github) -> list[PinResult]:
         content = pin.file.read_text()
         current = read_current_version(content, pin)
         try:
-            tag = fetch_latest_tag(gh, pin.repo)
-        except GithubException as e:
+            latest = fetch_latest_version(gh, pin)
+        except (GithubException, urllib.error.URLError, ValueError) as e:
             results.append(
                 PinResult(pin=pin, current=current, latest=None, error=str(e))
             )
             continue
-        latest = normalize_tag(tag, pin.strip_prefix)
         results.append(PinResult(pin=pin, current=current, latest=latest))
     return results
 

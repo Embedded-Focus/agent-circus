@@ -1,6 +1,7 @@
 FROM node:26-trixie AS base
 
 ARG TZ
+ARG NPM_VERSION
 ENV TZ="$TZ"
 
 # Install basic development tools and iptables/ipset
@@ -73,7 +74,9 @@ USER node
 ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
 ENV UV_PROJECT_ENVIRONMENT=/usr/local/share/venv
 ENV UV_LINK_MODE=copy
-ENV PATH=${PATH}:${NPM_CONFIG_PREFIX}/bin:${UV_PROJECT_ENVIRONMENT}/bin
+ENV PATH=${NPM_CONFIG_PREFIX}/bin:${UV_PROJECT_ENVIRONMENT}/bin:${PATH}
+
+RUN npm install -g npm@${NPM_VERSION}
 
 ENV SHELL=/bin/bash
 

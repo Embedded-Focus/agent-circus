@@ -2,13 +2,14 @@
 
 import shutil
 import subprocess
+import urllib.error
 from dataclasses import replace
 from pathlib import Path
+from typing import Self
 from unittest.mock import MagicMock
 
 import pytest
 import typer
-from github.GithubException import GithubException
 
 from agent_circus.update_versions import (
     PINS,
@@ -18,7 +19,9 @@ from agent_circus.update_versions import (
     apply_changes,
     apply_version,
     build_report,
+    fetch_latest_npm_version,
     fetch_latest_tag,
+    fetch_latest_version,
     main,
     normalize_tag,
     read_current_version,
@@ -92,18 +95,53 @@ def test_fetch_latest_tag_returns_tag_name() -> None:
     gh.get_repo.assert_called_once_with("owner/repo")
 
 
+def test_fetch_latest_npm_version_returns_latest_dist_tag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Response:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+        def read(self) -> bytes:
+            return b'{"dist-tags": {"latest": "12.0.2"}}'
+
+    urlopen = MagicMock(return_value=Response())
+    monkeypatch.setattr("agent_circus.update_versions.urllib.request.urlopen", urlopen)
+
+    latest = fetch_latest_npm_version("npm")
+
+    assert latest == "12.0.2"
+    urlopen.assert_called_once_with("https://registry.npmjs.org/npm", timeout=30)
+
+
+def test_fetch_latest_version_routes_npm_pin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    npm_pin = next(pin for pin in PINS if pin.name == "npm")
+    fetch = MagicMock(return_value="12.0.2")
+    monkeypatch.setattr("agent_circus.update_versions.fetch_latest_npm_version", fetch)
+
+    latest = fetch_latest_version(MagicMock(), npm_pin)
+
+    assert latest == "12.0.2"
+    fetch.assert_called_once_with("npm")
+
+
 def test_build_report_records_error_and_continues(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = []
 
-    def fake_fetch(gh: object, repo: str) -> str:
-        calls.append(repo)
-        if repo == PINS[0].repo:
-            raise GithubException(status=404, message="Not Found")
-        return "v9.9.9"
+    def fake_fetch(gh: object, pin: VersionPin) -> str:
+        calls.append(pin.repo)
+        if pin == PINS[0]:
+            raise urllib.error.URLError("Not Found")
+        return normalize_tag("v9.9.9", pin.strip_prefix)
 
-    monkeypatch.setattr("agent_circus.update_versions.fetch_latest_tag", fake_fetch)
+    monkeypatch.setattr("agent_circus.update_versions.fetch_latest_version", fake_fetch)
 
     results = build_report(PINS, gh=MagicMock())
 
