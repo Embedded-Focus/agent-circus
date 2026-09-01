@@ -153,7 +153,7 @@ def test_apply_changes_only_writes_outdated_files(tmp_path: Path) -> None:
     assert read_current_version(compose.read_text(), local_opencode_pin) == "999.0.0"
 
 
-def test_sync_template_lockfile_invokes_uv_sync_in_template_dir(
+def test_sync_template_lockfile_invokes_uv_lock_upgrade_and_sync_in_template_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     mock_run = MagicMock()
@@ -161,20 +161,20 @@ def test_sync_template_lockfile_invokes_uv_sync_in_template_dir(
 
     sync_template_lockfile(tmp_path)
 
-    mock_run.assert_called_once()
-    args, kwargs = mock_run.call_args
-    assert args == (["uv", "sync"],)
-    assert kwargs["cwd"] == tmp_path
-    assert kwargs["check"] is True
+    assert mock_run.call_count == 2
+    assert mock_run.call_args_list[0].args == (["uv", "lock", "-U"],)
+    assert mock_run.call_args_list[1].args == (["uv", "sync"],)
+    for call in mock_run.call_args_list:
+        assert call.kwargs["cwd"] == tmp_path
+        assert call.kwargs["check"] is True
 
 
 def test_sync_template_lockfile_strips_ambient_project_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # A dev shell for *this* repo (e.g. devenv) commonly exports one of these
-    # pointing at the main project's own venv; uv honors it regardless of
-    # cwd, so it must not leak into the subprocess env or `uv sync` would
-    # clobber the caller's unrelated venv instead of the template's.
+    # pointing at the main project's own venv. Strip them so uv only operates
+    # on the template project.
     monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", "/somewhere/main-project/venv")
     monkeypatch.setenv("VIRTUAL_ENV", "/somewhere/main-project/venv")
     mock_run = MagicMock()
@@ -182,12 +182,13 @@ def test_sync_template_lockfile_strips_ambient_project_environment(
 
     sync_template_lockfile(tmp_path)
 
-    passed_env = mock_run.call_args.kwargs["env"]
-    assert "UV_PROJECT_ENVIRONMENT" not in passed_env
-    assert "VIRTUAL_ENV" not in passed_env
+    for call in mock_run.call_args_list:
+        passed_env = call.kwargs["env"]
+        assert "UV_PROJECT_ENVIRONMENT" not in passed_env
+        assert "VIRTUAL_ENV" not in passed_env
 
 
-def test_main_syncs_lockfile_when_pyproject_changed(
+def test_main_updates_lockfile_when_applying_changes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     dummy_result = PinResult(pin=PINS[-1], current="1.0.0", latest="1.0.1")
@@ -208,7 +209,7 @@ def test_main_syncs_lockfile_when_pyproject_changed(
     sync_mock.assert_called_once_with()
 
 
-def test_main_skips_sync_when_pyproject_unchanged(
+def test_main_updates_lockfile_even_when_pyproject_unchanged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     dummy_result = PinResult(pin=PINS[0], current="1.0.0", latest="1.0.1")
@@ -226,7 +227,7 @@ def test_main_skips_sync_when_pyproject_unchanged(
 
     main(apply=True)
 
-    sync_mock.assert_not_called()
+    sync_mock.assert_called_once_with()
 
 
 def test_main_exits_with_error_when_sync_fails(
@@ -242,7 +243,7 @@ def test_main_exits_with_error_when_sync_fails(
     )
 
     def failing_sync() -> None:
-        raise subprocess.CalledProcessError(returncode=1, cmd=["uv", "sync"])
+        raise subprocess.CalledProcessError(returncode=1, cmd=["uv", "lock", "-U"])
 
     monkeypatch.setattr(
         "agent_circus.update_versions.sync_template_lockfile", failing_sync

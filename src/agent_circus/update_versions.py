@@ -256,24 +256,24 @@ def apply_changes(results: list[PinResult]) -> list[Path]:
 
 
 def sync_template_lockfile(template_dir: Path = TEMPLATE_DIR) -> None:
-    """Regenerate the template's ``uv.lock`` to match its ``pyproject.toml``.
+    """Upgrade the template lockfile and sync its environment.
 
     ``UV_PROJECT_ENVIRONMENT``/``VIRTUAL_ENV`` are stripped from the
     subprocess environment: dev shells for *this* repo (e.g. devenv) commonly
-    export one of these pointing at the main project's own venv, and ``uv
-    sync`` honors it regardless of ``cwd`` — inheriting it here would sync
-    the template's minimal dependency set into (and clobber) the caller's
-    unrelated venv instead of creating one scoped to *template_dir*.
+    export one of these pointing at the main project's own venv.  Strip them so
+    uv operates only on the template project in *template_dir*.
 
     :param template_dir: Directory containing the template's own
         ``pyproject.toml``/``uv.lock`` pair.
-    :raises subprocess.CalledProcessError: If ``uv sync`` exits non-zero.
+    :raises subprocess.CalledProcessError: If ``uv lock -U`` or ``uv sync``
+        exits non-zero.
     """
     env = {
         k: v
         for k, v in os.environ.items()
         if k not in {"UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"}
     }
+    subprocess.run(["uv", "lock", "-U"], cwd=template_dir, check=True, env=env)
     subprocess.run(["uv", "sync"], cwd=template_dir, check=True, env=env)
 
 
@@ -321,13 +321,14 @@ def main(
         changed = apply_changes(results)
         typer.echo(f"\nUpdated {len(changed)} file(s).")
 
-        if TEMPLATE_DIR / "pyproject.toml" in changed:
-            typer.echo("Syncing template lockfile (uv sync)...")
-            try:
-                sync_template_lockfile()
-            except subprocess.CalledProcessError as e:
-                typer.echo(f"uv sync failed: {e}", err=True)
-                raise typer.Exit(code=1) from e
+        typer.echo(
+            "Updating template lockfile (uv lock -U) and environment (uv sync)..."
+        )
+        try:
+            sync_template_lockfile()
+        except subprocess.CalledProcessError as e:
+            typer.echo(f"Template lockfile/environment update failed: {e}", err=True)
+            raise typer.Exit(code=1) from e
 
     if any(r.error for r in results):
         raise typer.Exit(code=1)
