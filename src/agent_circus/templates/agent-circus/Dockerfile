@@ -116,7 +116,7 @@ FROM base AS claude-code
 ARG CLAUDE_CODE_VERSION
 ARG CLAUDE_AGENT_ACP_VERSION
 
-RUN npm install -g \
+RUN npm install -g --allow-scripts=@anthropic-ai/claude-code,bun \
     @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
     @agentclientprotocol/claude-agent-acp@${CLAUDE_AGENT_ACP_VERSION} \
     bun@1.4.0 \
