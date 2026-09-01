@@ -120,7 +120,7 @@ RUN npm install -g \
     @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
     @agentclientprotocol/claude-agent-acp@${CLAUDE_AGENT_ACP_VERSION} \
     bun@1.4.0 \
-    claude-mem@13.22.0
+    claude-mem@13.23.0
 
 FROM base AS codex
 
