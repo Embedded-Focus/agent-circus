@@ -713,6 +713,19 @@ startup the entrypoint generates `/home/node/.gitconfig` using git's native
 All portable settings (name, email, aliases, …) flow through the include
 unchanged. Only `user.signingkey` is overridden to point to the container-local
 path, resolving the host-absolute-path issue without rewriting the original file.
+The public key is not copied into `~/.ssh`; when `signing_key_path` is set it is
+mounted at `/run/git-host/signingkey.pub`.
+
+SSH commit signing still uses your private key through the forwarded SSH agent.
+Load the matching private key on the host before starting or using the
+container, e.g.:
+
+``` sh
+ssh-add ~/.ssh/id_ed25519
+```
+
+Inside the container, `ssh-add -l` should list the key and `git config --global
+--get user.signingkey` should print `/run/git-host/signingkey.pub`.
 
 > **Rebuild required**: The entrypoint logic is baked into the image.
 > Run `agent-circus build` after enabling `[git]` for the first time.
