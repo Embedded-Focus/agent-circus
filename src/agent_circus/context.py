@@ -61,7 +61,7 @@ from .mcp import HOST_GATEWAY_ENTRY, requires_host_gateway
 from .mcp import build_compose_override as build_mcp_compose_override
 from .mcp import managed_servers as get_managed_mcp_servers
 from .mcp import service_names as get_mcp_service_names
-from .runtime import log_runtime_diagnostics, resolve_runtime, warn_if_experimental
+from .runtime import log_runtime_diagnostics, resolve_runtime
 from .state import (
     get_agent_config_store_dir,
     get_agent_config_stores_dir,
@@ -314,7 +314,6 @@ def build_compose_context(
     """
     config = load_config(workspace)
     selected_runtime = resolve_runtime(runtime, config)
-    warn_if_experimental(selected_runtime)
     log_runtime_diagnostics(selected_runtime)
     shadow = config.get("shadow", [])
     mcp_servers = config.get("mcp_servers", [])

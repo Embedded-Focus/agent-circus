@@ -80,18 +80,6 @@ def compose_command(runtime: ContainerRuntime) -> list[str]:
     return ["docker", "compose"]
 
 
-def warn_if_experimental(runtime: ContainerRuntime) -> None:
-    """Log a warning for experimental runtimes.
-
-    :param runtime: Effective container runtime.
-    """
-    if runtime == "podman":
-        logger.warning(
-            "Podman runtime support is experimental. "
-            "Some Docker Compose features may behave differently."
-        )
-
-
 def log_runtime_diagnostics(runtime: ContainerRuntime) -> None:
     """Log best-effort version and Compose-provider diagnostics for *runtime*.
 
