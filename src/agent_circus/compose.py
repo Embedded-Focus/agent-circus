@@ -9,6 +9,7 @@ and is passed in via :class:`ComposeContext`.
 import dataclasses
 import logging
 import subprocess
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -256,6 +257,7 @@ def _exec_compose(
     cmd.extend(args)
     logger.debug("Running: %s", " ".join(cmd))
 
+    start = time.monotonic()
     try:
         result = subprocess.run(
             cmd,
@@ -264,6 +266,13 @@ def _exec_compose(
             text=True,
             check=False,
             env=ctx.env,
+        )
+        elapsed = time.monotonic() - start
+        logger.debug(
+            "Finished in %.2fs with exit code %s: %s",
+            elapsed,
+            result.returncode,
+            " ".join(cmd),
         )
         if result.returncode != 0:
             error_msg = result.stderr if capture_output else "Command failed"
@@ -378,6 +387,33 @@ def compose_ps(
         args.append("-a")
     if services:
         args.extend(services)
+
+    result = _exec_compose(args, ctx, capture_output=True)
+    return result.stdout
+
+
+def compose_config(ctx: ComposeContext, service: str | None = None) -> str:
+    """Render the fully merged and interpolated Compose configuration.
+
+    Read-only and safe to call whether or not the service is running.
+    Useful for diagnosing environment-variable interpolation and
+    override-merge issues (e.g. an ``environment:`` key from one override
+    file being dropped or clobbered by another).
+
+    This is a separate, independent invocation of the Compose provider. It
+    is not consulted by :func:`compose_up` or :func:`compose_exec`, which
+    re-resolve the same ``-f`` files themselves. Treat its output as a
+    best-effort preview, not a guaranteed source of truth for what a given
+    ``up``/``exec`` call actually saw.
+
+    :param ctx: Pre-assembled compose context.
+    :param service: Service name to scope the config to, or ``None`` for all.
+    :returns: Rendered Compose YAML.
+    :raises ComposeError: If config rendering fails.
+    """
+    args = ["config"]
+    if service:
+        args.append(service)
 
     result = _exec_compose(args, ctx, capture_output=True)
     return result.stdout

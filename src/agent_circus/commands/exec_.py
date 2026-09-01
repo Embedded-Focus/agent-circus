@@ -10,7 +10,12 @@ from typing import Annotated
 
 import typer
 
-from agent_circus.compose import compose_exec, compose_is_service_running, compose_up
+from agent_circus.compose import (
+    compose_config,
+    compose_exec,
+    compose_is_service_running,
+    compose_up,
+)
 from agent_circus.config import (
     AVAILABLE_SERVICES,
     get_companion_services,
@@ -92,6 +97,28 @@ def exec_cmd(
                     f"Remove it first with: agent-circus remove {service}"
                 )
             effective_no_tty = no_tty or not sys.stdin.isatty()
+            logger.debug(
+                "exec: service=%s runtime=%s service_running=%s "
+                "no_tty=%s (stdin_isatty=%s) command=%s",
+                service,
+                "docker",
+                service_running,
+                effective_no_tty,
+                sys.stdin.isatty(),
+                cmd,
+            )
+            if not service_running and logger.isEnabledFor(logging.DEBUG):
+                try:
+                    rendered = compose_config(ctx, service)
+                    logger.debug(
+                        "Resolved compose config for %s (verify interpolated "
+                        "env vars, esp. any env_passthrough / environment "
+                        "entries):\n%s",
+                        service,
+                        rendered,
+                    )
+                except AgentCircusError as e:
+                    logger.debug("Failed to render compose config: %s", e)
             if not service_running:
                 typer.echo(
                     f"Service {service} is not running. Starting it...",

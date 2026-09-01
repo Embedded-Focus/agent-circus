@@ -60,6 +60,7 @@ from .mcp import HOST_GATEWAY_ENTRY, requires_host_gateway
 from .mcp import build_compose_override as build_mcp_compose_override
 from .mcp import managed_servers as get_managed_mcp_servers
 from .mcp import service_names as get_mcp_service_names
+from .runtime import log_runtime_diagnostics
 from .state import (
     get_agent_config_store_dir,
     get_agent_config_stores_dir,
@@ -309,6 +310,7 @@ def build_compose_context(
     :yields: Fully assembled :class:`ComposeContext`.
     """
     config = load_config(workspace)
+    log_runtime_diagnostics()
     shadow = config.get("shadow", [])
     mcp_servers = config.get("mcp_servers", [])
     managed_mcp_servers = get_managed_mcp_servers(mcp_servers)
