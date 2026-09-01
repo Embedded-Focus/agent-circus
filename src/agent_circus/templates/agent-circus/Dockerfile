@@ -115,12 +115,14 @@ FROM base AS claude-code
 
 ARG CLAUDE_CODE_VERSION
 ARG CLAUDE_AGENT_ACP_VERSION
+ARG BUN_VERSION
+ARG CLAUDE_MEM_VERSION
 
 RUN npm install -g --allow-scripts=@anthropic-ai/claude-code,bun \
     @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
     @agentclientprotocol/claude-agent-acp@${CLAUDE_AGENT_ACP_VERSION} \
-    bun@1.4.0 \
-    claude-mem@13.23.0
+    bun@${BUN_VERSION} \
+    claude-mem@${CLAUDE_MEM_VERSION}
 
 FROM base AS codex
 

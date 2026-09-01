@@ -94,15 +94,15 @@ PINS: list[VersionPin] = [
     VersionPin(
         name="bun",
         repo="oven-sh/bun",
-        file=TEMPLATE_DIR / "Dockerfile",
-        pattern=re.compile(r"bun@([0-9.]+)"),
+        file=TEMPLATE_DIR / "compose.yaml",
+        pattern=re.compile(r"BUN_VERSION:\s*(\S+)"),
         strip_prefix="bun-v",
     ),
     VersionPin(
         name="claude-mem",
         repo="thedotmack/claude-mem",
-        file=TEMPLATE_DIR / "Dockerfile",
-        pattern=re.compile(r"claude-mem@([0-9.]+)"),
+        file=TEMPLATE_DIR / "compose.yaml",
+        pattern=re.compile(r"CLAUDE_MEM_VERSION:\s*(\S+)"),
         strip_prefix="v",
     ),
     VersionPin(

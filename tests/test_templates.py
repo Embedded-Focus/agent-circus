@@ -55,3 +55,16 @@ def test_claude_code_install_allows_required_postinstall_scripts() -> None:
         dockerfile = (template_dir / "Dockerfile").read_text()
 
     assert "npm install -g --allow-scripts=@anthropic-ai/claude-code,bun" in dockerfile
+
+
+def test_claude_code_auxiliary_tools_are_build_args() -> None:
+    with template_dir_context() as template_dir:
+        dockerfile = (template_dir / "Dockerfile").read_text()
+        compose = (template_dir / "compose.yaml").read_text()
+
+    assert "ARG BUN_VERSION" in dockerfile
+    assert "ARG CLAUDE_MEM_VERSION" in dockerfile
+    assert "bun@${BUN_VERSION}" in dockerfile
+    assert "claude-mem@${CLAUDE_MEM_VERSION}" in dockerfile
+    assert "BUN_VERSION:" in compose
+    assert "CLAUDE_MEM_VERSION:" in compose

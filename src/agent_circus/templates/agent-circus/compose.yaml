@@ -33,6 +33,10 @@ services:
         CLAUDE_CODE_VERSION: 2.1.257
         # https://github.com/agentclientprotocol/claude-agent-acp
         CLAUDE_AGENT_ACP_VERSION: 0.73.0
+        # https://github.com/oven-sh/bun
+        BUN_VERSION: 1.4.0
+        # https://github.com/thedotmack/claude-mem
+        CLAUDE_MEM_VERSION: 13.23.0
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
     - ${HOME}/.cache:/home/node/.cache
