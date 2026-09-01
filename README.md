@@ -226,6 +226,21 @@ in this order (last wins):
 
 CLI flags override both.
 
+> [!IMPORTANT]
+> A `key = value` line belongs to the last `[table]` header above it, blank
+> lines or not. A top-level key placed after `[runtime]`, `[hooks]`,
+> `[ssh]`, etc. silently becomes part of that table instead of standing on
+> its own, with no error or warning:
+>
+> ``` toml
+> [runtime]
+> engine = "podman"
+>
+> env_passthrough = ["GRAFANA_*"]  # WRONG: becomes runtime.env_passthrough
+> ```
+>
+> Place standalone keys **before** the first `[table]` header instead.
+
 ### Initialising config with `init`
 
 Rather than editing `config.toml` by hand, use `agent-circus init` flags to
