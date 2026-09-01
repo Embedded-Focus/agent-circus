@@ -4,7 +4,7 @@
 
 # AI Agents Circus
 
-*Run AI coding agents in disposable Docker sandboxes, not your workstation.*
+*Run AI coding agents in Docker sandboxes with one config language.*
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/Embedded-Focus/agent-circus/actions/workflows/ci.yml/badge.svg)](https://github.com/Embedded-Focus/agent-circus/actions/workflows/ci.yml)
@@ -16,23 +16,31 @@
 [![Last commit](https://img.shields.io/github/last-commit/Embedded-Focus/agent-circus?logo=github)](https://github.com/Embedded-Focus/agent-circus/commits/main)
 ![Agents: Claude Code · Codex · Vibe CLI · OpenCode](https://img.shields.io/badge/agents-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Vibe%20CLI%20%C2%B7%20OpenCode-lightgrey)
 
-**[Getting Started](#getting-started)** ·
 **[Open Protocols](#open-protocols)** ·
+**[Getting Started](#getting-started)** ·
+**[Working with the Environment](#working-with-the-environment)** ·
 **[Authentication](#authentication)** ·
 **[Configuration](#configuration)** ·
 **[Hooks](#hooks)** ·
-**[Editors](#setting-up-editors-to-work-with-acp)**
+**[Editors](#setting-up-editors-to-work-with-acp)** ·
+**[Roadmap](#roadmap)**
 
 </div>
 
 Run AI coding agents in sandboxed containers with full control over
-what they can see and reach.
+what they can see, reach, and inherit from your host environment.
 
 Agent Circus wraps each agent in its own Docker container, giving you
 a reproducible, isolated environment that works across machines and
 projects. You decide which files agents can access, secrets stay on
 the host, and a built-in firewall restricts outbound network access to
 known-good destinations.
+
+It also provides a universal configuration mechanism for operating
+agent harnesses consistently. Authentication, Git identity, SSH agent
+forwarding, MCP servers, environment variables, extra mounts, hooks,
+ports, and data stores are declared once in project config and applied
+across supported agents.
 
 Getting started takes two commands. No files are written to your
 project, no manual Docker setup required. Customize per-project only
@@ -50,63 +58,20 @@ IDEs interface with agents via the [Agent Client Protocol](https://agentclientpr
 ## Open Protocols
 
 Agent Circus is built around open interfaces instead of editor- or
-vendor-specific integrations. ACP provides a common protocol layer
-between editors and coding agents, while MCP provides a standard way
-to connect tools and services into agent workflows.
+vendor-specific integrations:
 
 <p align="center">
   <img src="assets/open_protocols.svg" alt="Open protocols map showing ACP and MCP relationships" width="680" />
 </p>
 
-## Authentication
-
-Each agent authenticates against its vendor's API using the
-credentials already present on the host. Agent Circus seeds a private,
-project-local writable copy of each vendor configuration directory and mounts
-that copy into the corresponding container:
-
-| Agent       | Seed source          | Container path                |
-|-------------|----------------------|-------------------------------|
-| Claude Code | `~/.claude`          | `/home/node/.claude`          |
-| Codex       | `~/.codex`           | `/home/node/.codex`           |
-| Vibe CLI    | `~/.vibe`            | `/home/node/.vibe`            |
-| OpenCode    | `~/.config/opencode` | `/home/node/.config/opencode` |
-
-The copies are stored under
-`~/.local/state/agent-circus/<project>/agent-config/<agent>/` with directory
-permissions restricted to the current user. They are seeded only once, so
-container changes do not modify host configuration and later host changes are
-not copied automatically. Agent Circus merges generated settings such as MCP
-servers into these writable copies before startup.
-
-To discard a copy and seed it again from the current host configuration on the
-next start, first stop the affected service and run:
-
-```shell
-agent-circus config reset codex
-agent-circus config reset --all
-```
-
-Use `--force` to skip the confirmation prompt. Reset refuses to delete a config
-store while its service is running.
-
-For credential refresh or other explicit edits to the real host provider
-configuration, run a command with `--host-config`. This bypasses the
-project-local copy and mounts the host configuration directory writable for that
-single service. Agent Circus does not merge generated MCP settings into the
-host configuration while this mode is active.
-
-```shell
-agent-circus remove --force codex
-agent-circus exec codex --host-config -- codex login
-agent-circus remove --force codex
-agent-circus config reset codex --force
-agent-circus up codex
-```
-
-The second `remove` is needed because `exec` starts a stopped service and leaves
-it running. After `config reset`, the next normal startup seeds a fresh
-project-local copy from the updated host configuration.
+- [ACP — Agent Client Protocol](https://agentclientprotocol.com/) connects
+  editors and IDEs to coding agents through a shared client protocol.
+- [MCP — Model Context Protocol](https://modelcontextprotocol.io/) connects
+  agents to tools, services, and contextual data sources.
+- [Agent Skills](https://agentskills.io/) package reusable agent capabilities
+  as portable, declarative instructions and resources.
+- [A2A — Agent2Agent Protocol](https://a2a-protocol.org/) defines a common
+  protocol for communication and task handoff between agents.
 
 ## Getting Started
 
@@ -128,6 +93,10 @@ agent-circus exec claude-code -- claude-agent-acp
 
 The `exec` command automatically starts the container if it is not
 running yet. There is no separate `up` step needed.
+
+Agent Circus is not tied to ACP or editor integrations: the command
+after `--` can also be a direct agent CLI such as `codex`, or a shell
+such as `bash`, when you want to work inside the harness container.
 
 **Note:** Auto-started containers are not automatically removed when
 they are no longer in use. Run `agent-circus remove` to clean up idle
@@ -196,10 +165,66 @@ agent-circus remove --destroy --force     # don't ask for permission
 When both a deployed `.agent-circus/` directory and instant mode are
 available, deploy mode takes priority.
 
+## Authentication
+
+Each agent authenticates against its vendor's API using the
+credentials already present on the host. Agent Circus seeds a private,
+project-local writable copy of each vendor configuration directory and mounts
+that copy into the corresponding container:
+
+| Agent       | Seed source          | Container path                |
+|-------------|----------------------|-------------------------------|
+| Claude Code | `~/.claude`          | `/home/node/.claude`          |
+| Codex       | `~/.codex`           | `/home/node/.codex`           |
+| Vibe CLI    | `~/.vibe`            | `/home/node/.vibe`            |
+| OpenCode    | `~/.config/opencode` | `/home/node/.config/opencode` |
+
+The copies are stored under
+`~/.local/state/agent-circus/<project>/agent-config/<agent>/` with directory
+permissions restricted to the current user. They are seeded only once, so
+container changes do not modify host configuration and later host changes are
+not copied automatically. Agent Circus merges generated settings such as MCP
+servers into these writable copies before startup.
+
+To discard a copy and seed it again from the current host configuration on the
+next start, first stop the affected service and run:
+
+```shell
+agent-circus config reset codex
+agent-circus config reset --all
+```
+
+Use `--force` to skip the confirmation prompt. Reset refuses to delete a config
+store while its service is running.
+
+For credential refresh or other explicit edits to the real host provider
+configuration, run a command with `--host-config`. This bypasses the
+project-local copy and mounts the host configuration directory writable for that
+single service. Agent Circus does not merge generated MCP settings into the
+host configuration while this mode is active.
+
+```shell
+agent-circus remove --force codex
+agent-circus exec codex --host-config -- codex login
+agent-circus remove --force codex
+agent-circus config reset codex --force
+agent-circus up codex
+```
+
+The second `remove` is needed because `exec` starts a stopped service and leaves
+it running. After `config reset`, the next normal startup seeds a fresh
+project-local copy from the updated host configuration.
+
 ## Configuration
 
 Agent Circus can be configured via TOML files. Settings are resolved
 in this order (last wins):
+
+1. **User-global** — `$XDG_CONFIG_HOME/agent-circus/config.toml`
+   (default: `~/.config/agent-circus/config.toml`)
+2. **Project-local** — `.agent-circus/config.toml` in the workspace
+
+CLI flags override both.
 
 ### Initialising config with `init`
 
@@ -243,12 +268,6 @@ existing `config.toml` without overwriting unrelated keys.
 | `--ca-cert-pattern TEXT` | Append a pattern to `ca_certs.patterns` (repeatable) |
 | `--env-pattern TEXT` | Append a pattern to `env_passthrough` (repeatable) |
 | `--git-worktree-mirror` | Set `git.worktree_mirror = true` and write `AGENTS.md` |
-
-1. **User-global** — `$XDG_CONFIG_HOME/agent-circus/config.toml`
-   (default: `~/.config/agent-circus/config.toml`)
-2. **Project-local** — `.agent-circus/config.toml` in the workspace
-
-CLI flags override both.
 
 ### Shadowing Files
 
@@ -483,8 +502,6 @@ Fields:
 
 | Field | Required | Default | Description |
 |---|---|---|---|
-|---|---|---|---|
-|-------|----------|---------|-------------|
 | `path` | yes | — | Absolute path on the host |
 | `readonly` | no | `false` | Mount read-only when `true` |
 | `name` | no | basename of `path` | Container mount name (`/workspaces/<name>`) |
@@ -1031,12 +1048,31 @@ Works in both instant mode and deploy mode."
   (setq agent-shell-file-completion-enabled t))
 ```
 
+## Roadmap
+
+Planned areas of work include:
+
+- Support for alternative container engines such as Podman.
+- A plugin mechanism that keeps core isolation features small and focused while
+  making integrations easier to add, share, and select per project.
+
+### Plugin Mechanism
+
+The plugin infrastructure is intended to separate core mechanisms such
+as filesystem and network isolation from optional components. New
+agent harnesses, sidecars, and integrations should be addable without
+changing the core, and add-ons such as llama.cpp or Claude-Mem should
+become easier to package, share, and enable only where they are
+needed, e.g. per-project.
+
 ## Disclosure: AI-Assisted Development
 
-This project is in large parts AI-generated code.
+This project is in large parts AI-generated code. However, humans
+manage the architecture and perform code reviews of those parts which
+are generated by AI.
 
-However, I as a human, manage the architecture and perform code reviews of those parts which are generated by AI.
-
-Furthermore, this is a self-hosting project. Agents working on this project are running inside what `agent-circus` provides.
-
-To reduce model risk, AI systems from different vendors are assigned distinct roles in the development process (implementation, testing, and security review).
+Furthermore, this is a self-hosting project. Agents working on this
+project are running inside what `agent-circus` provides. To reduce
+model risk, AI systems from different vendors are assigned distinct
+roles in the development process (implementation, testing, and
+security review).
