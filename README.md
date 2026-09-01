@@ -119,7 +119,7 @@ uv tool install .
 See the [uv tool documentation](https://docs.astral.sh/uv/concepts/tools/) on how to work with tools in general.
 
 After installing you can start right away in one of your projects
-([instant mode](#instant-mode)):
+([instant mode](#instant-mode-preferred)):
 
 ``` shell
 agent-circus build
@@ -145,7 +145,7 @@ uv tool uninstall agent-circus
 
 There are two modes of operation:
 
-### Instant Mode
+### Instant Mode (Preferred)
 
 Instant mode uses the templates bundled in the `agent-circus` package
 directly. No files are written to your project directory. Just run
