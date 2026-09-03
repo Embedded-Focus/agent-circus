@@ -8,12 +8,39 @@ version = "0.1.0"
 description = "Run AI coding agents in isolated Docker or Podman containers"
 readme = "README.md"
 requires-python = "==3.14.*"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Rainer Poisel", email = "rainer@embedded-focus.com" },
+]
+keywords = [
+    "ai-agents",
+    "cli",
+    "containers",
+    "docker",
+    "podman",
+    "sandbox",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development",
+]
 dependencies = [
     "docker>=7.0.0",
     "pygithub>=2.9.1",
     "tomli-w>=1.2.0",
     "typer>=0.21.1",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Embedded-Focus/agent-circus"
+Repository = "https://github.com/Embedded-Focus/agent-circus"
+Issues = "https://github.com/Embedded-Focus/agent-circus/issues"
 
 [project.scripts]
 agent-circus = "agent_circus.cli:run_cli"

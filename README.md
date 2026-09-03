@@ -1,12 +1,12 @@
 <div align="center">
 
-<img src="assets/agent_circus_logo.png" alt="AI Agents Circus" width="260">
+<img src="https://raw.githubusercontent.com/Embedded-Focus/agent-circus/main/assets/agent_circus_logo.png" alt="AI Agents Circus" width="260">
 
 # AI Agents Circus
 
 *Run AI coding agents in isolated Docker or Podman containers with one config language.*
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/Embedded-Focus/agent-circus/blob/main/LICENSE)
 [![CI](https://github.com/Embedded-Focus/agent-circus/actions/workflows/ci.yml/badge.svg)](https://github.com/Embedded-Focus/agent-circus/actions/workflows/ci.yml)
 [![Security](https://github.com/Embedded-Focus/agent-circus/actions/workflows/security.yml/badge.svg)](https://github.com/Embedded-Focus/agent-circus/actions/workflows/security.yml)
 [![Dependabot](https://img.shields.io/badge/dependabot-enabled-025e8c?logo=dependabot)](https://github.com/Embedded-Focus/agent-circus/security/dependabot)
