@@ -56,8 +56,8 @@ def up(
 ) -> None:
     """Start agent containers.
 
-    Starts the specified services using docker compose. If no services
-    are specified, all services will be started.
+    Starts the specified services using the selected runtime's Compose
+    implementation. If no services are specified, all services will be started.
 
     All containers run in detached mode.
 

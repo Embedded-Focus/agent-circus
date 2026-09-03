@@ -4,14 +4,15 @@
 
 # AI Agents Circus
 
-*Run AI coding agents in Docker sandboxes with one config language.*
+*Run AI coding agents in isolated Docker or Podman containers with one config language.*
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/Embedded-Focus/agent-circus/actions/workflows/ci.yml/badge.svg)](https://github.com/Embedded-Focus/agent-circus/actions/workflows/ci.yml)
 [![Security](https://github.com/Embedded-Focus/agent-circus/actions/workflows/security.yml/badge.svg)](https://github.com/Embedded-Focus/agent-circus/actions/workflows/security.yml)
 [![Dependabot](https://img.shields.io/badge/dependabot-enabled-025e8c?logo=dependabot)](https://github.com/Embedded-Focus/agent-circus/security/dependabot)
 [![Python 3.14](https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white)](pyproject.toml)
-[![Docker](https://img.shields.io/badge/Docker-required-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![Docker](https://img.shields.io/badge/runtime-Docker-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![Podman](https://img.shields.io/badge/runtime-Podman-892CA0?logo=podman&logoColor=white)](https://podman.io/)
 [![uv](https://img.shields.io/badge/uv-supported-DE5FE9)](https://docs.astral.sh/uv/)
 [![Last commit](https://img.shields.io/github/last-commit/Embedded-Focus/agent-circus?logo=github)](https://github.com/Embedded-Focus/agent-circus/commits/main)
 ![Agents: Claude Code · Codex · Vibe CLI · OpenCode](https://img.shields.io/badge/agents-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Vibe%20CLI%20%C2%B7%20OpenCode-lightgrey)
@@ -21,6 +22,7 @@
 **[Working with the Environment](#working-with-the-environment)** ·
 **[Authentication](#authentication)** ·
 **[Configuration](#configuration)** ·
+**[Container Runtimes](#container-runtimes)** ·
 **[Hooks](#hooks)** ·
 **[Editors](#setting-up-editors-to-work-with-acp)** ·
 **[Roadmap](#roadmap)**
@@ -29,6 +31,10 @@
 
 Run AI coding agents in sandboxed containers with full control over
 what they can see, reach, and inherit from your host environment.
+
+Docker and Podman are supported container runtimes. Docker is the default;
+Podman, including rootless operation, can be selected from the CLI, environment,
+or project configuration.
 
 Agent Circus wraps each agent in its own container, giving you
 a reproducible, isolated environment that works across machines and
@@ -87,8 +93,13 @@ After installing you can start right away in one of your projects
 ([instant mode](#instant-mode-preferred)):
 
 ``` shell
+# Docker (default)
 agent-circus build
 agent-circus exec claude-code -- claude-agent-acp
+
+# Podman
+agent-circus build --runtime podman
+agent-circus exec --runtime podman claude-code -- claude-agent-acp
 ```
 
 The `exec` command automatically starts the container if it is not
@@ -284,10 +295,11 @@ existing `config.toml` without overwriting unrelated keys.
 | `--env-pattern TEXT` | Append a pattern to `env_passthrough` (repeatable) |
 | `--git-worktree-mirror` | Set `git.worktree_mirror = true` and write `AGENTS.md` |
 
-### Container Runtime
+### Container Runtimes
 
-Docker is the default runtime. Podman is also available as an experimental
-backend through `podman compose`.
+Docker and Podman are supported container runtimes. Docker is the default.
+Podman supports rootless workflows and uses `podman compose`, which delegates
+to an installed Compose provider such as `podman-compose` or Docker Compose.
 
 Select the runtime with, in priority order:
 
@@ -316,9 +328,10 @@ The CLI option always wins over the environment. For example, this uses Docker:
 AGENT_CIRCUS_RUNTIME=podman agent-circus up --runtime docker
 ```
 
-When Podman is selected, Agent Circus logs an experimental support warning.
-Some Docker Compose features may behave differently under Podman Compose, so
-production use should be validated for your environment first.
+Because Podman's Compose command delegates to an external provider, exact
+Compose behavior can depend on which provider and version are installed. Agent
+Circus logs runtime and provider version details at debug level to help diagnose
+provider-specific behavior.
 
 For Agent Circus-managed writable state, such as project-local agent config
 stores and data stores, Podman services use `userns_mode: keep-id` so rootless
@@ -1110,7 +1123,8 @@ Works in both instant mode and deploy mode."
 
 Planned areas of work include:
 
-- Continued hardening of alternative container engine support.
+- Expanded Docker and Podman compatibility testing across runtime and Compose
+  provider versions, plus continued hardening for additional container engines.
 - A plugin mechanism that keeps core isolation features small and focused while
   making integrations easier to add, share, and select per project.
 

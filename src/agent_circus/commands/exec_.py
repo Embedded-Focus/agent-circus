@@ -78,8 +78,8 @@ def exec_cmd(
 ) -> None:
     """Execute a command in an agent container.
 
-    Runs a command inside the specified service container using
-    docker compose exec. If the container is not running, it is
+    Runs a command inside the specified service container using the selected
+    runtime's Compose implementation. If the container is not running, it is
     started automatically. Works in both deploy and instant mode.
 
     Examples:

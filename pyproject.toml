@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "agent-circus"
 version = "0.1.0"
-description = "AI Agent Circus Setup"
+description = "Run AI coding agents in isolated Docker or Podman containers"
 readme = "README.md"
 requires-python = "==3.14.*"
 dependencies = [

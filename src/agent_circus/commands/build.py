@@ -53,7 +53,8 @@ def build(
 ) -> None:
     """Build agent container images.
 
-    Builds Docker images for the specified services using docker compose.
+    Builds container images for the specified services using the selected
+    runtime's Compose implementation.
     If no services are specified, all services will be built.
 
     Examples:
