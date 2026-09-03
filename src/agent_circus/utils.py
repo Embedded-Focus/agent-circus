@@ -22,7 +22,7 @@ def setup_logging(
         handlers.append(logging.FileHandler(log_file))
 
     logging.basicConfig(
-        level=logging.getLevelName(level.upper()),
+        level=logging.getLevelNamesMapping()[level.upper()],
         format="[%(levelname)s] %(message)s",
         handlers=handlers,
     )
