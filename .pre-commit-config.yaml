@@ -19,3 +19,15 @@ repos:
     language: system
     pass_filenames: false
     always_run: true
+  - id: uv-audit
+    name: uv audit (root)
+    entry: uv audit --locked
+    language: system
+    pass_filenames: false
+    files: ^(pyproject\.toml|uv\.lock)$
+  - id: uv-audit-agent-circus-template
+    name: uv audit (agent-circus template)
+    entry: uv --directory src/agent_circus/templates/agent-circus audit --locked
+    language: system
+    pass_filenames: false
+    files: ^src/agent_circus/templates/agent-circus/(pyproject\.toml|uv\.lock)$
