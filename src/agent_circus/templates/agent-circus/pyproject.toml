@@ -12,3 +12,5 @@ dependencies = [
 
 [tool.uv]
 preview-features = ["audit-command"]
+# mistral-vibe pins gitpython==3.1.58, which has known CVEs; override it.
+override-dependencies = ["gitpython>=3.1.59"]
