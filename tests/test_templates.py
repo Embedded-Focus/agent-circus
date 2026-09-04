@@ -50,6 +50,14 @@ def test_base_user_hook_runs_after_switching_to_node() -> None:
     assert last_user_line == "USER node"
 
 
+def test_entrypoint_uses_init_to_forward_signals() -> None:
+    with template_dir_context() as template_dir:
+        dockerfile = (template_dir / "Dockerfile").read_text()
+
+    assert "  tini \\\n" in dockerfile
+    assert 'ENTRYPOINT [ "/usr/bin/tini", "--", "/docker-entrypoint.sh" ]' in dockerfile
+
+
 def test_claude_code_install_allows_required_postinstall_scripts() -> None:
     with template_dir_context() as template_dir:
         dockerfile = (template_dir / "Dockerfile").read_text()

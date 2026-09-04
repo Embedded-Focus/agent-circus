@@ -32,6 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   rsync \
   ripgrep \
   strace \
+  tini \
   && sed -i 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen \
   && locale-gen \
   && apt-get clean \
@@ -108,7 +109,7 @@ COPY --chown=node:node hooks/base-user.sh /tmp/hook-base-user.sh
 RUN if [ -s /tmp/hook-base-user.sh ]; then bash /tmp/hook-base-user.sh; fi \
     && rm -f /tmp/hook-base-user.sh
 
-ENTRYPOINT [ "/docker-entrypoint.sh" ]
+ENTRYPOINT [ "/usr/bin/tini", "--", "/docker-entrypoint.sh" ]
 CMD [ "sleep", "infinity" ]
 
 FROM base AS claude-code
