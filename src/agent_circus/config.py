@@ -560,7 +560,7 @@ def build_agent_config_additions(
     additions: dict[str, dict] = {}
 
     if mcp_servers:
-        # Claude Code: {"mcpServers": {"name": {"type": ..., "url": ...}}}
+        # Claude Code: {"mcpServers": {"name": {"type": ..., "alwaysLoad": true}}}
         claude_mcp: dict[str, dict] = {}
         # Codex: {"mcp_servers": {"name": {"url": ...}}}
         codex_mcp: dict[str, dict] = {}
@@ -581,6 +581,7 @@ def build_agent_config_additions(
                     "type": "stdio",
                     "command": command,
                     "args": args,
+                    "alwaysLoad": True,
                 }
                 claude_mcp[name] = claude_server
 
@@ -611,7 +612,11 @@ def build_agent_config_additions(
             # Claude Code requires "http" transport; other agents use the
             # configured transport (defaulting to "streamable-http").
             claude_transport = "http" if transport == "streamable-http" else transport
-            claude_mcp[name] = {"type": claude_transport, "url": url}
+            claude_mcp[name] = {
+                "type": claude_transport,
+                "url": url,
+                "alwaysLoad": True,
+            }
             codex_mcp[name] = {"url": url}
             vibe_mcp.append({"name": name, "transport": transport, "url": url})
             opencode_mcp[name] = {"type": "remote", "url": url, "enabled": True}

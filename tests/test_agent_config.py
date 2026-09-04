@@ -562,6 +562,7 @@ class TestBuildAgentConfigAdditions:
         cc = result["claude-code"]["mcpServers"]["grafana"]
         assert cc["type"] == "http"
         assert cc["url"] == "http://mcp-grafana:8000/mcp"
+        assert cc["alwaysLoad"] is True
 
         # Codex format (map keyed by server name, url only)
         codex_srv = result["codex"]["mcp_servers"]["grafana"]
@@ -587,6 +588,7 @@ class TestBuildAgentConfigAdditions:
         cc = result["claude-code"]["mcpServers"]["minimal"]
         assert cc["type"] == "http"
         assert cc["url"] == "http://mcp-minimal:8080/mcp"
+        assert cc["alwaysLoad"] is True
         # Vibe keeps the original default transport.
         vibe_srv = result["mistral-vibe"]["mcp_servers"][0]
         assert vibe_srv["transport"] == "streamable-http"
@@ -603,6 +605,7 @@ class TestBuildAgentConfigAdditions:
         result = build_agent_config_additions(config)
 
         assert result["claude-code"]["mcpServers"]["existing"]["url"] == url
+        assert result["claude-code"]["mcpServers"]["existing"]["alwaysLoad"] is True
         assert result["codex"]["mcp_servers"]["existing"]["url"] == url
         assert result["mistral-vibe"]["mcp_servers"][0]["url"] == url
         assert result["opencode"]["mcp"]["existing"]["url"] == url
@@ -627,6 +630,7 @@ class TestBuildAgentConfigAdditions:
             "type": "stdio",
             "command": "github-mcp-server",
             "args": ["stdio"],
+            "alwaysLoad": True,
         }
         assert result["codex"]["mcp_servers"]["github"] == {
             "command": "github-mcp-server",
