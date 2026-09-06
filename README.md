@@ -83,6 +83,20 @@ vendor-specific integrations:
 
 ### Installing the `agent-circus` Tool
 
+Install the published package from PyPI with
+[uv](https://docs.astral.sh/uv/getting-started/installation/):
+
+``` shell
+uv tool install agent-circus
+```
+
+You can now use `agent-circus` from any project directory; cloning this
+repository is not required. Docker or Podman must be installed on the host to
+build and run the agent containers.
+
+To install from a source checkout for development instead, run this command in
+the repository root:
+
 ``` shell
 uv tool install .
 ```
@@ -119,6 +133,12 @@ In case you want to get rid of it:
 
 ``` shell
 uv tool uninstall agent-circus
+```
+
+Upgrade an installation from PyPI with:
+
+``` shell
+uv tool upgrade agent-circus
 ```
 
 ## Working with the Environment
