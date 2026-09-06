@@ -1,0 +1,106 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and verify distributions
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: false
+          version: latest-known
+
+      - name: Install Python
+        run: uv python install 3.14
+
+      - name: Validate release version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must be a stable vMAJOR.MINOR.PATCH tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+
+          uv run --no-project --python 3.14 python - <<'PY'
+          import os
+          import pathlib
+          import tomllib
+
+          tag_version = os.environ["RELEASE_TAG"].removeprefix("v")
+          with pathlib.Path("pyproject.toml").open("rb") as file:
+              project_version = tomllib.load(file)["project"]["version"]
+
+          if tag_version != project_version:
+              raise SystemExit(
+                  "Release version does not match: "
+                  f"release tag={tag_version!r}, pyproject.toml={project_version!r}"
+              )
+
+          print(f"Validated release version {tag_version}")
+          PY
+
+      - name: Build distributions
+        run: uv build --no-sources
+
+      - name: Validate distribution metadata
+        run: uv run --with twine twine check --strict dist/*
+
+      - name: Smoke test wheel
+        run: uv run --isolated --no-project --with dist/*.whl tests/smoke_test_package.py
+
+      - name: Smoke test source distribution
+        run: uv run --isolated --no-project --with dist/*.tar.gz tests/smoke_test_package.py
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v7
+        with:
+          name: distributions
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish distributions
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/agent-circus/
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: false
+          version: latest-known
+
+      - name: Download distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: distributions
+          path: dist/
+
+      - name: Generate PEP 740 attestations
+        uses: astral-sh/attest-action@v0.0.6
+
+      - name: Publish to PyPI
+        run: uv publish
