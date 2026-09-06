@@ -90,9 +90,21 @@ Install the published package from PyPI with
 uv tool install agent-circus
 ```
 
-You can now use `agent-circus` from any project directory; cloning this
-repository is not required. Docker or Podman must be installed on the host to
-build and run the agent containers.
+Alternatively, install it into a Python 3.14 virtual environment using `pip`:
+
+``` shell
+python3.14 -m venv agent-circus-venv
+. agent-circus-venv/bin/activate
+python -m pip install agent-circus
+```
+
+The `agent-circus` command is available while this virtual environment is
+activated. Activate it again in a new shell before using the tool. On Linux,
+the `venv` module may be provided as a separate package by your distribution.
+
+You can use `agent-circus` from any project directory; cloning this repository
+is not required. Docker or Podman must be installed on the host to build and run
+the agent containers.
 
 To install from a source checkout for development instead, run this command in
 the repository root:
@@ -127,18 +139,20 @@ such as `bash`, when you want to work inside the harness container.
 they are no longer in use. Run `agent-circus remove` to clean up idle
 containers.
 
-### Uninstalling
+### Upgrading and Uninstalling
 
-In case you want to get rid of it:
-
-``` shell
-uv tool uninstall agent-circus
-```
-
-Upgrade an installation from PyPI with:
+For an installation managed by `uv`, upgrade or uninstall the tool with:
 
 ``` shell
 uv tool upgrade agent-circus
+uv tool uninstall agent-circus
+```
+
+For an installation in an activated virtual environment, use:
+
+``` shell
+python -m pip install --upgrade agent-circus
+python -m pip uninstall agent-circus
 ```
 
 ## Working with the Environment
