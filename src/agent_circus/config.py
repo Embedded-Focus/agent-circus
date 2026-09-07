@@ -1283,7 +1283,7 @@ def match_files(directory: str, patterns: list[str]) -> list[str]:
     :rtype: list[str]
     """
     try:
-        entries = Path(directory).iterdir()
+        entries = list(Path(directory).iterdir())
     except OSError:
         return []
     glob_patterns, compiled_re = _compile_patterns(patterns)

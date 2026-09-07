@@ -1,11 +1,18 @@
 """Template file access utilities."""
 
 import shutil
+import sys
 from contextlib import AbstractContextManager
-from importlib.resources import as_file, files
-from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import Literal
+
+if sys.version_info >= (3, 12):
+    from importlib.resources import as_file, files
+    from importlib.resources.abc import Traversable
+else:
+    # Directory extraction via as_file() requires the backport on Python 3.11.
+    from importlib_resources import as_file, files
+    from importlib_resources.abc import Traversable
 
 TEMPLATES = files("agent_circus.templates")
 

@@ -10,7 +10,7 @@
 [![CI](https://github.com/Embedded-Focus/agent-circus/actions/workflows/ci.yml/badge.svg)](https://github.com/Embedded-Focus/agent-circus/actions/workflows/ci.yml)
 [![Security](https://github.com/Embedded-Focus/agent-circus/actions/workflows/security.yml/badge.svg)](https://github.com/Embedded-Focus/agent-circus/actions/workflows/security.yml)
 [![Dependabot](https://img.shields.io/badge/dependabot-enabled-025e8c?logo=dependabot)](https://github.com/Embedded-Focus/agent-circus/security/dependabot)
-[![Python 3.14](https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white)](pyproject.toml)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
 [![Docker](https://img.shields.io/badge/runtime-Docker-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 [![Podman](https://img.shields.io/badge/runtime-Podman-892CA0?logo=podman&logoColor=white)](https://podman.io/)
 [![uv](https://img.shields.io/badge/uv-supported-DE5FE9)](https://docs.astral.sh/uv/)
@@ -83,6 +83,10 @@ vendor-specific integrations:
 
 ### Installing the `agent-circus` Tool
 
+The host CLI requires Python 3.11 or newer and is tested on Python 3.11–3.14.
+The agent containers manage their own runtimes; the Mistral Vibe image uses
+Python 3.14 independently of the host Python version.
+
 Install the published package from PyPI with
 [uv](https://docs.astral.sh/uv/getting-started/installation/):
 
@@ -90,10 +94,10 @@ Install the published package from PyPI with
 uv tool install agent-circus
 ```
 
-Alternatively, install it into a Python 3.14 virtual environment using `pip`:
+Alternatively, install it into a Python 3.11 or newer virtual environment using `pip`:
 
 ``` shell
-python3.14 -m venv agent-circus-venv
+python3.11 -m venv agent-circus-venv
 . agent-circus-venv/bin/activate
 python -m pip install agent-circus
 ```

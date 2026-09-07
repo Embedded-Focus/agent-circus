@@ -20,8 +20,14 @@ concurrency:
 
 jobs:
   checks:
-    name: Checks
+    name: Checks (Python ${{ matrix.python }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    env:
+      UV_PYTHON: ${{ matrix.python }}
 
     steps:
       - name: Check out repository
@@ -34,10 +40,28 @@ jobs:
           version: latest-known
 
       - name: Install Python
-        run: uv python install 3.14
+        run: uv python install "${UV_PYTHON}"
 
       - name: Install dependencies
         run: uv sync --locked --all-groups
 
       - name: Run checks
         run: make check
+
+      - name: Smoke test installed wheel
+        run: |
+          uv build --wheel
+          uv venv /tmp/agent-circus-wheel
+          uv pip install --python /tmp/agent-circus-wheel/bin/python dist/*.whl
+          cd /tmp
+          uv run --no-project --python /tmp/agent-circus-wheel/bin/python agent-circus --help
+          uv run --no-project --python /tmp/agent-circus-wheel/bin/python python - <<'PY'
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+          from agent_circus.templates import deploy_templates, template_dir_context
+
+          with template_dir_context() as directory:
+              assert (directory / "Dockerfile").is_file()
+          with TemporaryDirectory() as temporary:
+              assert deploy_templates(Path(temporary))
+          PY

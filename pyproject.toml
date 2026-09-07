@@ -7,7 +7,7 @@ name = "agent-circus"
 version = "0.1.0"
 description = "Run AI coding agents in isolated Docker or Podman containers"
 readme = "README.md"
-requires-python = "==3.14.*"
+requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
@@ -27,11 +27,15 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Topic :: Software Development",
 ]
 dependencies = [
     "docker>=7.0.0",
+    "importlib-resources>=5.10; python_version < '3.12'",
     "pygithub>=2.9.1",
     "tomli-w>=1.2.0",
     "typer>=0.21.1",
@@ -61,6 +65,8 @@ explicit = true
 [dependency-groups]
 dev = [
     "hatchling>=1.28.0",
+    # Type-check the Python 3.11 import branch even in newer development environments.
+    "importlib-resources>=5.10",
     "pre-commit>=4.5.1",
     "pytest>=9.0",
     "ruff>=0.14.14",
@@ -71,6 +77,12 @@ dev = [
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ty.environment]
+python-version = "3.11"
 
 [tool.ruff.lint]
 extend-select = ["I"]

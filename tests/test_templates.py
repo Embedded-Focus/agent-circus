@@ -1,6 +1,33 @@
 from pathlib import Path
+from zipfile import Path as ZipPath
+from zipfile import ZipFile
 
+import pytest
+
+from agent_circus import templates
 from agent_circus.templates import deploy_templates, template_dir_context
+
+
+def test_zipped_templates_extract_deploy_and_clean_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive_path = tmp_path / "templates.zip"
+    with ZipFile(archive_path, "w") as archive:
+        archive.writestr("agent-circus/Dockerfile", "FROM scratch\n")
+        archive.writestr("agent-circus/hooks/base-root.sh", "echo hook\n")
+
+    with ZipFile(archive_path) as archive:
+        monkeypatch.setattr(templates, "TEMPLATES", ZipPath(archive))
+        with template_dir_context() as extracted:
+            assert (extracted / "Dockerfile").read_text() == "FROM scratch\n"
+            assert (extracted / "hooks/base-root.sh").read_text() == "echo hook\n"
+        assert not extracted.exists()
+
+        deploy_templates(tmp_path)
+        assert (tmp_path / ".agent-circus/Dockerfile").read_text() == "FROM scratch\n"
+        assert (
+            tmp_path / ".agent-circus/hooks/base-root.sh"
+        ).read_text() == "echo hook\n"
 
 
 def test_deploy_templates_copies_files(tmp_path: Path) -> None:
