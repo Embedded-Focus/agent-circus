@@ -9,6 +9,7 @@ source = { editable = "." }
 dependencies = [
     { name = "docker" },
     { name = "importlib-resources", marker = "python_full_version < '3.12'" },
+    { name = "packaging" },
     { name = "pygithub" },
     { name = "tomli-w" },
     { name = "typer" },
@@ -28,6 +29,7 @@ dev = [
 requires-dist = [
     { name = "docker", specifier = ">=7.0.0" },
     { name = "importlib-resources", marker = "python_full_version < '3.12'", specifier = ">=5.10" },
+    { name = "packaging", specifier = ">=24.0" },
     { name = "pygithub", specifier = ">=2.9.1" },
     { name = "tomli-w", specifier = ">=1.2.0" },
     { name = "typer", specifier = ">=0.21.1" },

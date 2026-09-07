@@ -56,6 +56,13 @@ from .config import (
     sanitize_project_name,
     write_hook_script,
 )
+from .dependencies import (
+    apply_snapshot,
+    current,
+    deployed_override,
+    selection,
+    storage_dir,
+)
 from .exceptions import ConfigurationError
 from .mcp import HOST_GATEWAY_ENTRY, requires_host_gateway
 from .mcp import build_compose_override as build_mcp_compose_override
@@ -530,33 +537,35 @@ def build_compose_context(
                 "config.toml [hooks].base_root / base_user is ignored in deploy mode — "
                 "place hook scripts in .agent-circus/hooks/ directly."
             )
-        yield ComposeContext(
-            workspace=workspace,
-            project_name=project_name,
-            compose_file=config_dir / COMPOSE_FILE_NAME,
-            cwd=config_dir,
-            runtime=selected_runtime,
-            shadow_override=shadow_override,
-            agent_config_mounts_override=agent_config_mounts_override,
-            host_config_override=host_config_override,
-            agent_configs_override=agent_configs_override,
-            mcp_override=mcp_override,
-            additional_dirs_override=additional_dirs_override,
-            ssh_override=ssh_override,
-            git_override=git_override,
-            hosts_override=hosts_override,
-            ca_certs_override=ca_certs_override,
-            env_passthrough_override=env_passthrough_override,
-            startup_hook_override=startup_hook_override,
-            git_worktree_mirror_override=git_worktree_mirror_override,
-            data_store_override=data_store_override,
-            claude_mem_override=claude_mem_override,
-            port_forwards_override=port_forwards_override,
-            llama_cpp_override=llama_cpp_override,
-            podman_runtime_override=podman_runtime_override,
-            companion_services=companion_services,
-            data_store_seeder=data_store_seeder,
-        )
+        with deployed_override(workspace) as dependency_override_file:
+            yield ComposeContext(
+                dependency_override_file=dependency_override_file,
+                workspace=workspace,
+                project_name=project_name,
+                compose_file=config_dir / COMPOSE_FILE_NAME,
+                cwd=config_dir,
+                runtime=selected_runtime,
+                shadow_override=shadow_override,
+                agent_config_mounts_override=agent_config_mounts_override,
+                host_config_override=host_config_override,
+                agent_configs_override=agent_configs_override,
+                mcp_override=mcp_override,
+                additional_dirs_override=additional_dirs_override,
+                ssh_override=ssh_override,
+                git_override=git_override,
+                hosts_override=hosts_override,
+                ca_certs_override=ca_certs_override,
+                env_passthrough_override=env_passthrough_override,
+                startup_hook_override=startup_hook_override,
+                git_worktree_mirror_override=git_worktree_mirror_override,
+                data_store_override=data_store_override,
+                claude_mem_override=claude_mem_override,
+                port_forwards_override=port_forwards_override,
+                llama_cpp_override=llama_cpp_override,
+                podman_runtime_override=podman_runtime_override,
+                companion_services=companion_services,
+                data_store_seeder=data_store_seeder,
+            )
     else:
         # Instant mode: copy bundled templates into a fresh temp directory so
         # that project-specific mutations (hook scripts, ENV injection) never
@@ -564,6 +573,8 @@ def build_compose_context(
         with template_dir_context() as src_dir, tempfile.TemporaryDirectory() as _tmp:
             build_context = Path(_tmp)
             shutil.copytree(src_dir, build_context, symlinks=True, dirs_exist_ok=True)
+            if selection(storage_dir(workspace))["active"] is not None:
+                apply_snapshot(build_context, current(workspace))
             _copy_project_hooks(workspace, build_context)
             if hooks_config is not None:
                 _write_config_hooks(hooks_config, build_context)

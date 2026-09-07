@@ -9,6 +9,7 @@ from agent_circus.commands import (
     build,
     completion,
     config_store,
+    deps,
     destroy,
     exec_,
     init,
@@ -64,6 +65,7 @@ app.command(name="rm", hidden=True)(remove.remove)
 app.command()(destroy.destroy)
 app.command()(completion.completion)
 app.add_typer(config_store.app, name="config")
+app.add_typer(deps.app, name="deps")
 
 
 def run_cli() -> None:

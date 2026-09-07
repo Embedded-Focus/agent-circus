@@ -36,6 +36,7 @@ classifiers = [
 dependencies = [
     "docker>=7.0.0",
     "importlib-resources>=5.10; python_version < '3.12'",
+    "packaging>=24.0",
     "pygithub>=2.9.1",
     "tomli-w>=1.2.0",
     "typer>=0.21.1",

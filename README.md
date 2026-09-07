@@ -220,6 +220,122 @@ agent-circus remove --volumes             # also remove named volumes
 agent-circus remove --force               # don't ask for permission
 ```
 
+### Updating container dependencies
+
+Each Agent Circus release includes a baseline set of agent and tool versions.
+You can select newer upstream versions without upgrading the CLI:
+
+``` shell
+agent-circus deps show
+agent-circus deps update --dry-run
+agent-circus deps update
+agent-circus build
+agent-circus up
+```
+
+`deps update` updates the complete supported dependency set: npm, uv, yq,
+Claude Code, Claude Agent ACP, Bun, Claude-Mem, Codex, Codex ACP, OpenCode,
+and Mistral Vibe, including its Python transitive dependencies. It accepts
+stable versions and does not automatically downgrade existing dependencies.
+The Node base image and apt packages are outside this updater's scope.
+
+Applying an update requires **uv installed on the host**, network access to
+upstream registries, and Python 3.14 availability for resolution (uv may download
+Python). The command generates a Python lockfile without installing a host
+project environment. `--dry-run` only checks tool versions; it does not resolve
+or preview Python transitive dependency changes.
+
+Updates take effect only after rebuilding images and recreating containers.
+Run `agent-circus up` after `build` to let Compose recreate containers whose
+images changed. Existing running containers are not changed by `deps update`.
+You can also use `agent-circus up --build` for the build/start steps.
+
+#### Authentication
+
+GitHub discovery uses `GITHUB_TOKEN`, falling back to `GH_TOKEN`, or anonymous
+access if neither is set. For example, with a token already set in your shell:
+
+``` shell
+agent-circus deps update --dry-run
+```
+
+The token needs access to public release metadata; no repository write access
+is needed. Authentication and API rate-limit errors leave the active dependency
+selection unchanged. Tokens are not saved in snapshots or added to container
+build arguments. npm and PyPI discovery use public registries; private registry
+configuration and automatic reuse of `gh auth` credentials are not supported by
+this feature.
+
+#### Selection scope and history
+
+In instant mode, selections live under
+`$XDG_DATA_HOME/agent-circus/dependencies/`, defaulting to
+`~/.local/share/agent-circus/dependencies/`. An update affects subsequent builds
+in all instant-mode workspaces for that user.
+
+In deploy mode, selections live in `.agent-circus/dependencies/` in the project
+and take precedence over user-wide selections. A deployed project with no
+selection uses the versions in its deployed templates. You can commit its
+`selection.json` and `snapshots/` directory to share exact selections with your
+team; exclude the `.lock` file. All commands accept `--workspace PATH` (`-w PATH`)
+after the subcommand.
+
+``` shell
+agent-circus deps history
+agent-circus deps rollback
+agent-circus deps reset
+agent-circus deps show --workspace /path/to/project
+```
+
+`rollback` selects the previous snapshot; repeating it switches back to the
+selection you just left. `reset` selects the installed CLI release's baseline.
+Both operations work without upstream access or host uv. Rebuild and run `up`
+after either operation to change the containers.
+
+Snapshots contain a version manifest (`versions.toml`), `pyproject.toml`, and
+`uv.lock`. They are immutable and identified by their content hash. Successful
+updates save the previous selection, including the bundled baseline, before
+atomically activating the new snapshot. Failed updates leave the active
+selection intact; unchanged updates do not duplicate snapshots or discard the
+rollback target. Snapshots are retained until you manually remove unused ones.
+Do not edit snapshot contents or remove active/previous snapshots.
+
+`deps show` distinguishes the release baseline from locally resolved upstream
+versions. Successful upstream resolution does **not** establish that the new
+agents work together. Snapshots preserve versions, not downloaded artifacts or
+container images: rebuilding still requires upstream artifacts to be available.
+They also do not lock every npm transitive dependency, apt package, or base-image
+digest, so they do not guarantee byte-for-byte reproducible images.
+
+#### CLI upgrades and deployed templates
+
+Instant mode uses a new release's baseline after a CLI upgrade when no explicit
+selection is active. Explicit selections remain active if their recipe format
+is compatible; incompatible selections produce an error instead of being
+silently replaced. Use `deps reset` to switch to the installed release's
+baseline. Saved baseline snapshots remain available for rollback when compatible.
+Deployed projects keep their files and selection across CLI upgrades; use
+`deps reset` explicitly to select the new baseline.
+
+Updates never overwrite deployed Dockerfiles or Compose files. Builds use a
+temporary copy and a build override that preserves the original Compose path
+base. This first implementation recognizes recipes matching the installed
+release except for supported version pins. Custom hook scripts and other copied
+files are preserved; changes to Dockerfile, Compose structure, or Python project
+configuration require migration before using a dependency selection.
+
+To migrate an unsupported deployment, back up your customizations, redeploy with
+`agent-circus init --deploy --force`, and reapply supported customizations through
+hooks and `config.toml`. The force option overwrites deployed template files,
+including hooks, so keep your backup until migration is complete.
+
+Maintainers can continue using `make update-templates-dryrun` and
+`make update-templates` to prepare the next release's bundled baseline. These
+source-maintenance targets are separate from end-user dependency selections.
+The manual **Dependency container smoke tests** GitHub Actions workflow builds
+both template modes and checks agent version commands against the baseline or
+newly resolved upstream dependencies; run it before accepting a release baseline.
+
 ### Deploy Mode
 
 Deploy mode copies configuration files into a `.agent-circus/`

@@ -53,6 +53,7 @@ class ComposeContext:
     :param runtime: Container runtime used to execute Compose commands.
     :param compose_file: Absolute path to the base compose file.
     :param cwd: Working directory for the subprocess.
+    :param dependency_override_file: Temporary deployed-template build override.
     :param env: Extra environment variables, or ``None`` to inherit.
     :param shadow_override: JSON string for shadow bind mounts, or ``None``.
     :param agent_config_mounts_override: JSON string for default agent config
@@ -76,6 +77,7 @@ class ComposeContext:
     project_name: str
     compose_file: Path
     cwd: Path
+    dependency_override_file: Path | None = None
     runtime: ContainerRuntime = "docker"
     env: dict[str, str] | None = None
     shadow_override: str | None = None
@@ -123,6 +125,9 @@ def _exec_compose(
         "-f",
         str(ctx.compose_file),
     ]
+
+    if ctx.dependency_override_file is not None:
+        cmd.extend(["-f", str(ctx.dependency_override_file)])
 
     shadow_path = get_shadow_override_path(ctx.workspace)
     if ctx.shadow_override:
