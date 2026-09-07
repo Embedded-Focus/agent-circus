@@ -7,6 +7,7 @@ import typer
 
 from agent_circus.commands import (
     build,
+    completion,
     config_store,
     destroy,
     exec_,
@@ -61,6 +62,7 @@ app.command(name="exec")(exec_.exec_cmd)
 app.command()(remove.remove)
 app.command(name="rm", hidden=True)(remove.remove)
 app.command()(destroy.destroy)
+app.command()(completion.completion)
 app.add_typer(config_store.app, name="config")
 
 

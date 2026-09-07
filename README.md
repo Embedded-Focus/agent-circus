@@ -117,6 +117,34 @@ the repository root:
 uv tool install .
 ```
 
+### Shell Completions
+
+`agent-circus completion <shell>` prints a completion script for `bash`, `zsh`,
+`fish`, `powershell`, or `pwsh` (defaults to `bash`), following the
+`<cmd> completion <shell>` convention used by tools like `kubectl` and `gh`.
+Source it directly in your shell startup file:
+
+``` shell
+source <(agent-circus completion bash)
+```
+
+Alternatively, for bash, `agent-circus completion bash --install` writes the
+script to `~/.bash_completion.d/agent-circus`, a directory many bash-completion
+setups auto-source, creating it if missing and leaving it untouched if already
+up to date:
+
+``` shell
+agent-circus completion bash --install
+```
+
+If you use a shorter alias for `agent-circus` (e.g. `alias ac=agent-circus`),
+pass `--alias` (bash only) to also define the alias and wire up its
+completion in the same script:
+
+``` shell
+agent-circus completion bash --install --alias ac
+```
+
 See the [uv tool documentation](https://docs.astral.sh/uv/concepts/tools/) on how to work with tools in general.
 
 After installing you can start right away in one of your projects
