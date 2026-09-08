@@ -1,10 +1,11 @@
+import tomllib
 from pathlib import Path
 from zipfile import Path as ZipPath
 from zipfile import ZipFile
 
 import pytest
 
-from agent_circus import templates
+from agent_circus import dependencies, templates
 from agent_circus.templates import deploy_templates, template_dir_context
 
 
@@ -103,3 +104,16 @@ def test_claude_code_auxiliary_tools_are_build_args() -> None:
     assert "claude-mem@${CLAUDE_MEM_VERSION}" in dockerfile
     assert "BUN_VERSION:" in compose
     assert "CLAUDE_MEM_VERSION:" in compose
+
+
+def test_mistral_vibe_python_version_matches_dependency_resolver() -> None:
+    with template_dir_context() as template_dir:
+        dockerfile = (template_dir / "Dockerfile").read_text()
+        project = tomllib.loads((template_dir / "pyproject.toml").read_text())
+        lock = tomllib.loads((template_dir / "uv.lock").read_text())
+
+    version = dependencies.PYTHON_RESOLUTION_VERSION
+    requirement = f"=={version}.*"
+    assert project["project"]["requires-python"] == requirement
+    assert lock["requires-python"] == requirement
+    assert f"--python {version}" in dockerfile

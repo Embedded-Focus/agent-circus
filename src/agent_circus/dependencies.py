@@ -4,6 +4,7 @@ import contextlib
 import fcntl
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -31,8 +32,13 @@ from .update_versions import (
     read_current_version,
 )
 
+logger = logging.getLogger(__name__)
+
 SCHEMA = 1
 FILES = ("versions.toml", "pyproject.toml", "uv.lock")
+PYTHON_RESOLUTION_VERSION = "3.14"
+MAX_DIAGNOSTIC_CHARACTERS = 8_000
+SENSITIVE_ENV_MARKERS = ("TOKEN", "PASSWORD", "SECRET", "CREDENTIAL", "API_KEY")
 
 
 def storage_dir(workspace: Path) -> Path:
@@ -335,8 +341,31 @@ def resolve_upstream(directory: Path) -> list[str]:
     return changes
 
 
+def redact_diagnostic(output: str) -> str:
+    """Remove likely credentials and terminal escapes from subprocess output.
+
+    :param output: Captured subprocess output.
+    :returns: Sanitized and size-limited diagnostic text.
+    """
+    sanitized = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output)
+    sanitized = re.sub(r"(?i)(https?://)[^\s/@:]+:[^\s/@]+@", r"\1***@", sanitized)
+    for name, value in os.environ.items():
+        if (
+            value
+            and len(value) >= 4
+            and any(marker in name.upper() for marker in SENSITIVE_ENV_MARKERS)
+        ):
+            sanitized = sanitized.replace(value, "***")
+    sanitized = sanitized.strip()
+    if len(sanitized) > MAX_DIAGNOSTIC_CHARACTERS:
+        sanitized = (
+            "[earlier output omitted]\n" + sanitized[-MAX_DIAGNOSTIC_CHARACTERS:]
+        )
+    return sanitized or "uv produced no diagnostic output."
+
+
 def lock_python(directory: Path) -> None:
-    """Upgrade Python resolution without installing a host environment.
+    """Upgrade resolution with Python 3.14 provisioned by host uv.
 
     :param directory: Disposable Python project.
     :raises ConfigurationError: If uv is absent or resolution fails.
@@ -353,21 +382,58 @@ def lock_python(directory: Path) -> None:
     }
     try:
         subprocess.run(
-            ["uv", "lock", "--upgrade", "--prerelease", "disallow", "--no-config"],
+            [
+                "uv",
+                "lock",
+                "--upgrade",
+                "--prerelease",
+                "if-necessary",
+                "--python",
+                PYTHON_RESOLUTION_VERSION,
+                "--no-config",
+            ],
             cwd=directory,
             env=env,
             check=True,
             capture_output=True,
+            text=True,
             timeout=300,
         )
-    except (OSError, subprocess.SubprocessError):
+    except subprocess.CalledProcessError as error:
+        diagnostic = redact_diagnostic(
+            "\n".join(part for part in (error.stdout, error.stderr) if part)
+        )
+        logger.error(
+            "uv lock failed with exit code %s:\n%s", error.returncode, diagnostic
+        )
         raise ConfigurationError(
-            "Python dependency resolution failed. Check uv, Python 3.14 availability, and registry access; selection is unchanged."
+            "Python dependency resolution failed because host uv could not use "
+            "or download Python 3.14, or could not resolve the packages; see the "
+            "uv diagnostics above. The dependency selection is unchanged."
+        ) from None
+    except subprocess.TimeoutExpired as error:
+        diagnostic = redact_diagnostic(
+            "\n".join(
+                part.decode(errors="replace") if isinstance(part, bytes) else part
+                for part in (error.stdout, error.stderr)
+                if part
+            )
+        )
+        logger.error("uv lock timed out after 300 seconds:\n%s", diagnostic)
+        raise ConfigurationError(
+            "Host-side Python dependency resolution timed out after 300 seconds; "
+            "see the uv diagnostics above. The dependency selection is unchanged."
+        ) from None
+    except OSError as error:
+        logger.error("Could not execute host uv: %s", error)
+        raise ConfigurationError(
+            "Could not execute host uv for Python dependency resolution. The "
+            "dependency selection is unchanged."
         ) from None
 
 
 def validate_python(before: str, after: str) -> None:
-    """Reject Python downgrades and newly selected prereleases.
+    """Reject Python dependency downgrades.
 
     :param before: Previous Python lock contents.
     :param after: Newly resolved Python lock contents.
@@ -390,10 +456,6 @@ def validate_python(before: str, after: str) -> None:
         for version in resolved:
             if version in old.get(name, set()):
                 continue
-            if version.is_prerelease or version.is_devrelease:
-                raise ConfigurationError(
-                    f"Python resolution selected prerelease {name} {version}; selection is unchanged."
-                )
             if name in old and version < max(old[name]):
                 raise ConfigurationError(
                     f"Python resolution would downgrade {name}; selection is unchanged."

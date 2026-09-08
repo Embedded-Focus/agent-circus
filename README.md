@@ -85,7 +85,7 @@ vendor-specific integrations:
 
 The host CLI requires Python 3.11 or newer and is tested on Python 3.11–3.14.
 The agent containers manage their own runtimes; the Mistral Vibe image uses
-Python 3.14 independently of the host Python version.
+Python 3.14 independently of the Python running the host CLI.
 
 Install the published package from PyPI with
 [uv](https://docs.astral.sh/uv/getting-started/installation/):
@@ -239,11 +239,58 @@ and Mistral Vibe, including its Python transitive dependencies. It accepts
 stable versions and does not automatically downgrade existing dependencies.
 The Node base image and apt packages are outside this updater's scope.
 
-Applying an update requires **uv installed on the host**, network access to
-upstream registries, and Python 3.14 availability for resolution (uv may download
-Python). The command generates a Python lockfile without installing a host
-project environment. `--dry-run` only checks tool versions; it does not resolve
-or preview Python transitive dependency changes.
+#### Host requirement: uv
+
+Applying an update requires the `uv` executable on the host. Install it before
+using `deps update`; no particular host Python version needs to be installed:
+
+``` shell
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv --version
+```
+
+The operation also needs network access to GitHub, the Python package registry,
+and the Python download service. It runs entirely on the host and does not start
+or execute code inside an agent container. Agent Circus runs the following
+command in a disposable copy of the effective container recipe:
+
+``` shell
+uv lock --upgrade --prerelease if-necessary --python 3.14 --no-config
+```
+
+Mistral Vibe supports Python 3.12 and newer. Agent Circus deliberately runs it
+on Python 3.14 to use the current Python runtime in the controlled container
+environment. For lock resolution, `uv` uses an existing Python 3.14 interpreter
+or automatically downloads a managed interpreter to its host cache. This does
+not require a system-wide Python installation or manual preparation. Automatic
+setup can fail if downloads are disabled, for example with
+`UV_PYTHON_DOWNLOADS=never`, or if the download service cannot be reached. To
+diagnose that configuration directly, run:
+
+``` shell
+uv python find 3.14
+```
+
+The command only generates a lockfile; it does not create or synchronize a host
+project environment. The candidate recipe is temporary, and the active
+dependency selection changes only after every lookup, lock, and validation step
+succeeds. Direct tool versions must be stable. Python transitive dependencies
+may use a prerelease when it is required by a selected stable package; Mistral
+Vibe currently has such a dependency. `--dry-run` only checks direct tool
+versions; it does not prepare Python 3.14 or resolve Python
+transitive dependency changes.
+
+If `uv` fails, Agent Circus prints its captured output after removing likely
+credentials. To retain diagnostics from a retry, put the global logging options
+before the subcommand:
+
+``` shell
+agent-circus --log-file /tmp/agent-circus.log deps update
+```
+
+There is no persistent per-operation log unless `--log-file`, `LOGFILE`, or the
+user-global logging configuration is set. Output from an earlier invocation
+that did not use one of those options cannot be recovered.
 
 Updates take effect only after rebuilding images and recreating containers.
 Run `agent-circus up` after `build` to let Compose recreate containers whose

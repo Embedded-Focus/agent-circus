@@ -82,7 +82,7 @@ def update(
         ),
     ] = False,
 ) -> None:
-    """Resolve stable upstream versions; requires host uv when applying."""
+    """Resolve stable versions with host uv; Python is managed automatically."""
     typer.echo(
         "Checking upstream versions..."
         if dry_run

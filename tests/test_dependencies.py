@@ -1,6 +1,7 @@
 """Dependency snapshots, failure atomicity, and build integration."""
 
 import json
+import logging
 import shutil
 import subprocess
 import tomllib
@@ -236,7 +237,7 @@ def test_github_token_precedence(
 
 
 def test_python_lock_does_not_sync_or_inherit_discovery_tokens(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "secret")
     monkeypatch.setenv("GH_TOKEN", "secret")
@@ -252,27 +253,38 @@ def test_python_lock_does_not_sync_or_inherit_discovery_tokens(
         "lock",
         "--upgrade",
         "--prerelease",
-        "disallow",
+        "if-necessary",
+        "--python",
+        "3.14",
         "--no-config",
     ]
+    assert run.call_args.kwargs["text"] is True
     assert (
         not {"GITHUB_TOKEN", "GH_TOKEN", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"}
         & run.call_args.kwargs["env"].keys()
     )
-    run.side_effect = subprocess.CalledProcessError(1, ["uv"], stderr="secret")
-    with pytest.raises(ConfigurationError) as caught:
+    run.side_effect = subprocess.CalledProcessError(
+        1,
+        ["uv"],
+        output="resolver context",
+        stderr="failed with secret at https://user:password@example.com/simple",
+    )
+    with caplog.at_level(logging.ERROR), pytest.raises(ConfigurationError) as caught:
         deps.lock_python(tmp_path)
     assert "secret" not in str(caught.value)
+    assert "resolver context" in caplog.text
+    assert "secret" not in caplog.text
+    assert "password" not in caplog.text
+    assert "https://***@example.com/simple" in caplog.text
 
 
-def test_python_resolution_rejects_downgrades_and_new_prereleases() -> None:
+def test_python_resolution_rejects_downgrades_and_allows_required_prereleases() -> None:
     def locked(version: str) -> str:
         return f'[[package]]\nname = "example"\nversion = "{version}"\nsource = {{ registry = "https://pypi.org/simple" }}\n'
 
     with pytest.raises(ConfigurationError, match="downgrade"):
         deps.validate_python(locked("2.0"), locked("1.9"))
-    with pytest.raises(ConfigurationError, match="prerelease"):
-        deps.validate_python(locked("2.0"), locked("3.0rc1"))
+    deps.validate_python(locked("2.0"), locked("3.0rc1"))
     deps.validate_python(locked("2.0"), locked("2.1"))
 
 
