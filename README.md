@@ -94,6 +94,12 @@ Install the published package from PyPI with
 uv tool install agent-circus
 ```
 
+It is also possible to use agent-circus without installing it explicitly. For example:
+
+``` shell
+uvx agent-circus version
+```
+
 Alternatively, install it into a Python 3.11 or newer virtual environment using `pip`:
 
 ``` shell
