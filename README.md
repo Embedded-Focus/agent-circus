@@ -117,6 +117,13 @@ the repository root:
 uv tool install .
 ```
 
+### Version Information
+
+The `version` command includes the full Git commit. For an installation from a
+local checkout, it reports that checkout's current `HEAD`. Distribution
+artifacts, including packages installed from PyPI, contain the commit recorded
+when they were built.
+
 ### Shell Completions
 
 `agent-circus completion <shell>` prints a completion script for `bash`, `zsh`,

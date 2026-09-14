@@ -54,6 +54,9 @@ agent-circus-update-templates = "agent_circus.update_versions:run"
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_circus"]
 
+[tool.hatch.build.hooks.custom]
+path = "src/hatch_build.py"
+
 [tool.uv]
 preview-features = ["audit-command"]
 

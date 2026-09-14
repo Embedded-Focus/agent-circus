@@ -16,6 +16,7 @@ from agent_circus.commands import (
     ps,
     remove,
     up,
+    version,
 )
 from agent_circus.config import load_user_config
 from agent_circus.utils import setup_logging
@@ -29,6 +30,7 @@ app = typer.Typer(
 
 @app.callback()
 def main(
+    ctx: typer.Context,
     log_level: Annotated[
         str | None,
         typer.Option(
@@ -47,6 +49,9 @@ def main(
     ] = None,
 ) -> None:
     """CLI for managing agent containers."""
+    if ctx.invoked_subcommand == "version":
+        return
+
     logging_cfg = load_user_config().get("logging", {})
     setup_logging(
         level=log_level or logging_cfg.get("level", "INFO"),
@@ -64,6 +69,7 @@ app.command()(remove.remove)
 app.command(name="rm", hidden=True)(remove.remove)
 app.command()(destroy.destroy)
 app.command()(completion.completion)
+app.command()(version.version)
 app.add_typer(config_store.app, name="config")
 app.add_typer(deps.app, name="deps")
 
