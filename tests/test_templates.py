@@ -93,6 +93,13 @@ def test_claude_code_install_allows_required_postinstall_scripts() -> None:
     assert "npm install -g --allow-scripts=@anthropic-ai/claude-code,bun" in dockerfile
 
 
+def test_opencode_install_allows_required_postinstall_script() -> None:
+    with template_dir_context() as template_dir:
+        dockerfile = (template_dir / "Dockerfile").read_text()
+
+    assert "npm install -g --allow-scripts=opencode-ai" in dockerfile
+
+
 def test_claude_code_auxiliary_tools_are_build_args() -> None:
     with template_dir_context() as template_dir:
         dockerfile = (template_dir / "Dockerfile").read_text()

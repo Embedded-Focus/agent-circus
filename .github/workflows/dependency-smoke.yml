@@ -49,7 +49,9 @@ jobs:
                   ("mistral-vibe", "vibe"),
               ):
                   _exec_compose([
-                      "run", "--rm", "--no-deps", "--entrypoint", executable,
+                      "run", "--rm", "--no-deps",
+                      "--env", "XDG_CACHE_HOME=/tmp/agent-circus-cache",
+                      "--entrypoint", executable,
                       service, "--version",
                   ], ctx)
           PY
