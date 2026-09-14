@@ -124,3 +124,10 @@ def test_mistral_vibe_python_version_matches_dependency_resolver() -> None:
     assert project["project"]["requires-python"] == requirement
     assert lock["requires-python"] == requirement
     assert f"--python {version}" in dockerfile
+
+
+def test_mistral_vibe_managed_python_is_accessible_to_runtime_user() -> None:
+    with template_dir_context() as template_dir:
+        dockerfile = (template_dir / "Dockerfile").read_text()
+
+    assert "UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python uv sync" in dockerfile

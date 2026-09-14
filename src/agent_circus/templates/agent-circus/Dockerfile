@@ -153,7 +153,7 @@ USER root
 RUN --mount=type=cache,target=/root/.cache \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync \
+    UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python uv sync \
         --python 3.14 \
         --locked \
         --no-dev \
