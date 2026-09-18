@@ -7,10 +7,16 @@ requires-python = "==3.14.*"
 dependencies = [
     "gitpython >= 3.1.59",
     # https://github.com/mistralai/mistral-vibe
-    "mistral-vibe>=2.25.4",
+    "mistral-vibe>=2.25.5",
 ]
 
 [tool.uv]
 preview-features = ["audit-command"]
 # mistral-vibe pins gitpython==3.1.58, which has known CVEs; override it.
-override-dependencies = ["gitpython>=3.1.59"]
+override-dependencies = [
+    "gitpython>=3.1.59",
+    # work around critical CWEs 266, 269, 295, and 297
+    "anyio>=4.14.2",
+    # work around critical CWEs 400 and 1333
+    "soupsieve>=2.9.0",
+]
