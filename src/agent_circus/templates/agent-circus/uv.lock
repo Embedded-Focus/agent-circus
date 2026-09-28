@@ -21,7 +21,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "gitpython", specifier = ">=3.1.59" },
-    { name = "mistral-vibe", specifier = ">=2.25.5" },
+    { name = "mistral-vibe", specifier = ">=2.25.8" },
 ]
 
 [[package]]
@@ -608,7 +608,7 @@ wheels = [
 
 [[package]]
 name = "mistral-vibe"
-version = "2.25.5"
+version = "2.25.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "agent-client-protocol" },
@@ -618,7 +618,7 @@ dependencies = [
     { name = "beautifulsoup4" },
     { name = "cachetools" },
     { name = "certifi" },
-    { name = "cffi" },
+    { name = "cffi", marker = "platform_machine != 'aarch64' or platform_python_implementation != 'PyPy' or sys_platform != 'linux'" },
     { name = "charset-normalizer" },
     { name = "click", marker = "sys_platform != 'emscripten'" },
     { name = "colorama", marker = "sys_platform == 'win32'" },
@@ -652,9 +652,8 @@ dependencies = [
     { name = "mcp" },
     { name = "mdit-py-plugins" },
     { name = "mdurl" },
-    { name = "miniaudio" },
+    { name = "miniaudio", marker = "platform_machine != 'aarch64' or sys_platform != 'linux'" },
     { name = "mistralai" },
-    { name = "mistralai-vibe-local-harness" },
     { name = "more-itertools" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-common" },
@@ -669,7 +668,7 @@ dependencies = [
     { name = "ptyprocess" },
     { name = "pyasn1" },
     { name = "pyasn1-modules" },
-    { name = "pycparser", marker = "implementation_name != 'PyPy'" },
+    { name = "pycparser", marker = "(implementation_name != 'PyPy' and platform_machine != 'aarch64') or (implementation_name != 'PyPy' and platform_python_implementation != 'PyPy') or (implementation_name != 'PyPy' and sys_platform != 'linux')" },
     { name = "pydantic" },
     { name = "pydantic-core" },
     { name = "pydantic-settings" },
@@ -712,9 +711,12 @@ dependencies = [
     { name = "zipp" },
     { name = "zstandard" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d9/99/eb542460281dc24ad0c98c5a6f1ad63d81ff72894e93e542884921ec822f/mistral_vibe-2.25.5.tar.gz", hash = "sha256:acc73923c0636540f904d6e1327c72c4861674147c5df8b0b6f5ecc21a730c84", size = 2815884, upload-time = "2026-09-18T11:10:17.128Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4c/6a/43720fb5ea36c0aa09b52bd0e0ee118fd6212ce58d8894b74c2bd584da0a/mistral_vibe-2.25.5-py3-none-any.whl", hash = "sha256:070a29850246e5e99158ce55ad2c71a547661410ab030bd47db01e74c2da4420", size = 1597482, upload-time = "2026-09-18T11:10:14.891Z" },
+    { url = "https://files.pythonhosted.org/packages/e7/87/12fdf1763ccc23bea4396f2ae14b5bc06dd5095b741fcbb6fccc591fe012/mistral_vibe-2.25.8-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:9b2a3f9c1078e8cf2bd0a2cd860336b3ad8039894ecf423994588be4545d73ea", size = 35323356, upload-time = "2026-09-23T15:37:39.469Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/90/0611fca521027557e1d3d677d79e2a186bc50343cb0f65bd8ec951179299/mistral_vibe-2.25.8-cp312-abi3-macosx_11_0_x86_64.whl", hash = "sha256:22a3eef4015ae16cdd3654be41cd5d1bdeb23a18cc5bf845d0cdf291277ed824", size = 36504139, upload-time = "2026-09-23T15:37:43.136Z" },
+    { url = "https://files.pythonhosted.org/packages/3c/39/05c61cddf0f406361aa6a2faff69c75713de4c9d74c8827f076806487849/mistral_vibe-2.25.8-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:a73727361c98440d20c376bff69edf92fd18d01c03f81e54e3d47135df2c9f20", size = 52664545, upload-time = "2026-09-23T15:37:46.707Z" },
+    { url = "https://files.pythonhosted.org/packages/cb/7a/3ccfdbb088c6411d1a6acc8ffa88c2c8d793075d9624a53fdb8cd3aea008/mistral_vibe-2.25.8-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:d0d004cb834e8e7973378bb779411fe97bb4ed9d7e533c121d64c7fbd2ec3dea", size = 56576327, upload-time = "2026-09-23T15:37:50.582Z" },
+    { url = "https://files.pythonhosted.org/packages/89/10/6858b5316c2ca11ca8e0da93c62eb810e506e77ebd812773b3b860931980/mistral_vibe-2.25.8-cp312-abi3-win_amd64.whl", hash = "sha256:6c21acc2bffdfd1a94c9da6d54db51ee4e2542a60165e46d5727ff06e0a57ae1", size = 33591302, upload-time = "2026-09-23T15:37:57.827Z" },
 ]
 
 [[package]]
@@ -734,30 +736,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/39/c1/c6452c81a3d7fc0423b4cfcd84840cf7141c93a0c50755abc27a7619a988/mistralai-2.6.0.tar.gz", hash = "sha256:531a86292ad498fc0fcd6dfcd480a3f4db9e92f558e14ffb22172824831e3a6e", size = 518760, upload-time = "2026-07-06T14:40:08.578Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e3/d5/6b9c08ab9b5b890970e8949bf00a9f8f82653826de5cc5ad506fe1c1fb73/mistralai-2.6.0-py3-none-any.whl", hash = "sha256:4b7202b0cab84ea03f8ff4a933c8cfc615b3057520d9d76467c07aa23939dab2", size = 1235945, upload-time = "2026-07-06T14:40:06.226Z" },
-]
-
-[[package]]
-name = "mistralai-vibe-local-harness"
-version = "0.5.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "anyio" },
-    { name = "certifi" },
-    { name = "httpx" },
-    { name = "mcp" },
-    { name = "mistralai" },
-    { name = "opentelemetry-api" },
-    { name = "pydantic" },
-    { name = "pywinpty", marker = "sys_platform == 'win32'" },
-    { name = "rfc8785" },
-    { name = "truststore" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/4a/c8/0d62bb843e805f8b52494689e03e0ed23859bbd58e3c37ca42371633be62/mistralai_vibe_local_harness-0.5.1-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:0123e73b4d03b1dccda467c7bc12d818a8c30db9196eb7ec4f41a59878db2b2d", size = 25540215, upload-time = "2026-09-18T09:38:01.119Z" },
-    { url = "https://files.pythonhosted.org/packages/ca/e7/033e5a568b261603734d2ac183a95ffd6aedde2907dab30467e23c9736bd/mistralai_vibe_local_harness-0.5.1-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:f97887e5cdf33b8fbe9dfa018de0eccb3a61d47358c075f832c5a0238f2f27f2", size = 24495059, upload-time = "2026-09-18T09:38:04.8Z" },
-    { url = "https://files.pythonhosted.org/packages/99/60/5cdb29ab09af2758d7c3f0d7f8ab89250ab47f5cdbf9e3f02016151fada3/mistralai_vibe_local_harness-0.5.1-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:0b735d8bbd0b81b5e861ae8daa1b194a644afed3e882ebc4803ed0adb48529cc", size = 23762283, upload-time = "2026-09-18T09:38:07.757Z" },
-    { url = "https://files.pythonhosted.org/packages/69/c0/614599e44ab69ef127351eb0c83313c39f21c48fd38fa26d18cf236a791f/mistralai_vibe_local_harness-0.5.1-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:601ddeb1b75310618116d3f5c6305ff720d4f4317b8c0470c8e2bc552bbf1c45", size = 24780499, upload-time = "2026-09-18T09:38:11.118Z" },
-    { url = "https://files.pythonhosted.org/packages/07/08/3d5c46567b458243012ffdb400393353e72b387d9251cf3c6e06bf7b615f/mistralai_vibe_local_harness-0.5.1-cp312-abi3-win_amd64.whl", hash = "sha256:583b7e16e25207baa9c636a4f60ed446e1372fd937953498c0e505de17cbd753", size = 24235566, upload-time = "2026-09-18T09:38:14.73Z" },
 ]
 
 [[package]]
@@ -1415,11 +1393,11 @@ wheels = [
 
 [[package]]
 name = "typing-extensions"
-version = "4.15.0"
+version = "4.16.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/72/94/1a15dd82efb362ac84269196e94cf00f187f7ed21c242792a923cdb1c61f/typing_extensions-4.15.0.tar.gz", hash = "sha256:0cea48d173cc12fa28ecabc3b837ea3cf6f38c6d1136f85cbaaf598984861466", size = 109391, upload-time = "2025-08-25T13:49:26.313Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f6/cc/6253133b5bb138fc3306cebfbda2c520f545d36b5be2c7255cc528bb45d6/typing_extensions-4.16.0.tar.gz", hash = "sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5", size = 113555, upload-time = "2026-07-02T08:40:05.92Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/18/67/36e9267722cc04a6b9f15c7f3441c2363321a3ea07da7ae0c0707beb2a9c/typing_extensions-4.15.0-py3-none-any.whl", hash = "sha256:f0fa19c6845758ab08074a0cfa8b7aecb71c999ca73d62883bc25cc018c4e548", size = 44614, upload-time = "2025-08-25T13:49:24.86Z" },
+    { url = "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl", hash = "sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8", size = 45571, upload-time = "2026-07-02T08:40:04.659Z" },
 ]
 
 [[package]]
