@@ -1,6 +1,12 @@
 name: Dependency container smoke tests
 
 on:
+  pull_request:
+    branches:
+      - develop
+      - main
+    paths:
+      - src/agent_circus/templates/agent-circus/**
   workflow_dispatch:
     inputs:
       upstream:
@@ -29,7 +35,7 @@ jobs:
         if: matrix.mode == 'deploy'
         run: uv run agent-circus init --deploy
       - name: Resolve upstream dependencies
-        if: inputs.upstream
+        if: github.event_name == 'workflow_dispatch' && inputs.upstream
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: uv run agent-circus deps update

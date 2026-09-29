@@ -9,9 +9,12 @@ updates:
       day: monday
       time: "06:00"
       timezone: Europe/Vienna
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     groups:
       python-dependencies:
+        applies-to: version-updates
         patterns:
           - "*"
 
@@ -23,9 +26,12 @@ updates:
       day: monday
       time: "06:15"
       timezone: Europe/Vienna
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     groups:
       template-python-dependencies:
+        applies-to: version-updates
         patterns:
           - "*"
 
@@ -37,9 +43,12 @@ updates:
       day: monday
       time: "06:30"
       timezone: Europe/Vienna
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     groups:
       github-actions:
+        applies-to: version-updates
         patterns:
           - "*"
 
@@ -51,8 +60,57 @@ updates:
       day: monday
       time: "06:45"
       timezone: Europe/Vienna
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     groups:
       docker-images:
+        applies-to: version-updates
+        patterns:
+          - "*"
+
+  # Entries without target-branch customize security updates on the default branch.
+  # A zero version-update limit keeps these entries security-only.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    groups:
+      security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  - package-ecosystem: uv
+    directory: /src/agent_circus/templates/agent-circus
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    groups:
+      security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    groups:
+      security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  - package-ecosystem: docker
+    directory: /src/agent_circus/templates/agent-circus
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    groups:
+      security-updates:
+        applies-to: security-updates
         patterns:
           - "*"
