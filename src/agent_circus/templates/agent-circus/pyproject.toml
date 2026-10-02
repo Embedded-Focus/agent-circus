@@ -19,4 +19,7 @@ override-dependencies = [
     "anyio>=4.14.2",
     # work around critical CWEs 400 and 1333
     "soupsieve>=2.9.0",
+    # work around critical security issues
+    "pyjwt>=2.15.0",
+    "urllib3>=2.8.0",
 ]
