@@ -19,7 +19,7 @@ from .config import (
     COMPOSE_ENV_PASSTHROUGH_FILE_NAME,
     COMPOSE_GIT_FILE_NAME,
     COMPOSE_GIT_WORKTREE_MIRROR_FILE_NAME,
-    COMPOSE_HOST_CONFIG_FILE_NAME,
+    COMPOSE_HOST_CREDENTIALS_FILE_NAME,
     COMPOSE_HOSTS_FILE_NAME,
     COMPOSE_LLAMA_CPP_FILE_NAME,
     COMPOSE_MCP_FILE_NAME,
@@ -103,13 +103,13 @@ def get_agent_config_mounts_override_path(workspace: Path) -> Path:
     return get_state_dir(workspace) / COMPOSE_AGENT_CONFIG_MOUNTS_FILE_NAME
 
 
-def get_host_config_override_path(workspace: Path) -> Path:
-    """Get the path for the host config compose override file.
+def get_host_credentials_override_path(workspace: Path) -> Path:
+    """Get the path for the host credentials compose override file.
 
     :param workspace: Workspace path.
-    :returns: Path to ``compose.host-config.json`` in the state directory.
+    :returns: Path to ``compose.host-credentials.json`` in the state directory.
     """
-    return get_state_dir(workspace) / COMPOSE_HOST_CONFIG_FILE_NAME
+    return get_state_dir(workspace) / COMPOSE_HOST_CREDENTIALS_FILE_NAME
 
 
 def get_agent_configs_dir(workspace: Path) -> Path:

@@ -25,7 +25,7 @@ COMPOSE_AGENT_CONFIGS_FILE_NAME = "compose.agent-configs.json"
 
 COMPOSE_AGENT_CONFIG_MOUNTS_FILE_NAME = "compose.agent-config-mounts.json"
 
-COMPOSE_HOST_CONFIG_FILE_NAME = "compose.host-config.json"
+COMPOSE_HOST_CREDENTIALS_FILE_NAME = "compose.host-credentials.json"
 
 COMPOSE_MCP_FILE_NAME = "compose.mcp.json"
 
@@ -99,6 +99,25 @@ DEFAULT_AGENT_CONFIG_MOUNTS: dict[str, dict[str, str]] = {
     },
 }
 
+AGENT_CREDENTIAL_PATHS: dict[str, dict[str, str]] = {
+    "claude-code": {
+        "host": "${HOME}/.claude/.credentials.json",
+        "container": "/home/node/.claude/.credentials.json",
+    },
+    "codex": {
+        "host": "${HOME}/.codex/auth.json",
+        "container": "/home/node/.codex/auth.json",
+    },
+    "mistral-vibe": {
+        "host": "${HOME}/.vibe/.env",
+        "container": "/home/node/.vibe/.env",
+    },
+    "opencode": {
+        "host": "${HOME}/.local/share/opencode/auth.json",
+        "container": "/home/node/.local/share/opencode/auth.json",
+    },
+}
+
 VCS_MARKERS: tuple[str, ...] = (".git", ".hg", ".svn", ".bzr", "_darcs")
 
 PROJECT_FILE_MARKERS: tuple[str, ...] = (
@@ -135,6 +154,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "runtime": None,
     "llama_cpp": None,
     "claude_mem": None,
+    "host_credentials": None,
 }
 
 logger = logging.getLogger(__name__)
@@ -323,6 +343,7 @@ def validate_config(config: dict[str, Any]) -> None:
     _validate_mcp_servers(config.get("mcp_servers", []))
     _validate_runtime_config(config.get("runtime"))
     _validate_claude_mem(config.get("claude_mem"))
+    _validate_host_credentials(config.get("host_credentials"))
 
 
 def _validate_runtime_config(runtime_config: Any) -> None:
@@ -428,6 +449,62 @@ def _validate_claude_mem(claude_mem: Any) -> None:
             "claude_mem.services only supports: "
             f"{', '.join(CLAUDE_MEM_SUPPORTED_SERVICES)}"
         )
+
+
+def _validate_host_credentials(host_credentials: Any) -> None:
+    """Validate the optional ``[host_credentials]`` configuration table.
+
+    :param host_credentials: Raw ``host_credentials`` value from merged config.
+    :raises ConfigurationError: If the table has unsupported values.
+    """
+    if host_credentials is None:
+        return
+    if not isinstance(host_credentials, dict):
+        raise ConfigurationError("host_credentials must be a table")
+
+    services = host_credentials.get("services", [])
+    if not isinstance(services, list) or any(not isinstance(s, str) for s in services):
+        raise ConfigurationError("host_credentials.services must be a list of strings")
+    unsupported = set(services) - set(AGENT_CREDENTIAL_PATHS)
+    if unsupported:
+        raise ConfigurationError(
+            "host_credentials.services contains unsupported service(s): "
+            f"{', '.join(sorted(unsupported))}. "
+            f"Available: {', '.join(AGENT_CREDENTIAL_PATHS)}"
+        )
+
+
+def get_host_credentials_services(config: dict[str, Any]) -> list[str]:
+    """Return the agent services with direct host credential mounts enabled.
+
+    :param config: Merged Agent Circus configuration.
+    :returns: Service names from ``[host_credentials].services``, or ``[]``.
+    """
+    host_credentials = config.get("host_credentials")
+    if not host_credentials:
+        return []
+    return host_credentials.get("services", [])
+
+
+def build_host_credentials_override(services: list[str]) -> str:
+    """Build a Compose override that bind-mounts each agent's auth file.
+
+    Each service's credential file (see :data:`AGENT_CREDENTIAL_PATHS`) is
+    mounted read-write directly from its real host path onto the same path
+    inside the container. Everything else in the agent's configuration
+    directory is unaffected and continues to go through the project-local
+    copy and merge pipeline.
+
+    :param services: Agent service names with host credential mounts enabled.
+    :returns: Compose override as a JSON string.
+    """
+    services_block: dict[str, Any] = {}
+    for service in services:
+        paths = AGENT_CREDENTIAL_PATHS[service]
+        services_block[service] = {
+            "volumes": [f"{paths['host']}:{paths['container']}:cached"],
+        }
+    return json.dumps({"services": services_block})
 
 
 def write_hook_script(content: str, dest: Path) -> None:
@@ -928,29 +1005,6 @@ def build_agent_config_mounts_override(
             )
         services[service] = {"volumes": volumes}
     return json.dumps({"services": services})
-
-
-def build_host_config_override(service: str) -> str:
-    """Build a Docker Compose override that mounts one host config directory.
-
-    :param service: Agent service that should receive its real host config.
-    :returns: Compose override as a JSON string.
-    :raises ConfigurationError: If the service has no default config mount.
-    """
-    default_mount = DEFAULT_AGENT_CONFIG_MOUNTS.get(service)
-    if default_mount is None:
-        raise ConfigurationError(f"Service has no host config mount: {service}")
-    return json.dumps(
-        {
-            "services": {
-                service: {
-                    "volumes": [
-                        f"{default_mount['host']}:{default_mount['container']}:cached"
-                    ]
-                }
-            }
-        }
-    )
 
 
 def build_data_store_override(

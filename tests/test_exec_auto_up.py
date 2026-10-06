@@ -124,17 +124,15 @@ def test_exec_auto_up_starts_only_requested_service(
 @patch("agent_circus.commands.exec_.compose_up")
 @patch("agent_circus.commands.exec_.compose_is_service_running", return_value=False)
 @patch("agent_circus.commands.exec_.build_compose_context")
-def test_exec_host_config_passes_service_to_context(
+def test_exec_rejects_unknown_host_config_flag(
     mock_build_ctx: MagicMock,
     mock_is_running: MagicMock,
     mock_up: MagicMock,
     mock_exec: MagicMock,
     tmp_path: Path,
 ) -> None:
-    ctx = _make_ctx(tmp_path)
-    mock_build_ctx.return_value.__enter__ = MagicMock(return_value=ctx)
-    mock_build_ctx.return_value.__exit__ = MagicMock(return_value=False)
-
+    """``--host-config`` was replaced by the persistent ``host_credentials``
+    config.toml setting; the CLI flag no longer exists."""
     result = runner.invoke(
         app,
         [
@@ -150,46 +148,5 @@ def test_exec_host_config_passes_service_to_context(
         ],
     )
 
-    assert result.exit_code == 0
-    mock_build_ctx.assert_called_once_with(tmp_path, host_config_service="codex")
-    mock_is_running.assert_called_once_with(ctx, "codex")
-    mock_up.assert_called_once_with(ctx, ["codex"], capture_output=True)
-    mock_exec.assert_called_once_with(ctx, "codex", ["codex", "login"], no_tty=True)
-
-
-@patch("agent_circus.commands.exec_.compose_exec")
-@patch("agent_circus.commands.exec_.compose_up")
-@patch("agent_circus.commands.exec_.compose_is_service_running", return_value=True)
-@patch("agent_circus.commands.exec_.build_compose_context")
-def test_exec_host_config_refuses_running_service(
-    mock_build_ctx: MagicMock,
-    mock_is_running: MagicMock,
-    mock_up: MagicMock,
-    mock_exec: MagicMock,
-    tmp_path: Path,
-) -> None:
-    ctx = _make_ctx(tmp_path)
-    mock_build_ctx.return_value.__enter__ = MagicMock(return_value=ctx)
-    mock_build_ctx.return_value.__exit__ = MagicMock(return_value=False)
-
-    result = runner.invoke(
-        app,
-        [
-            "exec",
-            "-T",
-            "--workspace",
-            str(tmp_path),
-            "--host-config",
-            "codex",
-            "--",
-            "codex",
-            "login",
-        ],
-    )
-
-    assert result.exit_code == 1
-    assert "Cannot use --host-config" in result.output
-    mock_build_ctx.assert_called_once_with(tmp_path, host_config_service="codex")
-    mock_is_running.assert_called_once_with(ctx, "codex")
-    mock_up.assert_not_called()
-    mock_exec.assert_not_called()
+    assert result.exit_code == 2
+    mock_build_ctx.assert_not_called()

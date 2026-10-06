@@ -17,6 +17,7 @@ from pathlib import Path
 from .agent_config import merge_agent_config_store
 from .compose import ComposeContext
 from .config import (
+    AGENT_CREDENTIAL_PATHS,
     AVAILABLE_SERVICES,
     CA_CERTS_DEFAULT_DIR,
     COMPOSE_FILE_NAME,
@@ -35,7 +36,7 @@ from .config import (
     build_env_profile_script,
     build_git_override,
     build_git_worktree_mirror_override,
-    build_host_config_override,
+    build_host_credentials_override,
     build_hosts_override,
     build_llama_cpp_override,
     build_podman_runtime_override,
@@ -49,6 +50,7 @@ from .config import (
     get_claimed_agent_config_mounts,
     get_claude_mem_services,
     get_companion_services,
+    get_host_credentials_services,
     load_config,
     match_files,
     parse_hosts_file,
@@ -282,28 +284,31 @@ def _inject_env_into_dockerfile(build_context: Path, env: dict[str, str]) -> Non
     dockerfile.write_text(text)
 
 
-def _ensure_host_config_dir(service: str) -> None:
-    """Create a service's host config directory before Docker bind-mounts it.
+def _ensure_host_credential_file(service: str) -> None:
+    """Create a service's host credential file before Docker bind-mounts it.
 
-    :param service: Agent service whose default host config directory is used.
-    :raises ConfigurationError: If the service has no configured host path.
+    Docker creates a directory instead of a file when the bind-mount source
+    does not exist yet, so the file (and its parent directory) must be
+    pre-created for agents that have never logged in before.
+
+    :param service: Agent service whose credential file is bind-mounted.
+    :raises ConfigurationError: If the resolved path is not absolute.
     """
-    default_mount = DEFAULT_AGENT_CONFIG_MOUNTS.get(service)
-    if default_mount is None:
-        raise ConfigurationError(f"Service has no host config mount: {service}")
-    source = Path(os.path.expandvars(default_mount["host"])).expanduser()
+    paths = AGENT_CREDENTIAL_PATHS[service]
+    source = Path(os.path.expandvars(paths["host"])).expanduser()
     if not source.is_absolute():
         raise ConfigurationError(
-            f"Host config path for {service} did not resolve to an absolute path"
+            f"Host credential path for {service} did not resolve to an absolute path"
         )
-    source.mkdir(parents=True, exist_ok=True, mode=0o700)
-    source.chmod(0o700)
+    source.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if not source.exists():
+        source.touch(mode=0o600)
+        source.chmod(0o600)
 
 
 @contextlib.contextmanager
 def build_compose_context(
     workspace: Path,
-    host_config_service: str | None = None,
     runtime: str | None = None,
 ) -> Iterator[ComposeContext]:
     """Load configuration and assemble a :class:`ComposeContext`.
@@ -314,8 +319,6 @@ def build_compose_context(
     bundled template files.
 
     :param workspace: Workspace path.
-    :param host_config_service: Optional service whose real host config
-        directory should be mounted directly instead of the project-local copy.
     :param runtime: Optional CLI-selected runtime, overriding environment and config.
     :yields: Fully assembled :class:`ComposeContext`.
     """
@@ -339,11 +342,7 @@ def build_compose_context(
     claude_mem_enabled = bool(
         claude_mem_config and claude_mem_config.get("enabled", False)
     )
-    if claude_mem_enabled and host_config_service == "claude-code":
-        raise ConfigurationError(
-            "Cannot use --host-config for claude-code when claude_mem is enabled; "
-            "Claude-Mem setup must write to the workspace-scoped config store"
-        )
+    host_credentials_services = get_host_credentials_services(config)
 
     # Build override strings (None when not needed).
     shadow_override = build_shadow_override(shadow) if shadow else None
@@ -360,23 +359,13 @@ def build_compose_context(
     )
     claimed_agent_config_mounts = get_claimed_agent_config_mounts(data_stores)
     agent_config_data_stores = get_agent_config_data_stores(data_stores)
-    host_config_override: str | None = None
-    if host_config_service is not None:
-        default_mount = DEFAULT_AGENT_CONFIG_MOUNTS.get(host_config_service)
-        if default_mount is None:
-            raise ConfigurationError(
-                f"Service has no host config mount: {host_config_service}"
-            )
-        if host_config_service in agent_config_data_stores:
-            raise ConfigurationError(
-                f"Cannot use --host-config for {host_config_service}: "
-                "its config directory is already managed by a data store"
-            )
-        _ensure_host_config_dir(host_config_service)
-        claimed_agent_config_mounts.add(
-            (host_config_service, default_mount["container"])
+    host_credentials_override: str | None = None
+    if host_credentials_services:
+        for service in host_credentials_services:
+            _ensure_host_credential_file(service)
+        host_credentials_override = build_host_credentials_override(
+            host_credentials_services
         )
-        host_config_override = build_host_config_override(host_config_service)
     agent_config_store_dirs = {
         service: get_agent_config_store_dir(workspace, service)
         for service in AVAILABLE_SERVICES
@@ -500,7 +489,7 @@ def build_compose_context(
             "seed_from": DEFAULT_AGENT_CONFIG_MOUNTS[service]["host"],
         }
         for service in AVAILABLE_SERVICES
-        if service not in agent_config_data_stores and service != host_config_service
+        if service not in agent_config_data_stores
     ]
 
     def seed_runtime_stores() -> None:
@@ -511,8 +500,6 @@ def build_compose_context(
             _seed_data_stores(data_stores, data_base_dir)
 
         for agent_name in AVAILABLE_SERVICES:
-            if agent_name == host_config_service:
-                continue
             additions = agent_config_additions.get(agent_name)
             if not additions:
                 continue
@@ -547,7 +534,7 @@ def build_compose_context(
                 runtime=selected_runtime,
                 shadow_override=shadow_override,
                 agent_config_mounts_override=agent_config_mounts_override,
-                host_config_override=host_config_override,
+                host_credentials_override=host_credentials_override,
                 agent_configs_override=agent_configs_override,
                 mcp_override=mcp_override,
                 additional_dirs_override=additional_dirs_override,
@@ -590,7 +577,7 @@ def build_compose_context(
                 env=env,
                 shadow_override=shadow_override,
                 agent_config_mounts_override=agent_config_mounts_override,
-                host_config_override=host_config_override,
+                host_credentials_override=host_credentials_override,
                 agent_configs_override=agent_configs_override,
                 mcp_override=mcp_override,
                 additional_dirs_override=additional_dirs_override,

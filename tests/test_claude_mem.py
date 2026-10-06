@@ -101,20 +101,26 @@ def test_context_omits_claude_mem_override_when_disabled(
 @patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
 @patch(
     "agent_circus.context.load_config",
-    return_value={"shadow": [], "mcp_servers": [], "claude_mem": {"enabled": True}},
+    return_value={
+        "shadow": [],
+        "mcp_servers": [],
+        "claude_mem": {"enabled": True},
+        "host_credentials": {"services": ["claude-code"]},
+    },
 )
 @patch("agent_circus.context.resolve_config", return_value=None)
-def test_context_rejects_host_config_when_claude_mem_enabled(
+def test_context_allows_host_credentials_with_claude_mem_enabled(
     mock_resolve: MagicMock,
     mock_load: MagicMock,
     mock_mcp: MagicMock,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    with (
-        pytest.raises(ConfigurationError, match="--host-config"),
-        build_compose_context(tmp_path, host_config_service="claude-code"),
-    ):
-        pass
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    with build_compose_context(tmp_path) as ctx:
+        assert ctx.claude_mem_override is not None
+        assert ctx.host_credentials_override is not None
 
 
 @patch("agent_circus.compose.subprocess.run")

@@ -24,7 +24,7 @@ from agent_circus.config import (
     validate_services,
 )
 from agent_circus.context import build_compose_context
-from agent_circus.exceptions import AgentCircusError, ConfigurationError
+from agent_circus.exceptions import AgentCircusError
 
 logger = logging.getLogger(__name__)
 
@@ -61,13 +61,6 @@ def exec_cmd(
             help="Disable pseudo-TTY allocation.",
         ),
     ] = False,
-    host_config: Annotated[
-        bool,
-        typer.Option(
-            "--host-config",
-            help="Mount the real host provider config directory writable for this service.",
-        ),
-    ] = False,
     runtime: Annotated[
         str | None,
         typer.Option(
@@ -94,16 +87,9 @@ def exec_cmd(
         validate_services([service], companions)
         cmd = command or []
 
-        context_kwargs = {"host_config_service": service if host_config else None}
-        if runtime is not None:
-            context_kwargs["runtime"] = runtime
+        context_kwargs = {"runtime": runtime} if runtime is not None else {}
         with build_compose_context(workspace, **context_kwargs) as ctx:
             service_running = compose_is_service_running(ctx, service)
-            if host_config and service_running:
-                raise ConfigurationError(
-                    f"Cannot use --host-config because {service} is already running. "
-                    f"Remove it first with: agent-circus remove {service}"
-                )
             effective_no_tty = no_tty or not sys.stdin.isatty()
             logger.debug(
                 "exec: service=%s runtime=%s service_running=%s "

@@ -125,10 +125,14 @@ def test_context_uses_podman_keep_id_for_agent_config_mounts(
 @patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
 @patch(
     "agent_circus.context.load_config",
-    return_value={"shadow": [], "mcp_servers": []},
+    return_value={
+        "shadow": [],
+        "mcp_servers": [],
+        "host_credentials": {"services": ["codex"]},
+    },
 )
 @patch("agent_circus.context.resolve_config", return_value=None)
-def test_context_host_config_replaces_default_agent_config_mount(
+def test_context_host_credentials_mounts_auth_file_only(
     mock_resolve: MagicMock,
     mock_load: MagicMock,
     mock_mcp: MagicMock,
@@ -137,15 +141,19 @@ def test_context_host_config_replaces_default_agent_config_mount(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
 
-    with build_compose_context(tmp_path, host_config_service="codex") as ctx:
+    with build_compose_context(tmp_path) as ctx:
         default_mounts = json.loads(ctx.agent_config_mounts_override or "{}")
-        host_config = json.loads(ctx.host_config_override or "{}")
+        host_credentials = json.loads(ctx.host_credentials_override or "{}")
 
-    assert default_mounts["services"]["codex"]["volumes"] == []
-    assert host_config["services"]["codex"]["volumes"] == [
-        "${HOME}/.codex:/home/node/.codex:cached"
+    # The default project-local copy mount is untouched...
+    assert default_mounts["services"]["codex"]["volumes"] == [
+        f"{get_agent_config_store_dir(tmp_path, 'codex')}:/home/node/.codex:cached"
     ]
-    assert (tmp_path / "home" / ".codex").is_dir()
+    # ...only the auth file itself is overlaid from the real host path.
+    assert host_credentials["services"]["codex"]["volumes"] == [
+        "${HOME}/.codex/auth.json:/home/node/.codex/auth.json:cached"
+    ]
+    assert (tmp_path / "home" / ".codex" / "auth.json").is_file()
 
 
 @patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
@@ -160,10 +168,11 @@ def test_context_host_config_replaces_default_agent_config_mount(
                 "command": "github-mcp-server",
             }
         ],
+        "host_credentials": {"services": ["codex"]},
     },
 )
 @patch("agent_circus.context.resolve_config", return_value=None)
-def test_context_host_config_does_not_merge_mcp_into_host_config(
+def test_context_host_credentials_still_merges_mcp_into_config_store(
     mock_resolve: MagicMock,
     mock_load: MagicMock,
     mock_mcp: MagicMock,
@@ -171,17 +180,33 @@ def test_context_host_config_does_not_merge_mcp_into_host_config(
     monkeypatch,
 ) -> None:
     home = tmp_path / "home"
-    codex_dir = home / ".codex"
-    codex_dir.mkdir(parents=True)
-    config_path = codex_dir / "config.toml"
-    config_path.write_text('model = "gpt-5"\n')
+    (home / ".codex").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
 
-    with build_compose_context(tmp_path, host_config_service="codex") as ctx:
+    with build_compose_context(tmp_path) as ctx:
         assert ctx.data_store_seeder is not None
         ctx.data_store_seeder()
 
-    assert config_path.read_text() == 'model = "gpt-5"\n'
+    merged = tomllib.loads(
+        (get_agent_config_store_dir(tmp_path, "codex") / "config.toml").read_text()
+    )
+    assert "github" in merged["mcp_servers"]
+
+
+@patch("agent_circus.context.build_mcp_compose_override", return_value="{}")
+@patch(
+    "agent_circus.context.load_config",
+    return_value={"shadow": [], "mcp_servers": []},
+)
+@patch("agent_circus.context.resolve_config", return_value=None)
+def test_context_no_host_credentials_override_by_default(
+    mock_resolve: MagicMock,
+    mock_load: MagicMock,
+    mock_mcp: MagicMock,
+    tmp_path: Path,
+) -> None:
+    with build_compose_context(tmp_path) as ctx:
+        assert ctx.host_credentials_override is None
 
 
 @patch("agent_circus.context.build_mcp_compose_override", return_value="{}")

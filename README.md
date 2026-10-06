@@ -451,22 +451,7 @@ Use `--force` to skip the confirmation prompt. Reset refuses to delete a config
 store while its service is running.
 
 For credential refresh or other explicit edits to the real host provider
-configuration, run a command with `--host-config`. This bypasses the
-project-local copy and mounts the host configuration directory writable for that
-single service. Agent Circus does not merge generated MCP settings into the
-host configuration while this mode is active.
-
-```shell
-agent-circus remove --force codex
-agent-circus exec codex --host-config -- codex login
-agent-circus remove --force codex
-agent-circus config reset codex --force
-agent-circus up codex
-```
-
-The second `remove` is needed because `exec` starts a stopped service and leaves
-it running. After `config reset`, the next normal startup seeds a fresh
-project-local copy from the updated host configuration.
+configuration, see [Host Credentials](#host-credentials) below.
 
 ## Configuration
 
@@ -578,9 +563,9 @@ provider-specific behavior.
 For Agent Circus-managed writable state, such as project-local agent config
 stores and data stores, Podman services use `userns_mode: keep-id` so rootless
 containers can access host-owned state directories without recursively changing
-host ownership with Podman's `U` volume option. Direct `--host-config` mounts
-use the same Podman user namespace behavior, but still point at the real host
-provider configuration directory.
+host ownership with Podman's `U` volume option. The `[host_credentials]` auth
+file mounts (see [Host Credentials](#host-credentials)) use the same Podman
+user namespace behavior, but still point at the real host credential file.
 
 ### Shadowing Files
 
@@ -788,10 +773,72 @@ env_passthrough = ["CLAUDE_MEM_GEMINI_API_KEY", "CLAUDE_MEM_OPENROUTER_API_KEY"]
 > image. Run `agent-circus build claude-code` after enabling `[claude_mem]` for
 > the first time or after updating Agent Circus.
 
-> **Host config isolation**: `agent-circus exec claude-code --host-config` is
-> rejected while `[claude_mem].enabled = true`, because Claude-Mem setup writes
-> Claude Code plugin files and should only modify the workspace-local config
-> store.
+> **Compatible with `[host_credentials]`**: enabling direct host credential
+> mounts for `claude-code` (see [Host Credentials](#host-credentials)) does
+> not conflict with `[claude_mem]` — Claude-Mem's plugin files and the OAuth
+> credentials file live at different paths within the config directory.
+
+### Host Credentials
+
+> [!IMPORTANT]
+> This replaces the old `agent-circus exec <service> --host-config` flag,
+> which no longer exists. There is no `[host_config]` setting — the table is
+> called `[host_credentials]`, and it only ever mounts a single credential
+> file per agent, never the whole configuration directory.
+
+Add a `[host_credentials]` table to `config.toml` to bind-mount an agent's
+authentication file directly from its real host path, read-write, instead of
+going through the project-local copy:
+
+``` toml
+[host_credentials]
+services = ["codex"]
+```
+
+Only the single file below is mounted from the host; everything else in that
+agent's configuration directory (settings, MCP-server merges, Claude-Mem
+plugin files, etc.) is unaffected and still goes through the normal
+project-local copy described in [Authentication](#authentication).
+
+| Agent          | Host credential file                | Container path                              |
+|----------------|--------------------------------------|----------------------------------------------|
+| `claude-code`  | `~/.claude/.credentials.json`       | `/home/node/.claude/.credentials.json`      |
+| `codex`        | `~/.codex/auth.json`                | `/home/node/.codex/auth.json`               |
+| `mistral-vibe` | `~/.vibe/.env`                      | `/home/node/.vibe/.env`                     |
+| `opencode`     | `~/.local/share/opencode/auth.json` | `/home/node/.local/share/opencode/auth.json`|
+
+Two of these paths are governed by variables, not fixed locations:
+
+- `codex`'s auth file lives under `$CODEX_HOME`, defaulting to `~/.codex`.
+- `opencode`'s auth file follows the XDG Base Directory spec and lives under
+  `$XDG_DATA_HOME/opencode/`, defaulting to `~/.local/share/opencode/` — a
+  different directory tree than `$XDG_CONFIG_HOME/opencode` (`~/.config/opencode`),
+  which is where Agent Circus mounts `opencode`'s regular config.
+
+Agent Circus always targets the **default** location (`${HOME}/.codex/...`,
+`${HOME}/.local/share/opencode/...`) regardless of whether `$CODEX_HOME` or
+`$XDG_DATA_HOME` are customized on the host — the same limitation that already
+applies to `models_cache` and `seed_from` elsewhere in `config.toml`. If you've
+relocated either directory, the mount in `[host_credentials]` will not follow it.
+
+Because this is a direct bind mount of the real file, writes made inside the
+container (e.g. a login/refresh flow) land immediately on the host — no
+`config reset` or container recreation dance required:
+
+```shell
+agent-circus exec codex -- codex login
+```
+
+If the credential file does not exist yet (e.g. the agent has never logged in
+on this host), Agent Circus creates an empty placeholder file first so Docker
+does not create a directory at that path instead.
+
+`services` lists which agents use this mount; omit it or set `services = []`
+to disable the feature. Settings merge shallow and last-wins across config
+layers (see [Configuration](#configuration)), so a project-local
+`.agent-circus/config.toml` can override a user-global `[host_credentials]`
+table wholesale — including setting `services = []` to opt out of a
+globally-enabled setting for one project.
 
 ### Additional Directories
 

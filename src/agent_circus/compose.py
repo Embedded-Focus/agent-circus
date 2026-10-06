@@ -25,7 +25,7 @@ from .state import (
     get_env_passthrough_override_path,
     get_git_override_path,
     get_git_worktree_mirror_override_path,
-    get_host_config_override_path,
+    get_host_credentials_override_path,
     get_hosts_override_path,
     get_llama_cpp_override_path,
     get_mcp_override_path,
@@ -58,8 +58,8 @@ class ComposeContext:
     :param shadow_override: JSON string for shadow bind mounts, or ``None``.
     :param agent_config_mounts_override: JSON string for default agent config
         directory mounts, or ``None``.
-    :param host_config_override: JSON string for a direct host config directory
-        mount, or ``None``.
+    :param host_credentials_override: JSON string for direct host credential
+        file mounts, or ``None``.
     :param agent_configs_override: JSON string for agent config mounts, or ``None``.
     :param mcp_override: JSON string for MCP sidecar services, or ``None``.
     :param additional_dirs_override: JSON string for extra directory mounts, or ``None``.
@@ -82,7 +82,7 @@ class ComposeContext:
     env: dict[str, str] | None = None
     shadow_override: str | None = None
     agent_config_mounts_override: str | None = None
-    host_config_override: str | None = None
+    host_credentials_override: str | None = None
     agent_configs_override: str | None = None
     mcp_override: str | None = None
     additional_dirs_override: str | None = None
@@ -145,13 +145,13 @@ def _exec_compose(
     else:
         agent_config_mounts_path.unlink(missing_ok=True)
 
-    host_config_path = get_host_config_override_path(ctx.workspace)
-    if ctx.host_config_override:
-        host_config_path.write_text(ctx.host_config_override)
-        cmd.extend(["-f", str(host_config_path)])
-        logger.debug("Host config override: %s", host_config_path)
+    host_credentials_path = get_host_credentials_override_path(ctx.workspace)
+    if ctx.host_credentials_override:
+        host_credentials_path.write_text(ctx.host_credentials_override)
+        cmd.extend(["-f", str(host_credentials_path)])
+        logger.debug("Host credentials override: %s", host_credentials_path)
     else:
-        host_config_path.unlink(missing_ok=True)
+        host_credentials_path.unlink(missing_ok=True)
 
     mcp_path = get_mcp_override_path(ctx.workspace)
     if ctx.mcp_override:

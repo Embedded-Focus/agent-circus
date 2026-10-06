@@ -56,6 +56,7 @@ def test_load_config_no_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         "runtime": None,
         "llama_cpp": None,
         "claude_mem": None,
+        "host_credentials": None,
     }
 
 
