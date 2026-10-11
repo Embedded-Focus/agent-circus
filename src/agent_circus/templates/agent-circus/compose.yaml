@@ -83,7 +83,7 @@ services:
       target: opencode
       args:
         <<: *common-build-args
-        OPENCODE_VERSION: 2.0.6
+        OPENCODE_VERSION: 2.0.26
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
     - ${HOME}/.cache:/home/node/.cache
