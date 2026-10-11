@@ -23,7 +23,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "gitpython", specifier = ">=3.1.59" },
-    { name = "mistral-vibe", specifier = ">=2.25.8" },
+    { name = "mistral-vibe", specifier = ">=2.26.1" },
 ]
 
 [[package]]
@@ -193,6 +193,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d8/53/6f443c9a4a8358a93a6792e2acffb9d9d5cb0a5cfd8802644b7b1c9a02e4/colorama-0.4.6.tar.gz", hash = "sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44", size = 27697, upload-time = "2022-10-25T02:36:22.414Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d1/d6/3965ed04c63042e047cb6a3e6ed1a63a35087b6a609aa3a15ed8ac56c221/colorama-0.4.6-py2.py3-none-any.whl", hash = "sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6", size = 25335, upload-time = "2022-10-25T02:36:20.889Z" },
+]
+
+[[package]]
+name = "croniter"
+version = "6.2.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "python-dateutil" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/37/57/2e2a65aee2a70483cb28e2b7e15a072d00a523207593b44400d4717bb100/croniter-6.2.4.tar.gz", hash = "sha256:fc124f751b1b04805c2a04b061898b436b45ab2320b045e1e052ea895de65189", size = 166267, upload-time = "2026-07-10T09:52:59.955Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cd/ba/d678e5bd329646ca51d3c92addbc77804e86d21f4b6b6a027218e6abb010/croniter-6.2.4-py3-none-any.whl", hash = "sha256:8ef3d544107a5c05a150a2d78f8bf5a8eb9c5c4d93405a736b824109574e3f4d", size = 46677, upload-time = "2026-07-10T09:52:58.425Z" },
 ]
 
 [[package]]
@@ -611,7 +623,7 @@ wheels = [
 
 [[package]]
 name = "mistral-vibe"
-version = "2.25.8"
+version = "2.26.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "agent-client-protocol" },
@@ -625,6 +637,7 @@ dependencies = [
     { name = "charset-normalizer" },
     { name = "click", marker = "sys_platform != 'emscripten'" },
     { name = "colorama", marker = "sys_platform == 'win32'" },
+    { name = "croniter" },
     { name = "cryptography" },
     { name = "eval-type-backport" },
     { name = "gitdb" },
@@ -714,12 +727,13 @@ dependencies = [
     { name = "zipp" },
     { name = "zstandard" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/36/a3/ab0ebab5586cdd56094d43b9dc1e3edb58f26aa6e9688da5d2a3ce04aa39/mistral_vibe-2.26.1.tar.gz", hash = "sha256:e92402b2a1705c66463cad9d1f33d549ea2d8fc1bb608ec228c7acaf49ef4332", size = 3194290, upload-time = "2026-10-09T15:18:13.726Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e7/87/12fdf1763ccc23bea4396f2ae14b5bc06dd5095b741fcbb6fccc591fe012/mistral_vibe-2.25.8-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:9b2a3f9c1078e8cf2bd0a2cd860336b3ad8039894ecf423994588be4545d73ea", size = 35323356, upload-time = "2026-09-23T15:37:39.469Z" },
-    { url = "https://files.pythonhosted.org/packages/4c/90/0611fca521027557e1d3d677d79e2a186bc50343cb0f65bd8ec951179299/mistral_vibe-2.25.8-cp312-abi3-macosx_11_0_x86_64.whl", hash = "sha256:22a3eef4015ae16cdd3654be41cd5d1bdeb23a18cc5bf845d0cdf291277ed824", size = 36504139, upload-time = "2026-09-23T15:37:43.136Z" },
-    { url = "https://files.pythonhosted.org/packages/3c/39/05c61cddf0f406361aa6a2faff69c75713de4c9d74c8827f076806487849/mistral_vibe-2.25.8-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:a73727361c98440d20c376bff69edf92fd18d01c03f81e54e3d47135df2c9f20", size = 52664545, upload-time = "2026-09-23T15:37:46.707Z" },
-    { url = "https://files.pythonhosted.org/packages/cb/7a/3ccfdbb088c6411d1a6acc8ffa88c2c8d793075d9624a53fdb8cd3aea008/mistral_vibe-2.25.8-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:d0d004cb834e8e7973378bb779411fe97bb4ed9d7e533c121d64c7fbd2ec3dea", size = 56576327, upload-time = "2026-09-23T15:37:50.582Z" },
-    { url = "https://files.pythonhosted.org/packages/89/10/6858b5316c2ca11ca8e0da93c62eb810e506e77ebd812773b3b860931980/mistral_vibe-2.25.8-cp312-abi3-win_amd64.whl", hash = "sha256:6c21acc2bffdfd1a94c9da6d54db51ee4e2542a60165e46d5727ff06e0a57ae1", size = 33591302, upload-time = "2026-09-23T15:37:57.827Z" },
+    { url = "https://files.pythonhosted.org/packages/df/eb/a78da0e71631b9dcbb5922cbd79de73dd776c5c5ea52023b17c1a38df16f/mistral_vibe-2.26.1-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:515d8b5b10a5a2b10eb4628294d30ca90a27e9314f4d8aaea7514b733179ee36", size = 36982034, upload-time = "2026-10-09T15:17:50.709Z" },
+    { url = "https://files.pythonhosted.org/packages/52/63/247505c4741075038aa6e59a675547d6e58d2c0a703e1bd82c6b44189435/mistral_vibe-2.26.1-cp312-abi3-macosx_11_0_x86_64.whl", hash = "sha256:0d2c181bf162ac57f0b6a7a9d43c8b0714873099eaf0be2d23bd5cc809350103", size = 38120873, upload-time = "2026-10-09T15:17:55.104Z" },
+    { url = "https://files.pythonhosted.org/packages/31/5b/d495b78ccc69172ba7213bd785a6aa35f8b0462a7f39eba791375af64b3f/mistral_vibe-2.26.1-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:896a432651b922b7e16f01e26b4fce55b4ebd7a5ca122cf82c1e9d6a8a849821", size = 62310279, upload-time = "2026-10-09T15:18:00.387Z" },
+    { url = "https://files.pythonhosted.org/packages/0e/1c/e5533483eda87bb03c763487b666bc0b00d844546f5f13b28e1ffd7669ed/mistral_vibe-2.26.1-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:1ceb43e38a2e82cb8c54e1032b011874f8422e998cf87b4a3fdf58704133de55", size = 67124844, upload-time = "2026-10-09T15:18:06.144Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/03/83e6b9027833974df649de879515fdeddf1813313277fbc6139fb06644fb/mistral_vibe-2.26.1-cp312-abi3-win_amd64.whl", hash = "sha256:30c6b973d73aff8784b918b5b1d14dc0aade16d15d4ce1dffc868a6f35beb14d", size = 35219558, upload-time = "2026-10-09T15:18:10.827Z" },
 ]
 
 [[package]]
@@ -1261,11 +1275,11 @@ wheels = [
 
 [[package]]
 name = "soupsieve"
-version = "2.10"
+version = "3.0.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/71/c3/1b817965ac12dc002d7c9cd7dfffdd7d4fbf9b45763ef2ffe7b86ee94670/soupsieve-2.10.tar.gz", hash = "sha256:49e9380d7d2905463583bafe285e818c7366a9ed7b3aee221c1ac79c905d8bc0", size = 124337, upload-time = "2026-09-24T02:36:35.048Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0e/b9/014459776d0be4dd5f0c196fd2c8dc523a4b817a561667fae4f330b04b48/soupsieve-3.0.1.tar.gz", hash = "sha256:713d5c69f90ef84deffec0b9c6244796575e3c9fc9081cefb96091ce1200a308", size = 115438, upload-time = "2026-10-10T17:10:25.848Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/66/87/5ed59e1d0290564e2027ed066c52b059892c4637741337fc0967183c8d4d/soupsieve-2.10-py3-none-any.whl", hash = "sha256:8596eb8967d744174820280fa62b4542a2e955bfaccca73ed8a13c6eb8e9b502", size = 38019, upload-time = "2026-09-24T02:36:33.709Z" },
+    { url = "https://files.pythonhosted.org/packages/3a/cd/8092ac4e9009b4a480ba212f5cdfd26dabfc97990b176bbc70c7662d6f05/soupsieve-3.0.1-py3-none-any.whl", hash = "sha256:dd1d6bd1ba7cd39866edd704321c11b4df5e7ae98620174a9071a9af3a9c05cd", size = 41679, upload-time = "2026-10-10T17:10:24.546Z" },
 ]
 
 [[package]]
