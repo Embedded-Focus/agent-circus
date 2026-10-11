@@ -133,28 +133,32 @@ class TestBuildAgentConfigAdditionsLlamaCpp:
     def test_llama_cpp_adds_opencode_provider(self) -> None:
         cfg = {"llama_cpp": {}}
         result = build_agent_config_additions(cfg)
-        provider = result["opencode"]["provider"]["llama.cpp"]
-        assert provider["npm"] == "@ai-sdk/openai-compatible"
-        assert provider["options"]["baseURL"] == f"http://llama-cpp:{LLAMA_CPP_PORT}/v1"
+        provider = result["opencode"]["providers"]["llama.cpp"]
+        assert provider["package"] == "@opencode/ai/providers/openai-compatible"
+        assert (
+            provider["settings"]["baseURL"] == f"http://llama-cpp:{LLAMA_CPP_PORT}/v1"
+        )
 
     def test_model_id_derived_from_hf_file_stem(self) -> None:
         cfg = {"llama_cpp": {"model": "org/repo/mymodel-Q4_K_M.gguf"}}
         result = build_agent_config_additions(cfg)
-        models = result["opencode"]["provider"]["llama.cpp"]["models"]
+        models = result["opencode"]["providers"]["llama.cpp"]["models"]
         assert "mymodel-Q4_K_M" in models
 
     def test_default_model_id_derived_from_default_model(self) -> None:
         cfg = {"llama_cpp": {}}
         result = build_agent_config_additions(cfg)
         expected_id = Path(LLAMA_CPP_DEFAULT_MODEL).stem
-        models = result["opencode"]["provider"]["llama.cpp"]["models"]
+        models = result["opencode"]["providers"]["llama.cpp"]["models"]
         assert expected_id in models
 
     def test_context_size_reflected_in_model_limit(self) -> None:
         cfg = {"llama_cpp": {"context_size": 8192}}
         result = build_agent_config_additions(cfg)
-        model_id = next(iter(result["opencode"]["provider"]["llama.cpp"]["models"]))
-        limit = result["opencode"]["provider"]["llama.cpp"]["models"][model_id]["limit"]
+        model_id = next(iter(result["opencode"]["providers"]["llama.cpp"]["models"]))
+        limit = result["opencode"]["providers"]["llama.cpp"]["models"][model_id][
+            "limit"
+        ]
         assert limit["context"] == 8192
         assert limit["output"] == 8192
 
@@ -168,7 +172,7 @@ class TestBuildAgentConfigAdditionsLlamaCpp:
         result = build_agent_config_additions(cfg)
         opencode = result["opencode"]
         assert "mcp" in opencode
-        assert "provider" in opencode
+        assert "providers" in opencode
 
     def test_llama_cpp_does_not_affect_other_agents(self) -> None:
         cfg = {"llama_cpp": {}}

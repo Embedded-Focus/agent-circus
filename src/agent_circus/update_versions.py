@@ -2,8 +2,8 @@
 
 Looks up the latest release for each pinned component and rewrites the
 corresponding version string in the template's Dockerfile, compose.yaml, and
-pyproject.toml. Most components are backed by GitHub releases; npm itself is
-resolved from the npm registry.
+pyproject.toml. Most components are backed by GitHub releases; npm-packaged
+components (npm itself, the OpenCode CLI) are resolved from the npm registry.
 
 Installed as its own console script (``agent-circus-update-templates``),
 separate from the ``agent-circus`` CLI, since it edits template *source*
@@ -119,12 +119,15 @@ PINS: list[VersionPin] = [
         pattern=re.compile(r"CODEX_ACP_VERSION:\s*(\S+)"),
         strip_prefix="v",
     ),
+    # Resolved from npm rather than GitHub: the template installs
+    # @opencode/cli, and the repo's GitHub "latest release" still tracks the
+    # v1 line even after the v2 series shipped.
     VersionPin(
         name="opencode",
-        repo="sst/opencode",
+        repo="@opencode/cli",
         file=TEMPLATE_DIR / "compose.yaml",
         pattern=re.compile(r"OPENCODE_VERSION:\s*(\S+)"),
-        strip_prefix="v",
+        source="npm",
     ),
     VersionPin(
         name="mistral-vibe",

@@ -83,8 +83,7 @@ services:
       target: opencode
       args:
         <<: *common-build-args
-        # https://www.npmjs.com/package/opencode-ai
-        OPENCODE_VERSION: 1.18.34
+        OPENCODE_VERSION: 2.0.6
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
     - ${HOME}/.cache:/home/node/.cache

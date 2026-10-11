@@ -97,7 +97,7 @@ def test_opencode_install_allows_required_postinstall_script() -> None:
     with template_dir_context() as template_dir:
         dockerfile = (template_dir / "Dockerfile").read_text()
 
-    assert "npm install -g --allow-scripts=opencode-ai" in dockerfile
+    assert "npm install -g --allow-scripts=@opencode/cli" in dockerfile
 
 
 def test_claude_code_auxiliary_tools_are_build_args() -> None:

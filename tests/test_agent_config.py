@@ -338,28 +338,68 @@ class TestOpenCodeRead:
 
 
 class TestOpenCodeMerge:
-    def test_merge_mcp_dict(self, opencode_handler: OpenCodeConfigHandler) -> None:
+    def test_merge_mcp_servers_dict(
+        self, opencode_handler: OpenCodeConfigHandler
+    ) -> None:
         base = {
             "model": "anthropic/foo",
-            "mcp": {"existing": {"type": "remote", "url": "http://old"}},
+            "mcp": {"servers": {"existing": {"type": "remote", "url": "http://old"}}},
         }
         additions = {
-            "mcp": {"new": {"type": "remote", "url": "http://new", "enabled": True}},
+            "mcp": {"servers": {"new": {"type": "remote", "url": "http://new"}}},
         }
         result = opencode_handler.merge(base, additions)
         assert result["model"] == "anthropic/foo"
-        assert "existing" in result["mcp"]
-        assert "new" in result["mcp"]
+        assert "existing" in result["mcp"]["servers"]
+        assert "new" in result["mcp"]["servers"]
 
-    def test_merge_mcp_conflict_additions_win(
+    def test_merge_mcp_servers_conflict_additions_win(
         self, opencode_handler: OpenCodeConfigHandler
     ) -> None:
-        base = {"mcp": {"server": {"type": "remote", "url": "http://old"}}}
+        base = {"mcp": {"servers": {"server": {"type": "remote", "url": "http://old"}}}}
         additions = {
-            "mcp": {"server": {"type": "remote", "url": "http://new", "enabled": True}}
+            "mcp": {"servers": {"server": {"type": "remote", "url": "http://new"}}}
         }
         result = opencode_handler.merge(base, additions)
-        assert result["mcp"]["server"]["url"] == "http://new"
+        assert result["mcp"]["servers"]["server"]["url"] == "http://new"
+
+    def test_merge_providers_preserves_user_entries(
+        self, opencode_handler: OpenCodeConfigHandler
+    ) -> None:
+        base = {
+            "providers": {
+                "sri": {
+                    "package": "@opencode/ai/providers/openai-compatible",
+                    "models": {"glm": {"name": "GLM"}},
+                },
+            },
+        }
+        additions = {
+            "providers": {
+                "llama.cpp": {
+                    "package": "@opencode/ai/providers/openai-compatible",
+                    "settings": {"baseURL": "http://llama-cpp:8080/v1"},
+                    "models": {"mymodel": {"name": "mymodel"}},
+                },
+            },
+        }
+        result = opencode_handler.merge(base, additions)
+        assert "sri" in result["providers"]
+        assert "llama.cpp" in result["providers"]
+        assert result["providers"]["sri"]["models"] == {"glm": {"name": "GLM"}}
+        assert (
+            result["providers"]["llama.cpp"]["settings"]["baseURL"]
+            == "http://llama-cpp:8080/v1"
+        )
+
+    def test_merge_scalar_and_list_additions_replace(
+        self, opencode_handler: OpenCodeConfigHandler
+    ) -> None:
+        base = {"model": "anthropic/foo", "plugins": ["a"]}
+        additions = {"model": "openai/bar", "plugins": ["b"]}
+        result = opencode_handler.merge(base, additions)
+        assert result["model"] == "openai/bar"
+        assert result["plugins"] == ["b"]
 
 
 class TestOpenCodeWrite:
@@ -379,17 +419,17 @@ class TestOpenCodeBuild:
     ) -> None:
         _write_json(
             opencode_handler.host_config_path,
-            {"mcp": {"old": {"type": "remote", "url": "http://old"}}},
+            {"mcp": {"servers": {"old": {"type": "remote", "url": "http://old"}}}},
         )
         additions = {
-            "mcp": {"new": {"type": "remote", "url": "http://new", "enabled": True}}
+            "mcp": {"servers": {"new": {"type": "remote", "url": "http://new"}}}
         }
         output_dir = tmp_path / "output"
         path = build_handler(opencode_handler, additions, output_dir)
 
         data = json.loads(path.read_text())
-        assert "old" in data["mcp"]
-        assert "new" in data["mcp"]
+        assert "old" in data["mcp"]["servers"]
+        assert "new" in data["mcp"]["servers"]
 
 
 # ---------------------------------------------------------------------------
@@ -446,7 +486,9 @@ class TestBuildAgentConfigsOverride:
         additions = {
             "claude-code": {"mcpServers": {"s": {"type": "http", "url": "http://x"}}},
             "codex": {"mcp_servers": [{"name": "s", "url": "http://x"}]},
-            "opencode": {"mcp": {"s": {"type": "remote", "url": "http://x"}}},
+            "opencode": {
+                "mcp": {"servers": {"s": {"type": "remote", "url": "http://x"}}}
+            },
         }
         # Create source config files so handlers can read them.
         result = json.loads(build_agent_configs_override(additions, tmp_path))
@@ -482,7 +524,9 @@ class TestBuildAgentConfigsOverride:
             "claude-code": {"mcpServers": {"s": {"type": "http"}}},
             "codex": {"mcp_servers": [{"name": "s"}]},
             "mistral-vibe": {"mcp_servers": [{"name": "s"}]},
-            "opencode": {"mcp": {"s": {"type": "remote", "url": "http://x"}}},
+            "opencode": {
+                "mcp": {"servers": {"s": {"type": "remote", "url": "http://x"}}}
+            },
         }
         build_agent_configs_override(additions, tmp_path)
         assert (tmp_path / "claude-code.json").is_file()
@@ -493,7 +537,7 @@ class TestBuildAgentConfigsOverride:
     def test_excludes_agent_owned_by_data_store(self, tmp_path: Path) -> None:
         additions = {
             "codex": {"mcp_servers": {"github": {"command": "github-mcp"}}},
-            "opencode": {"mcp": {"github": {"type": "local"}}},
+            "opencode": {"mcp": {"servers": {"github": {"type": "local"}}}},
         }
 
         result = json.loads(
@@ -573,11 +617,10 @@ class TestBuildAgentConfigAdditions:
         assert vibe_srv["name"] == "grafana"
         assert vibe_srv["transport"] == "streamable-http"
 
-        # OpenCode format — remote MCP server map
-        opencode_srv = result["opencode"]["mcp"]["grafana"]
+        # OpenCode format — remote MCP server map nested under mcp.servers
+        opencode_srv = result["opencode"]["mcp"]["servers"]["grafana"]
         assert opencode_srv["type"] == "remote"
         assert opencode_srv["url"] == "http://mcp-grafana:8000/mcp"
-        assert opencode_srv["enabled"] is True
 
     def test_defaults(self) -> None:
         from agent_circus.config import build_agent_config_additions
@@ -608,7 +651,7 @@ class TestBuildAgentConfigAdditions:
         assert result["claude-code"]["mcpServers"]["existing"]["alwaysLoad"] is True
         assert result["codex"]["mcp_servers"]["existing"]["url"] == url
         assert result["mistral-vibe"]["mcp_servers"][0]["url"] == url
-        assert result["opencode"]["mcp"]["existing"]["url"] == url
+        assert result["opencode"]["mcp"]["servers"]["existing"]["url"] == url
 
     def test_stdio_server_uses_native_agent_formats(self) -> None:
         from agent_circus.config import build_agent_config_additions
@@ -643,8 +686,7 @@ class TestBuildAgentConfigAdditions:
             "command": "github-mcp-server",
             "args": ["stdio"],
         }
-        assert result["opencode"]["mcp"]["github"] == {
+        assert result["opencode"]["mcp"]["servers"]["github"] == {
             "type": "local",
             "command": ["github-mcp-server", "stdio"],
-            "enabled": True,
         }

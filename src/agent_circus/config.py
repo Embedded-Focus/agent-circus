@@ -643,7 +643,7 @@ def build_agent_config_additions(
         codex_mcp: dict[str, dict] = {}
         # Vibe: {"mcp_servers": [{"name": ..., "transport": ..., "url": ...}]}
         vibe_mcp: list[dict] = []
-        # OpenCode: {"mcp": {"name": {"type": "remote", "url": ..., "enabled": true}}}
+        # OpenCode: {"mcp": {"servers": {"name": {"type": "remote", "url": ...}}}}
         opencode_mcp: dict[str, dict] = {}
 
         for server in mcp_servers:
@@ -680,7 +680,6 @@ def build_agent_config_additions(
                 opencode_mcp[name] = {
                     "type": "local",
                     "command": [command, *args],
-                    "enabled": True,
                 }
                 continue
 
@@ -696,16 +695,16 @@ def build_agent_config_additions(
             }
             codex_mcp[name] = {"url": url}
             vibe_mcp.append({"name": name, "transport": transport, "url": url})
-            opencode_mcp[name] = {"type": "remote", "url": url, "enabled": True}
+            opencode_mcp[name] = {"type": "remote", "url": url}
 
         additions["claude-code"] = {"mcpServers": claude_mcp}
         additions["codex"] = {"mcp_servers": codex_mcp}
         additions["mistral-vibe"] = {"mcp_servers": vibe_mcp}
-        additions["opencode"] = {"mcp": opencode_mcp}
+        additions["opencode"] = {"mcp": {"servers": opencode_mcp}}
 
     if llama_cpp_config is not None:
         opencode_additions = additions.setdefault("opencode", {})
-        opencode_additions["provider"] = _build_llama_cpp_opencode_provider(
+        opencode_additions["providers"] = _build_llama_cpp_opencode_provider(
             llama_cpp_config
         )
 
@@ -713,19 +712,19 @@ def build_agent_config_additions(
 
 
 def _build_llama_cpp_opencode_provider(llama_cpp_config: dict) -> dict:
-    """Build the OpenCode ``provider`` block for the llama.cpp integration.
+    """Build the OpenCode ``providers`` block for the llama.cpp integration.
 
     :param llama_cpp_config: ``[llama_cpp]`` table from merged config.
-    :returns: Dict suitable for merging into the OpenCode ``provider`` key.
+    :returns: Dict suitable for merging into the OpenCode ``providers`` key.
     """
     model = llama_cpp_config.get("model", LLAMA_CPP_DEFAULT_MODEL)
     context_size = llama_cpp_config.get("context_size", LLAMA_CPP_DEFAULT_CONTEXT_SIZE)
     model_id = Path(model).stem
     return {
         "llama.cpp": {
-            "npm": "@ai-sdk/openai-compatible",
+            "package": "@opencode/ai/providers/openai-compatible",
             "name": "llama-server (local)",
-            "options": {
+            "settings": {
                 "baseURL": f"http://llama-cpp:{LLAMA_CPP_PORT}/v1",
             },
             "models": {

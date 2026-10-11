@@ -85,6 +85,14 @@ def test_apply_version_raises_when_pattern_missing(tmp_path: Path) -> None:
         apply_version("no version here", pin, "1.0.0")
 
 
+def test_opencode_pin_resolves_v2_from_npm() -> None:
+    # The repo's GitHub "latest release" still tracks the v1 line, so the
+    # OpenCode pin must be resolved from npm's latest dist-tag to pick up v2.
+    pin = next(pin for pin in PINS if pin.name == "opencode")
+    assert pin.source == "npm"
+    assert pin.repo == "@opencode/cli"
+
+
 def test_fetch_latest_tag_returns_tag_name() -> None:
     gh = MagicMock()
     gh.get_repo.return_value.get_latest_release.return_value.tag_name = "v1.2.3"

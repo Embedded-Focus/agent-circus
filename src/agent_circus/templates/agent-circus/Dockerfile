@@ -138,8 +138,8 @@ FROM base AS opencode
 
 ARG OPENCODE_VERSION
 
-RUN npm install -g --allow-scripts=opencode-ai \
-    opencode-ai@${OPENCODE_VERSION}
+RUN npm install -g --allow-scripts=@opencode/cli \
+    @opencode/cli@${OPENCODE_VERSION}
 
 FROM base AS mistral-vibe
 

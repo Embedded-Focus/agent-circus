@@ -19,6 +19,29 @@ import tomli_w
 logger = logging.getLogger(__name__)
 
 
+def _deep_merge_dicts(
+    base: dict[str, Any], additions: dict[str, Any]
+) -> dict[str, Any]:
+    """Recursively merge *additions* into *base*.
+
+    Nested dict values are merged key by key so unrelated entries
+    (e.g. the user's own entries under ``mcp.servers``) survive.
+    Every other value type from *additions* replaces the base value;
+    additions win on conflicts.
+
+    :param base: Base mapping.
+    :param additions: Values to merge in.
+    :returns: Merged mapping.
+    """
+    merged = dict(base)
+    for key, value in additions.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_dicts(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 # ---------------------------------------------------------------------------
 # Handler protocol
 # ---------------------------------------------------------------------------
@@ -140,18 +163,9 @@ class OpenCodeConfigHandler:
             return json.load(f)
 
     def merge(self, base: dict[str, Any], additions: dict[str, Any]) -> dict[str, Any]:
-        merged = base.copy()
-        for key, value in additions.items():
-            if (
-                key in merged
-                and isinstance(merged[key], dict)
-                and isinstance(value, dict)
-            ):
-                # Dict-level merge (e.g. mcp): additions overwrite conflicts.
-                merged[key] = {**merged[key], **value}
-            else:
-                merged[key] = value
-        return merged
+        # Deep merge so nested v2 maps (e.g. ``mcp.servers`` or
+        # ``providers.<id>``) from the user's config are preserved.
+        return _deep_merge_dicts(base, additions)
 
     def write(self, config: dict[str, Any], output_path: Path) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
