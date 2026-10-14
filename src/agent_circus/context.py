@@ -11,7 +11,7 @@ import logging
 import os
 import shutil
 import tempfile
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from pathlib import Path
 
 from .agent_config import merge_agent_config_store
@@ -117,7 +117,7 @@ def _resolve_seed_source(seed_from: str) -> Path:
 
 
 @contextlib.contextmanager
-def _data_store_seed_lock(target: Path) -> Iterator[None]:
+def _data_store_seed_lock(target: Path) -> Generator[None, None, None]:
     """Serialize host-side seeding for one data store directory.
 
     :param target: Host data store directory being seeded.
@@ -310,7 +310,7 @@ def _ensure_host_credential_file(service: str) -> None:
 def build_compose_context(
     workspace: Path,
     runtime: str | None = None,
-) -> Iterator[ComposeContext]:
+) -> Generator[ComposeContext, None, None]:
     """Load configuration and assemble a :class:`ComposeContext`.
 
     Resolves deploy vs instant mode, loads the merged configuration,
