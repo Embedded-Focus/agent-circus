@@ -30,13 +30,13 @@ services:
       target: claude-code
       args:
         <<: *common-build-args
-        CLAUDE_CODE_VERSION: 2.1.296
+        CLAUDE_CODE_VERSION: 2.1.299
         # https://github.com/agentclientprotocol/claude-agent-acp
-        CLAUDE_AGENT_ACP_VERSION: 0.89.1
+        CLAUDE_AGENT_ACP_VERSION: 0.90.0
         # https://github.com/oven-sh/bun
         BUN_VERSION: 1.4.3
         # https://github.com/thedotmack/claude-mem
-        CLAUDE_MEM_VERSION: 13.35.0
+        CLAUDE_MEM_VERSION: 13.39.0
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
     - ${HOME}/.cache:/home/node/.cache
@@ -83,7 +83,7 @@ services:
       target: opencode
       args:
         <<: *common-build-args
-        OPENCODE_VERSION: 2.0.26
+        OPENCODE_VERSION: 2.0.29
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
     - ${HOME}/.cache:/home/node/.cache
