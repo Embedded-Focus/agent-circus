@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import tempfile
 import tomllib
-from collections.abc import Iterator
+from collections.abc import Generator
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -201,7 +201,7 @@ def current(workspace: Path) -> dict[str, str]:
 
 
 @contextlib.contextmanager
-def store_lock(root: Path) -> Iterator[None]:
+def store_lock(root: Path) -> Generator[None, None, None]:
     """Serialize selection mutations across processes.
 
     :param root: Store to lock.
@@ -463,7 +463,7 @@ def validate_python(before: str, after: str) -> None:
 
 
 @contextlib.contextmanager
-def recipe_copy(workspace: Path) -> Iterator[Path]:
+def recipe_copy(workspace: Path) -> Generator[Path, None, None]:
     """Copy effective templates without changing installed or deployed files.
 
     :param workspace: Project directory.
@@ -549,7 +549,7 @@ def restore(workspace: Path, reset: bool = False) -> str:
 
 
 @contextlib.contextmanager
-def deployed_override(workspace: Path) -> Iterator[Path | None]:
+def deployed_override(workspace: Path) -> Generator[Path | None, None, None]:
     """Prepare a build-only override while preserving deployed Compose path semantics.
 
     :param workspace: Project directory.
