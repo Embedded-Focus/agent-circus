@@ -46,9 +46,23 @@ if compgen -G "/run/ca-host/*.crt" > /dev/null 2>&1; then
 fi
 
 # Run per-project startup hook if present.
-# Runs as the unprivileged container user. Changes to this script take
-# effect on the next container start without requiring a rebuild.
-if [[ -s /workspace/.agent-circus/hooks/startup.sh ]]; then
+# An inline config.toml hook is mounted read-only under /run (outside the
+# workspace bind-mount, so it never leaves a placeholder file in the project).
+# A project-authored .agent-circus/hooks/startup.sh file is read straight
+# from the workspace mount.  config.toml takes precedence over the file.
+# Runs as the unprivileged container user. Changes take effect on the next
+# container start without requiring a rebuild.
+if [[ -s /run/startup-hook/startup.sh ]]; then
+  bash /run/startup-hook/startup.sh
+  # Remove a stale placeholder that earlier versions left in the workspace
+  # when mounting the config.toml hook.  It is usually empty and lives in a
+  # directory owned by this (container) user, so it can be deleted here even
+  # when the host user cannot.  Otherwise host-side cleanup removes it.
+  stale_hook="/workspace/.agent-circus/hooks/startup.sh"
+  if [[ -f "$stale_hook" && ! -s "$stale_hook" ]]; then
+    rm -f "$stale_hook" 2>/dev/null || true
+  fi
+elif [[ -s /workspace/.agent-circus/hooks/startup.sh ]]; then
   bash /workspace/.agent-circus/hooks/startup.sh
 fi
 

@@ -29,7 +29,7 @@ def test_build_startup_hook_override_mounts_at_expected_container_path(
     script = tmp_path / "startup.sh"
     script.touch()
     override = build_startup_hook_override(script)
-    assert "/workspace/.agent-circus/hooks/startup.sh" in override
+    assert "/run/startup-hook/startup.sh" in override
 
 
 def test_get_startup_hook_path_creates_hooks_subdir(

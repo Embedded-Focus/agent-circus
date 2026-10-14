@@ -9,6 +9,7 @@ import pytest
 from agent_circus.config import write_hook_script
 from agent_circus.context import (
     _ENV_INJECTION_ANCHOR,
+    _cleanup_startup_placeholder,
     _write_config_hooks,
     build_compose_context,
 )
@@ -83,6 +84,55 @@ def test_write_config_hooks_ignores_startup_key(tmp_path: Path) -> None:
     hooks_dst.mkdir()
     _write_config_hooks({"startup": "source .env\n"}, tmp_path)
     assert not (hooks_dst / "startup.sh").exists()
+
+
+# ---------------------------------------------------------------------------
+# _cleanup_startup_placeholder
+# ---------------------------------------------------------------------------
+
+
+def test_cleanup_startup_placeholder_removes_empty_file(tmp_path: Path) -> None:
+    hooks = tmp_path / ".agent-circus" / "hooks"
+    hooks.mkdir(parents=True)
+    placeholder = hooks / "startup.sh"
+    placeholder.touch()
+
+    _cleanup_startup_placeholder(tmp_path)
+
+    assert not placeholder.exists()
+
+
+def test_cleanup_startup_placeholder_keeps_nonempty_script(tmp_path: Path) -> None:
+    hooks = tmp_path / ".agent-circus" / "hooks"
+    hooks.mkdir(parents=True)
+    script = hooks / "startup.sh"
+    script.write_text("echo real\n")
+
+    _cleanup_startup_placeholder(tmp_path)
+
+    assert script.read_text() == "echo real\n"
+
+
+def test_cleanup_startup_placeholder_is_noop_when_absent(tmp_path: Path) -> None:
+    # No hooks directory at all (typical for a fresh project) — must not raise.
+    _cleanup_startup_placeholder(tmp_path)
+
+
+def test_cleanup_startup_placeholder_swallows_permission_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hooks = tmp_path / ".agent-circus" / "hooks"
+    hooks.mkdir(parents=True)
+    placeholder = hooks / "startup.sh"
+    placeholder.touch()
+
+    def _raise(*_args: object, **_kwargs: object) -> None:
+        raise PermissionError(1, "Operation not permitted")
+
+    # A placeholder owned by the container user is undeletable by the host
+    # user; cleanup must log and continue, never crash the container start.
+    monkeypatch.setattr(Path, "unlink", _raise)
+    _cleanup_startup_placeholder(tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +248,7 @@ def test_startup_hook_sets_override_in_instant_mode(
 
     with build_compose_context(workspace) as ctx:
         assert ctx.startup_hook_override is not None
-        assert "/workspace/.agent-circus/hooks/startup.sh" in ctx.startup_hook_override
+        assert "/run/startup-hook/startup.sh" in ctx.startup_hook_override
         assert ":ro" in ctx.startup_hook_override
 
 

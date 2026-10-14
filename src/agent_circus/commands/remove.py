@@ -6,7 +6,7 @@ from typing import Annotated
 
 import typer
 
-from agent_circus.compose import compose_down
+from agent_circus.compose import compose_down, remove_startup_placeholder
 from agent_circus.config import (
     AVAILABLE_SERVICES,
     get_companion_services,
@@ -120,6 +120,7 @@ def remove(
                 remove_orphans=remove_orphans,
                 timeout=0 if force else None,
             )
+            remove_startup_placeholder(ctx)
         typer.echo("Containers removed successfully.")
 
     except AgentCircusError as e:

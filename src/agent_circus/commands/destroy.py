@@ -7,7 +7,7 @@ from typing import Annotated
 
 import typer
 
-from agent_circus.compose import compose_down
+from agent_circus.compose import compose_down, remove_startup_placeholder
 from agent_circus.config import config_exists, get_workspace_path
 from agent_circus.context import build_compose_context
 from agent_circus.exceptions import AgentCircusError
@@ -107,6 +107,7 @@ def destroy(
                 remove_orphans=remove_orphans,
                 timeout=0 if force else None,
             )
+            remove_startup_placeholder(ctx)
         typer.echo("Containers removed successfully.")
 
         if config_exists(workspace):

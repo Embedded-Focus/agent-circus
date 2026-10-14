@@ -1456,19 +1456,24 @@ def build_shadow_override(shadow: list[str]) -> str:
 def build_startup_hook_override(startup_script_path: Path) -> str:
     """Build a Docker Compose override that bind-mounts a startup hook script.
 
-    Mounts *startup_script_path* read-only at
-    ``/workspace/.agent-circus/hooks/startup.sh`` inside every agent
-    container, shadowing any file at that path coming from the workspace
-    bind-mount.  Docker's volume semantics give the more specific path
-    precedence, so this effectively makes ``config.toml`` win over a
-    workspace-level ``startup.sh``.
+    Mounts *startup_script_path* read-only at ``/run/startup-hook/startup.sh``
+    inside every agent container.  The target lives in the container's own
+    filesystem (under ``/run``, alongside the other intermediate read-only
+    mounts such as ``/run/ssh-host``), *not* in the host-shared workspace
+    bind-mount.  Mounting into the workspace would make the container runtime
+    create a zero-byte placeholder file on the host whenever it does not
+    already exist; mounting under ``/run`` avoids that entirely, so the hook
+    never leaves stray files in the project directory.
+
+    The entrypoint runs this script in preference to any project-authored
+    ``.agent-circus/hooks/startup.sh`` file, so ``config.toml`` wins.
 
     :param startup_script_path: Absolute host path to the startup script
         (typically in the XDG state directory).
     :returns: Compose override as a JSON string.
     :rtype: str
     """
-    volume = f"{startup_script_path}:/workspace/.agent-circus/hooks/startup.sh:ro"
+    volume = f"{startup_script_path}:/run/startup-hook/startup.sh:ro"
     services = {svc: {"volumes": [volume]} for svc in AVAILABLE_SERVICES}
     return json.dumps({"services": services})
 

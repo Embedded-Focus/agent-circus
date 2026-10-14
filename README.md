@@ -1324,10 +1324,21 @@ Values are multi-line TOML strings written verbatim as shell scripts. A
 both a `[hooks]` table and project hook files exist, `config.toml` wins.
 
 > **Note:** `startup.sh` defined in `config.toml` is written to the XDG state
-> directory and bind-mounted into the container at
-> `/workspace/.agent-circus/hooks/startup.sh`. It takes precedence over any
-> `startup.sh` file in the workspace. `base_root` and `base_user` are ignored
-> in deploy mode — place those scripts in `.agent-circus/hooks/` directly.
+> directory and bind-mounted read-only into the container at
+> `/run/startup-hook/startup.sh` — *outside* the workspace bind-mount, so it
+> leaves no files in your project directory. The entrypoint runs it in
+> preference to a `startup.sh` file in `.agent-circus/hooks/`, so `config.toml`
+> takes precedence. `base_root` and `base_user` are ignored in deploy mode —
+> place those scripts in `.agent-circus/hooks/` directly.
+>
+> Earlier releases mounted `config.toml` startup hooks inside the workspace
+> instead, and the container runtime sometimes left a zero-byte placeholder at
+> `.agent-circus/hooks/startup.sh` that the project user could not delete. Agent
+> Circus removes such leftovers automatically on `ac rm`, `ac destroy`, and
+> service start, and drops the `hooks` directory once it is empty. When the
+> file is owned by `root` and undeletable from the host, it is removed by a
+> short-lived root container; if no local image exists for that, the log tells
+> you how to delete it manually (`sudo rm -f`).
 
 ### Hook files (deploy mode)
 

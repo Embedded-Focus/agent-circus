@@ -13,6 +13,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from .config import CONFIG_DIR_NAME, HOOKS_DIR_NAME
 from .exceptions import ComposeError
 from .runtime import ContainerRuntime, compose_command
 from .state import (
@@ -359,6 +360,7 @@ def compose_up(
     logger.info("Starting services: %s", ", ".join(services or ["all"]))
     if ctx.data_store_seeder:
         ctx.data_store_seeder()
+    remove_startup_placeholder(ctx)
     _exec_compose(args, ctx, capture_output=capture_output)
 
 
@@ -461,6 +463,185 @@ def compose_is_service_running(ctx: ComposeContext, service: str) -> bool:
     return len(output) > 0 and output != "[]"
 
 
+def _startup_placeholder_path(workspace: Path) -> Path:
+    """Return the path where older versions left a startup hook placeholder.
+
+    :param workspace: Workspace path.
+    :returns: Path to ``.agent-circus/hooks/startup.sh``.
+    """
+    return workspace / CONFIG_DIR_NAME / HOOKS_DIR_NAME / "startup.sh"
+
+
+def _try_remove_startup_placeholder(placeholder: Path) -> bool:
+    """Best-effort host-side removal of a stale startup hook placeholder.
+
+    Removes *placeholder* only when it is a zero-byte file, so a real
+    project script is never deleted.  Placeholders created by the container
+    runtime are typically owned by ``root`` and sit in a directory owned by
+    the container's user, so the host user may not be allowed to delete
+    them; that case is left to :func:`remove_startup_placeholder`.
+
+    :param placeholder: Path to the candidate placeholder file.
+    :returns: ``True`` when no container-based removal is needed, i.e. the
+        file is absent, was removed, or is a non-empty script.
+    """
+    try:
+        if not placeholder.is_file():
+            return True
+        if placeholder.stat().st_size != 0:
+            return True
+        placeholder.unlink()
+    except OSError as exc:
+        logger.debug(
+            "Could not remove startup hook placeholder %s (%s); "
+            "removal is attempted through the container engine instead.",
+            placeholder,
+            exc,
+        )
+        return False
+    logger.info("Removed stale startup hook placeholder %s.", placeholder)
+    return True
+
+
+def _try_remove_empty_hooks_dir(hooks_dir: Path) -> None:
+    """Remove the project hooks directory when it is completely empty.
+
+    An empty ``.agent-circus/hooks/`` directory carries no meaning once a
+    placeholder is gone: hook scripts are read only when present.  Removal
+    requires write permission on the containing ``.agent-circus`` directory,
+    so failure is logged rather than raised.
+
+    :param hooks_dir: Path to ``.agent-circus/hooks``.
+    """
+    try:
+        if not hooks_dir.is_dir() or hooks_dir.is_symlink():
+            return
+        if any(hooks_dir.iterdir()):
+            return
+        hooks_dir.rmdir()
+    except OSError as exc:
+        logger.debug("Could not remove empty hooks directory %s (%s).", hooks_dir, exc)
+        return
+    logger.info("Removed empty hooks directory %s.", hooks_dir)
+
+
+def _find_local_project_image(ctx: ComposeContext) -> str | None:
+    """Return the identifier of a locally available project image, if any.
+
+    :param ctx: Pre-assembled compose context.
+    :returns: First non-empty identifier from ``compose images -q``, or
+        ``None`` when no project image is available locally.
+    """
+    try:
+        result = _exec_compose(["images", "-q"], ctx, capture_output=True)
+    except ComposeError:
+        return None
+    image_ids = (line.strip() for line in result.stdout.splitlines())
+    return next((image_id for image_id in image_ids if image_id), None)
+
+
+def _remove_startup_placeholder_via_container(
+    ctx: ComposeContext,
+    placeholder: Path,
+) -> None:
+    """Remove a startup placeholder through the container engine.
+
+    Such placeholders are root-owned zero-byte files inside a directory
+    owned by the container's user, which the host user cannot write to.  A
+    one-shot container started as root can remove them; only the empty
+    placeholder file is deleted, and the ``hooks`` directory is dropped only
+    when it is empty.
+
+    :param ctx: Pre-assembled compose context.
+    :param placeholder: Host path to the (still present) placeholder file.
+    """
+    try:
+        if not placeholder.is_file() or placeholder.stat().st_size != 0:
+            return
+    except OSError:
+        return
+    image_id = _find_local_project_image(ctx)
+    if image_id is None:
+        logger.debug(
+            "No local project image available to remove startup hook "
+            "placeholder %s; delete it manually, e.g. 'sudo rm -f %s'.",
+            placeholder,
+            placeholder,
+        )
+        return
+    config_dir = placeholder.parent.parent
+    cmd = [
+        compose_command(ctx.runtime)[0],
+        "run",
+        "--rm",
+        "--user",
+        "root",
+        "--entrypoint",
+        "sh",
+        "-v",
+        f"{config_dir}:/project-config",
+        image_id,
+        "-c",
+        'rm -f "$1/$2"; rmdir "$1/hooks" 2>/dev/null || true',
+        "agent-circus",
+        "/project-config",
+        f"hooks/{placeholder.name}",
+    ]
+    logger.debug("Removing startup hook placeholder via container: %s", " ".join(cmd))
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=ctx.env,
+        )
+    except OSError as exc:
+        logger.warning(
+            "Could not remove startup hook placeholder %s through the "
+            "container engine (%s); delete it manually, e.g. 'sudo rm -f %s'.",
+            placeholder,
+            exc,
+            placeholder,
+        )
+        return
+    if result.returncode != 0:
+        logger.warning(
+            "Could not remove startup hook placeholder %s through the "
+            "container engine (exit code %s); delete it manually, "
+            "e.g. 'sudo rm -f %s'.",
+            placeholder,
+            result.returncode,
+            placeholder,
+        )
+    else:
+        logger.info(
+            "Removed stale startup hook placeholder %s through the container engine.",
+            placeholder,
+        )
+
+
+def remove_startup_placeholder(ctx: ComposeContext) -> None:
+    """Remove a stale startup hook placeholder from the project directory.
+
+    Releases that bind-mounted ``config.toml`` startup hooks over
+    ``/workspace/.agent-circus/hooks/startup.sh`` let the container runtime
+    create a zero-byte placeholder on the host when the file was absent.
+    Current versions mount under ``/run`` instead, so no new placeholders
+    appear; this helper clears leftovers from older projects.  It first
+    deletes the file and a now-empty ``hooks`` directory on the host, and
+    falls back to a one-shot container started as root when the host user
+    lacks write permission on the containing directories.
+
+    :param ctx: Pre-assembled compose context.
+    """
+    placeholder = _startup_placeholder_path(ctx.workspace)
+    if _try_remove_startup_placeholder(placeholder):
+        _try_remove_empty_hooks_dir(placeholder.parent)
+        return
+    _remove_startup_placeholder_via_container(ctx, placeholder)
+
+
 def compose_exec(
     ctx: ComposeContext,
     service: str,
@@ -483,4 +664,5 @@ def compose_exec(
 
     if ctx.data_store_seeder:
         ctx.data_store_seeder()
+    remove_startup_placeholder(ctx)
     _exec_compose(args, ctx)

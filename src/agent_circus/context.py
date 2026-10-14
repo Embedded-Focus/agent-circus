@@ -15,7 +15,11 @@ from collections.abc import Callable, Generator
 from pathlib import Path
 
 from .agent_config import merge_agent_config_store
-from .compose import ComposeContext
+from .compose import (
+    ComposeContext,
+    _try_remove_empty_hooks_dir,
+    _try_remove_startup_placeholder,
+)
 from .config import (
     AGENT_CREDENTIAL_PATHS,
     AVAILABLE_SERVICES,
@@ -85,9 +89,8 @@ logger = logging.getLogger(__name__)
 
 _HOOK_SCRIPTS = ("base-root.sh", "base-user.sh")
 # Maps config.toml [hooks] keys to their build-context filenames.
-# Only build-time hooks (baked into the image) are supported here;
-# startup.sh is bind-mounted from the workspace at runtime and cannot
-# be inlined in the build context.
+# Only build-time hooks (baked into the image) are supported here; the
+# startup hook is handled at container start, never in the build context.
 _CONFIG_HOOK_MAP = {
     "base_root": "base-root.sh",
     "base_user": "base-user.sh",
@@ -228,7 +231,8 @@ def _write_config_hooks(hooks_config: dict, build_context: Path) -> None:
 
     Overwrites any scripts previously copied by :func:`_copy_project_hooks`.
     Only ``base_root`` and ``base_user`` are supported; ``startup`` is
-    executed at runtime from ``/workspace/.agent-circus/hooks/startup.sh``
+    handled at container start (mounted under ``/run`` when defined in
+    ``config.toml``, or read from the workspace when it is a project file)
     and cannot be inlined into the build context.
 
     :param hooks_config: ``[hooks]`` table from merged config.
@@ -239,6 +243,33 @@ def _write_config_hooks(hooks_config: dict, build_context: Path) -> None:
         content = hooks_config.get(key)
         if content is not None:
             write_hook_script(content, hooks_dst / filename)
+
+
+def _cleanup_startup_placeholder(workspace: Path) -> None:
+    """Remove a stale placeholder startup script from the project directory.
+
+    Older versions bind-mounted ``config.toml`` startup hooks over
+    ``/workspace/.agent-circus/hooks/startup.sh``.  When that file was absent,
+    the container runtime created a zero-byte placeholder on the host for the
+    mount point, leaving it behind in the project.  Current versions mount
+    under ``/run`` instead, so nothing is written to the workspace.  This
+    helper clears any leftover placeholder that the host user is allowed to
+    delete before startup, and drops the ``hooks`` directory once it is empty.
+
+    To avoid touching real scripts, it only removes the file when it is empty
+    and is called solely when an inline ``config.toml`` hook is defined.  A
+    placeholder created by the container runtime is usually owned by ``root``
+    and sits in a directory owned by the container user, so the host user may
+    not be able to delete it; that case is handled by
+    :func:`agent_circus.compose.remove_startup_placeholder`, which removes the
+    file through a short-lived container started as root.  A removal failure
+    is therefore logged rather than raised.
+
+    :param workspace: Workspace path.
+    """
+    placeholder = workspace / CONFIG_DIR_NAME / HOOKS_DIR_NAME / "startup.sh"
+    if _try_remove_startup_placeholder(placeholder):
+        _try_remove_empty_hooks_dir(placeholder.parent)
 
 
 def _inject_env_into_dockerfile(build_context: Path, env: dict[str, str]) -> None:
@@ -456,6 +487,7 @@ def build_compose_context(
     if hooks_config and hooks_config.get("startup"):
         startup_path = get_startup_hook_path(workspace)
         write_hook_script(hooks_config["startup"], startup_path)
+        _cleanup_startup_placeholder(workspace)
         startup_hook_override = build_startup_hook_override(startup_path)
 
     git_worktree_mirror_override: str | None = None
