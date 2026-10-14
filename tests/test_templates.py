@@ -113,6 +113,18 @@ def test_claude_code_auxiliary_tools_are_build_args() -> None:
     assert "CLAUDE_MEM_VERSION:" in compose
 
 
+def test_claude_mem_install_is_gated_on_opt_in_build_arg() -> None:
+    with template_dir_context() as template_dir:
+        dockerfile = (template_dir / "Dockerfile").read_text()
+
+    assert "ARG CLAUDE_MEM_ENABLED=false" in dockerfile
+    gated_layer = dockerfile.split("FROM base AS claude-code", 1)[1]
+    assert 'if [ "${CLAUDE_MEM_ENABLED}" = "true" ]; then' in gated_layer, (
+        "claude-mem must install only when the build arg is enabled"
+    )
+    assert "claude-mem@${CLAUDE_MEM_VERSION}" in gated_layer
+
+
 def test_mistral_vibe_python_version_matches_dependency_resolver() -> None:
     with template_dir_context() as template_dir:
         dockerfile = (template_dir / "Dockerfile").read_text()

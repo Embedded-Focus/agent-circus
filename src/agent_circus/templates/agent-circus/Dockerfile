@@ -117,13 +117,19 @@ FROM base AS claude-code
 ARG CLAUDE_CODE_VERSION
 ARG CLAUDE_AGENT_ACP_VERSION
 ARG BUN_VERSION
+# Claude-Mem is opt-in: enabling [claude_mem] injects CLAUDE_MEM_ENABLED=true
+# as a build arg; without a rebuild the image intentionally stays free of it.
+ARG CLAUDE_MEM_ENABLED=false
 ARG CLAUDE_MEM_VERSION
 
 RUN npm install -g --allow-scripts=@anthropic-ai/claude-code,bun \
     @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
     @agentclientprotocol/claude-agent-acp@${CLAUDE_AGENT_ACP_VERSION} \
-    bun@${BUN_VERSION} \
-    claude-mem@${CLAUDE_MEM_VERSION}
+    bun@${BUN_VERSION}
+
+RUN if [ "${CLAUDE_MEM_ENABLED}" = "true" ]; then \
+      npm install -g claude-mem@${CLAUDE_MEM_VERSION}; \
+    fi
 
 FROM base AS codex
 

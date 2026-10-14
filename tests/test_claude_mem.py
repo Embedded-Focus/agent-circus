@@ -28,6 +28,13 @@ def test_build_claude_mem_override_mounts_workspace_memory(tmp_path: Path) -> No
     assert service["volumes"] == [f"{tmp_path}:{CLAUDE_MEM_CONTAINER_DATA_DIR}:cached"]
 
 
+def test_build_claude_mem_override_gates_image_install(tmp_path: Path) -> None:
+    result = json.loads(build_claude_mem_override(tmp_path, ["claude-code"]))
+    service = result["services"]["claude-code"]
+
+    assert service["build"] == {"args": {"CLAUDE_MEM_ENABLED": "true"}}
+
+
 def test_validate_claude_mem_accepts_v1_shape() -> None:
     validate_config(
         {
@@ -77,6 +84,7 @@ def test_context_includes_claude_mem_override_when_enabled(
     assert (
         service["environment"]["CLAUDE_MEM_DATA_DIR"] == CLAUDE_MEM_CONTAINER_DATA_DIR
     )
+    assert service["build"] == {"args": {"CLAUDE_MEM_ENABLED": "true"}}
     assert service["volumes"] == [
         f"{get_claude_mem_dir(tmp_path)}:{CLAUDE_MEM_CONTAINER_DATA_DIR}:cached"
     ]

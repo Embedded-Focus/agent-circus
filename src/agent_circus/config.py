@@ -1056,12 +1056,19 @@ def build_podman_runtime_override() -> str:
 def build_claude_mem_override(claude_mem_dir: Path, services: list[str]) -> str:
     """Build a Compose override enabling workspace-scoped Claude-Mem.
 
+    Enabled services receive build-time activation (the ``CLAUDE_MEM_ENABLED``
+    build arg that makes the image build install the ``claude-mem`` package)
+    plus runtime activation (environment variables and the workspace memory
+    directory mount). Only services whose Dockerfile stage consumes the build
+    arg are supported (currently ``claude-code``).
+
     :param claude_mem_dir: Host state directory for this workspace's memory.
     :param services: Supported agent services that should receive Claude-Mem.
     :returns: Compose override as a JSON string.
     """
     service_defs = {
         service: {
+            "build": {"args": {"CLAUDE_MEM_ENABLED": "true"}},
             "environment": {
                 "AGENT_CIRCUS_CLAUDE_MEM_ENABLED": "true",
                 "CLAUDE_MEM_DATA_DIR": CLAUDE_MEM_CONTAINER_DATA_DIR,

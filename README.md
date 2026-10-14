@@ -736,18 +736,22 @@ enabled = true
 
 When enabled, Agent Circus:
 
-1. Mounts a workspace-scoped Claude-Mem data directory at
+1. Passes `CLAUDE_MEM_ENABLED=true` as a build argument to the `claude-code`
+   image, which installs the Claude-Mem package into it (see the rebuild note
+   below).
+2. Mounts a workspace-scoped Claude-Mem data directory at
    `/home/node/.claude-mem`.
-2. Sets `CLAUDE_MEM_DATA_DIR=/home/node/.claude-mem` for the `claude-code`
+3. Sets `CLAUDE_MEM_DATA_DIR=/home/node/.claude-mem` for the `claude-code`
    service.
-3. Runs Claude-Mem setup idempotently when the `claude-code` container starts.
-4. Starts the Claude-Mem worker if it is not already running.
+4. Runs Claude-Mem setup idempotently when the `claude-code` container starts.
+5. Starts the Claude-Mem worker if it is not already running.
 
 Claude-Mem data is stored under
 `~/.local/state/agent-circus/<project>/data/claude-mem/` on the host. Each
 workspace gets its own memory store, so knowledge from different projects or
 customers is not mixed. Disabling `[claude_mem]` stops mounting and starting
-Claude-Mem, but does not delete the existing memory data.
+Claude-Mem and removes it from the next image build, but does not delete the
+existing memory data.
 
 Fields:
 
@@ -769,9 +773,12 @@ env_passthrough = ["CLAUDE_MEM_GEMINI_API_KEY", "CLAUDE_MEM_OPENROUTER_API_KEY"]
 > service. Other supported Claude-Mem IDEs and CLIs are not wired up by Agent
 > Circus yet.
 
-> **Rebuild required**: Claude-Mem and Bun are installed in the `claude-code`
-> image. Run `agent-circus build claude-code` after enabling `[claude_mem]` for
-> the first time or after updating Agent Circus.
+> **Rebuild required**: Claude-Mem is baked into the `claude-code` image only
+> when `[claude_mem].enabled` is `true` at build time. Run
+> `agent-circus build claude-code` (or `agent-circus up --build`) after
+> enabling `[claude_mem]`; without a rebuild the container starts with a
+> warning and Claude-Mem stays inactive until the image is built with the
+> package. Disabling `[claude_mem]` takes effect on the next rebuild.
 
 > **Compatible with `[host_credentials]`**: enabling direct host credential
 > mounts for `claude-code` (see [Host Credentials](#host-credentials)) does
