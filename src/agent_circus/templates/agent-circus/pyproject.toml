@@ -22,4 +22,7 @@ override-dependencies = [
     # work around critical security issues
     "pyjwt>=2.15.0",
     "urllib3>=2.8.0",
+    # GHSA-84m7-p3x7-pcfv (CVE-2026-59951); mistral-vibe pins mcp==1.28.1,
+    # override to the fixed 1.x line.  2.x would change the API vibe uses.
+    "mcp>=1.30.0,<2.0.0",
 ]
