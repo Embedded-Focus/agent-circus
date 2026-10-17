@@ -31,6 +31,22 @@ def test_exec_invalid_service_shows_clean_error() -> None:
     assert "Traceback" not in result.output
 
 
+def test_exec_missing_command_shows_clean_error() -> None:
+    result = runner.invoke(app, ["exec", "claude-code"])
+
+    assert result.exit_code == 1
+    assert "Error: Missing command." in result.output
+    assert "Traceback" not in result.output
+
+
+def test_exec_empty_command_after_separator_shows_clean_error() -> None:
+    result = runner.invoke(app, ["exec", "claude-code", "--"])
+
+    assert result.exit_code == 1
+    assert "Error: Missing command." in result.output
+    assert "Traceback" not in result.output
+
+
 def test_remove_invalid_service_shows_clean_error() -> None:
     result = runner.invoke(app, ["remove", "not-a-service"])
 

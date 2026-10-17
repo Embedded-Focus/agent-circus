@@ -39,7 +39,8 @@ def exec_cmd(
     command: Annotated[
         list[str] | None,
         typer.Argument(
-            help="Command to run in the container.",
+            help="Command to run in the container (required; pass it "
+            "after '--', e.g. 'bash' for an interactive shell).",
         ),
     ] = None,
     workspace: Annotated[
@@ -75,9 +76,13 @@ def exec_cmd(
     runtime's Compose implementation. If the container is not running, it is
     started automatically. Works in both deploy and instant mode.
 
+    The command argument is required: an empty command is rejected before
+    any container is started, because implicit-shell exec is not supported
+    by every Compose implementation (e.g. podman compose requires one).
+
     Examples:
-        agent-circus exec claude-code                          # Interactive shell
-        agent-circus exec claude-code -- claude-agent-acp --acp # Run ACP server
+        agent-circus exec claude-code -- bash                  # Interactive shell
+        agent-circus exec claude-code -- claude-agent-acp      # Run ACP server
         agent-circus exec -T claude-code -- echo hello         # Non-interactive
     """
     workspace = workspace or get_workspace_path()
@@ -86,6 +91,12 @@ def exec_cmd(
     try:
         validate_services([service], companions)
         cmd = command or []
+        if not cmd:
+            raise AgentCircusError(
+                "Missing command. Pass the command to run in the container "
+                "after '--', e.g. 'agent-circus exec "
+                f"{service} -- bash'."
+            )
 
         context_kwargs = {"runtime": runtime} if runtime is not None else {}
         with build_compose_context(workspace, **context_kwargs) as ctx:

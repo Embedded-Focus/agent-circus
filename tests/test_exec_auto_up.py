@@ -124,6 +124,29 @@ def test_exec_auto_up_starts_only_requested_service(
 @patch("agent_circus.commands.exec_.compose_up")
 @patch("agent_circus.commands.exec_.compose_is_service_running", return_value=False)
 @patch("agent_circus.commands.exec_.build_compose_context")
+def test_exec_missing_command_fails_before_starting_services(
+    mock_build_ctx: MagicMock,
+    mock_is_running: MagicMock,
+    mock_up: MagicMock,
+    mock_exec: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """A missing command is an invocation error; nothing may touch the
+    container engine (no context, no auto-up, no exec)."""
+    result = runner.invoke(app, ["exec", "--workspace", str(tmp_path), "claude-code"])
+
+    assert result.exit_code == 1
+    assert "Missing command" in result.output
+    mock_build_ctx.assert_not_called()
+    mock_is_running.assert_not_called()
+    mock_up.assert_not_called()
+    mock_exec.assert_not_called()
+
+
+@patch("agent_circus.commands.exec_.compose_exec")
+@patch("agent_circus.commands.exec_.compose_up")
+@patch("agent_circus.commands.exec_.compose_is_service_running", return_value=False)
+@patch("agent_circus.commands.exec_.build_compose_context")
 def test_exec_rejects_unknown_host_config_flag(
     mock_build_ctx: MagicMock,
     mock_is_running: MagicMock,
