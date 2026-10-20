@@ -1412,7 +1412,7 @@ Works in both instant mode and deploy mode."
             ('codex "codex")
             ('mistral-vibe "mistral-vibe")
             ('opencode "opencode")
-            (_ "claude-code"))))
+            (_ "opencode"))))
     (list "agent-circus" "--log-level" "DEBUG" "--log-file" "/tmp/agent-circus.log" "exec" service "--")))
 
 (use-package agent-shell
