@@ -280,11 +280,47 @@ def _merge_named_arrays(
 # ---------------------------------------------------------------------------
 
 
+class PiConfigHandler:
+    """Handler for Pi configuration (JSON).
+
+    Pi keeps its settings at ``~/.pi/agent/settings.json`` — one level deeper
+    than the other supported agents — so :attr:`store_subpath` tells
+    :func:`merge_agent_config_store` to write into the store's ``agent``
+    subdirectory instead of its root.
+    """
+
+    agent_name = "pi"
+    container_config_path = "/home/node/.pi/agent/settings.json"
+    output_filename = "pi-settings.json"
+    store_subpath = "agent"
+
+    def __init__(self) -> None:
+        self.host_config_path = Path.home() / ".pi" / "agent" / "settings.json"
+
+    def read(self) -> dict[str, Any]:
+        if not self.host_config_path.is_file():
+            return {}
+        with open(self.host_config_path) as f:
+            return json.load(f)
+
+    def merge(self, base: dict[str, Any], additions: dict[str, Any]) -> dict[str, Any]:
+        # Settings are nested (defaultProvider, mcpServers, extensions, ...);
+        # deep merge keeps sibling keys that additions do not mention.
+        return _deep_merge_dicts(base, additions)
+
+    def write(self, config: dict[str, Any], output_path: Path) -> None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w") as f:
+            json.dump(config, f, indent=2)
+            f.write("\n")
+
+
 HANDLERS: list[type[AgentConfigHandler]] = [
     ClaudeCodeConfigHandler,
     CodexConfigHandler,
     VibeConfigHandler,
     OpenCodeConfigHandler,
+    PiConfigHandler,
 ]
 
 
@@ -362,7 +398,10 @@ def merge_agent_config_store(
         if handler.agent_name != agent_name:
             continue
 
-        config_path = store_dir / Path(handler.container_config_path).name
+        # ``store_subpath`` supports agents whose config lives in a
+        # subdirectory of the mounted config directory (Pi: ``agent/``).
+        subpath = str(getattr(handler, "store_subpath", ""))
+        config_path = store_dir / subpath / Path(handler.container_config_path).name
         handler.host_config_path = config_path
         merged = handler.merge(handler.read(), additions)
         handler.write(merged, config_path)

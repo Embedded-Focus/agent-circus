@@ -78,7 +78,7 @@ DOCKERFILE_NAME = "Dockerfile"
 
 HOOKS_DIR_NAME = "hooks"
 
-AVAILABLE_SERVICES = ["claude-code", "codex", "mistral-vibe", "opencode"]
+AVAILABLE_SERVICES = ["claude-code", "codex", "mistral-vibe", "opencode", "pi"]
 
 DEFAULT_AGENT_CONFIG_MOUNTS: dict[str, dict[str, str]] = {
     "claude-code": {
@@ -96,6 +96,13 @@ DEFAULT_AGENT_CONFIG_MOUNTS: dict[str, dict[str, str]] = {
     "opencode": {
         "host": "${HOME}/.config/opencode",
         "container": "/home/node/.config/opencode",
+    },
+    # ``.pi`` rather than ``.pi/agent`` because the pi-acp adapter keeps its
+    # session map in ``~/.pi/pi-acp`` (see ``pi_acp/paths.ts``); mounting the
+    # parent persists agent state and adapter state together.
+    "pi": {
+        "host": "${HOME}/.pi",
+        "container": "/home/node/.pi",
     },
 }
 
@@ -116,6 +123,22 @@ AGENT_CREDENTIAL_PATHS: dict[str, dict[str, str]] = {
         "host": "${HOME}/.local/share/opencode/auth.json",
         "container": "/home/node/.local/share/opencode/auth.json",
     },
+    "pi": {
+        "host": "${HOME}/.pi/agent/auth.json",
+        "container": "/home/node/.pi/agent/auth.json",
+    },
+}
+
+#: Relative paths that seeding copies out of :data:`DEFAULT_AGENT_CONFIG_MOUNTS`
+#: ``host`` into a project-local agent config store.
+#:
+#: Pi is restricted deliberately. A host ``~/.pi`` holds roughly 400 MB, the
+#: bulk of it in ``agent/npm`` (installed pi packages) and ``agent/install``
+#: (managed pi releases). Both hold code that would execute inside the
+#: container, and ``agent/sessions`` holds host-side transcripts, so none of
+#: them are seeded. Everything else keeps the default whole-directory seeding.
+AGENT_CONFIG_SEED_PATHS: dict[str, list[str]] = {
+    "pi": ["agent/settings.json", "agent/models.json"],
 }
 
 VCS_MARKERS: tuple[str, ...] = (".git", ".hg", ".svn", ".bzr", "_darcs")

@@ -78,6 +78,10 @@ def test_get_host_credentials_services_returns_configured_list() -> None:
                 "/home/node/.local/share/opencode/auth.json:cached"
             ),
         ),
+        (
+            "pi",
+            ("${HOME}/.pi/agent/auth.json:/home/node/.pi/agent/auth.json:cached"),
+        ),
     ],
 )
 def test_build_host_credentials_override_mounts_single_auth_file(
@@ -94,6 +98,7 @@ def test_build_host_credentials_override_covers_all_known_agents() -> None:
         "codex",
         "mistral-vibe",
         "opencode",
+        "pi",
     }
 
 

@@ -14,7 +14,7 @@ from agent_circus.compose import (
     compose_is_service_running,
     compose_up,
 )
-from agent_circus.config import build_shadow_override
+from agent_circus.config import AVAILABLE_SERVICES, build_shadow_override
 from agent_circus.exceptions import ComposeError
 from agent_circus.state import (
     get_podman_runtime_override_path,
@@ -246,7 +246,7 @@ def test_build_shadow_override_produces_valid_json() -> None:
     data = json.loads(result)
 
     assert "services" in data
-    for service in ("claude-code", "codex", "mistral-vibe", "opencode"):
+    for service in AVAILABLE_SERVICES:
         volumes = data["services"][service]["volumes"]
         assert "/dev/null:/workspace/.env:ro" in volumes
         assert "/dev/null:/workspace/.env.local:ro" in volumes
@@ -256,5 +256,5 @@ def test_build_shadow_override_empty_list() -> None:
     result = build_shadow_override([])
     data = json.loads(result)
 
-    for service in ("claude-code", "codex", "mistral-vibe", "opencode"):
+    for service in AVAILABLE_SERVICES:
         assert data["services"][service]["volumes"] == []

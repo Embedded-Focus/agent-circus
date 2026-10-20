@@ -89,3 +89,20 @@ services:
     - ${HOME}/.cache:/home/node/.cache
     environment:
       AGENT_TYPE: opencode
+
+  pi:
+    <<: *common-service
+    build:
+      <<: *common-build
+      target: pi
+      args:
+        <<: *common-build-args
+        # https://github.com/earendil-works/pi
+        PI_VERSION: 1.3.0
+        # https://github.com/svkozak/pi-acp
+        PI_ACP_VERSION: 0.0.34
+    volumes:
+    - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
+    - ${HOME}/.cache:/home/node/.cache
+    environment:
+      AGENT_TYPE: pi

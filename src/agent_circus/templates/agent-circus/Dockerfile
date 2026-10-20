@@ -147,6 +147,18 @@ ARG OPENCODE_VERSION
 RUN npm install -g --allow-scripts=@opencode/cli \
     @opencode/cli@${OPENCODE_VERSION}
 
+# Pi runs natively inside the container. pi-acp is the ACP adapter that
+# translates between the editor's ACP stream and `pi --mode rpc`, which it
+# spawns as a child process, so both packages belong to this target.
+FROM base AS pi
+
+ARG PI_VERSION
+ARG PI_ACP_VERSION
+
+RUN npm install -g \
+    @earendil-works/pi-coding-agent@${PI_VERSION} \
+    pi-acp@${PI_ACP_VERSION}
+
 FROM base AS mistral-vibe
 
 ENV UV_LINK_MODE=copy \

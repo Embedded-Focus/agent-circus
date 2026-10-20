@@ -136,6 +136,22 @@ PINS: list[VersionPin] = [
         pattern=re.compile(r"mistral-vibe>=([0-9.]+)"),
         strip_prefix="v",
     ),
+    # Resolved from npm: the image installs the published CLI, not a GitHub
+    # release, and pi-acp is published without version tags.
+    VersionPin(
+        name="pi",
+        repo="@earendil-works/pi-coding-agent",
+        file=TEMPLATE_DIR / "compose.yaml",
+        pattern=re.compile(r"PI_VERSION:\s*(\S+)"),
+        source="npm",
+    ),
+    VersionPin(
+        name="pi-acp",
+        repo="pi-acp",
+        file=TEMPLATE_DIR / "compose.yaml",
+        pattern=re.compile(r"PI_ACP_VERSION:\s*(\S+)"),
+        source="npm",
+    ),
 ]
 
 

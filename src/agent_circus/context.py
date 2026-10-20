@@ -21,6 +21,7 @@ from .compose import (
     _try_remove_startup_placeholder,
 )
 from .config import (
+    AGENT_CONFIG_SEED_PATHS,
     AGENT_CREDENTIAL_PATHS,
     AVAILABLE_SERVICES,
     CA_CERTS_DEFAULT_DIR,
@@ -157,17 +158,28 @@ def _path_exists(path: Path) -> bool:
     return path.exists() or path.is_symlink()
 
 
-def _copy_seed_contents(source: Path, target: Path) -> None:
+def _copy_seed_contents(
+    source: Path, target: Path, *, only: list[str] | None = None
+) -> None:
     """Copy the children of a seed directory into a data store directory.
 
     :param source: Host source directory.
     :param target: Host data store directory.
+    :param only: Relative paths inside *source* to copy. When omitted, every
+        child of *source* is copied. Missing entries are skipped so that
+        optional files never abort seeding.
     """
     if not source.exists() or not source.is_dir():
         return
 
-    for child in source.iterdir():
-        destination = target / child.name
+    if only is None:
+        children = [(child, child.name) for child in source.iterdir()]
+    else:
+        children = [(source / rel, rel) for rel in only]
+        children = [(child, rel) for child, rel in children if _path_exists(child)]
+
+    for child, relative in children:
+        destination = target / relative
         if child.is_dir() and not child.is_symlink():
             if _path_exists(destination) and (
                 not destination.is_dir() or destination.is_symlink()
@@ -177,6 +189,7 @@ def _copy_seed_contents(source: Path, target: Path) -> None:
         else:
             if _path_exists(destination):
                 _remove_path(destination)
+            destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(child, destination, follow_symlinks=False)
 
 
@@ -193,6 +206,9 @@ def _seed_data_stores(data_stores: list[dict], data_base_dir: Path) -> None:
 
         name = entry["name"]
         source = _resolve_seed_source(seed_from)
+        seed_paths = entry.get("seed_paths")
+        if isinstance(seed_paths, str):
+            seed_paths = [seed_paths]
         target = data_base_dir / name
         marker = target / _DATA_STORE_SEED_MARKER
         target.mkdir(parents=True, exist_ok=True)
@@ -201,7 +217,7 @@ def _seed_data_stores(data_stores: list[dict], data_base_dir: Path) -> None:
             if marker.exists():
                 continue
 
-            _copy_seed_contents(source, target)
+            _copy_seed_contents(source, target, only=seed_paths)
             marker.write_text(f"Agent Circus seeded this data store from {source}\n")
 
 
@@ -519,6 +535,7 @@ def build_compose_context(
         {
             "name": service,
             "seed_from": DEFAULT_AGENT_CONFIG_MOUNTS[service]["host"],
+            "seed_paths": AGENT_CONFIG_SEED_PATHS.get(service),
         }
         for service in AVAILABLE_SERVICES
         if service not in agent_config_data_stores

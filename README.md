@@ -58,6 +58,8 @@ Currently supported agents:
 - [Codex](https://openai.com/codex/) (OpenAI)
 - [Vibe CLI](https://docs.mistral.ai/mistral-vibe/introduction) (Mistral)
 - [OpenCode](https://opencode.ai/) (SST)
+- [Pi](https://pi.dev/) (Earendil Works), driven through the
+  [pi-acp](https://github.com/svkozak/pi-acp) adapter
 
 IDEs interface with agents via the [Agent Client Protocol](https://agentclientprotocol.com/) (ACP).
 
@@ -218,6 +220,7 @@ agent-circus build
 agent-circus exec claude-code -- claude-agent-acp
 agent-circus exec codex -- codex-acp
 agent-circus exec opencode -- opencode
+agent-circus exec pi -- pi-acp
 agent-circus exec -T claude-code -- echo hello   # non-interactive
 
 # Optionally start containers ahead of time
@@ -431,6 +434,14 @@ that copy into the corresponding container:
 | Codex       | `~/.codex`           | `/home/node/.codex`           |
 | Vibe CLI    | `~/.vibe`            | `/home/node/.vibe`            |
 | OpenCode    | `~/.config/opencode` | `/home/node/.config/opencode` |
+| Pi          | `~/.pi`              | `/home/node/.pi`              |
+
+Pi seeds selectively. A host `~/.pi` holds roughly 400 MB, most of it in
+`agent/npm` (installed Pi packages) and `agent/install` (managed Pi
+releases). Both contain code that would run inside the container, and
+`agent/sessions` holds host-side transcripts. Agent Circus therefore copies
+only `agent/settings.json` and `agent/models.json` into the Pi store. See
+[Pi](#pi-pi-acp-adapter) for what that means for sessions and packages.
 
 The copies are stored under
 `~/.local/state/agent-circus/<project>/agent-config/<agent>/` with directory
@@ -785,6 +796,66 @@ env_passthrough = ["CLAUDE_MEM_GEMINI_API_KEY", "CLAUDE_MEM_OPENROUTER_API_KEY"]
 > not conflict with `[claude_mem]` — Claude-Mem's plugin files and the OAuth
 > credentials file live at different paths within the config directory.
 
+### Pi (pi-acp adapter)
+
+Pi runs inside the container like the other agents. The
+[pi-acp](https://github.com/svkozak/pi-acp) adapter speaks ACP over the
+container's stdin and stdout, and starts `pi --mode rpc` as a child process:
+
+``` shell
+agent-circus exec pi -- pi-acp
+```
+
+Two pins decide what gets installed. Both live in the service's build args
+and are tracked by `ac deps show` and `make update-templates`:
+
+| Pin               | Installs                                    |
+|-------------------|---------------------------------------------|
+| `PI_VERSION`      | `@earendil-works/pi-coding-agent` (the `pi` CLI) |
+| `PI_ACP_VERSION`  | `pi-acp` (the ACP adapter)                   |
+
+**State that persists.** The project config store mounts at `/home/node/.pi`,
+one level above Pi's own `~/.pi/agent`. That is deliberate: pi-acp stores its
+session map in `~/.pi/pi-acp/session-map.json`, so sessions and the adapter's
+mapping survive container removal together. You can resume those sessions in
+`pi` directly with `/resume`.
+
+**State that does not cross the boundary.** The host `~/.pi` is not mounted.
+Only `settings.json` and `models.json` are seeded, once, into the project
+store. Host Pi extensions, packages, and sessions stay on the host, so
+extensions that must be available inside the container belong in the image.
+Install them in the `base-user.sh` hook file (deploy mode), which runs during the
+image build:
+
+``` bash
+# .agent-circus/hooks/base-user.sh
+npm install -g <pi-package>
+```
+
+**Credentials.** Pi stores provider credentials in `~/.pi/agent/auth.json`. To
+reuse host credentials, enable the service:
+
+``` toml
+[host_credentials]
+services = ["pi"]
+```
+
+Without that, keep container-local credentials by starting Pi interactively
+once per project (`agent-circus exec pi -- pi`) and configuring the provider
+there. pi-acp offers the same path from an ACP client that supports terminal
+auth: `pi-acp --terminal-login`.
+
+**Limits to know about.**
+
+- pi-acp does not delegate filesystem or terminal operations back to the
+  editor (`fs/*` and `terminal/*`). Pi reads, writes, and executes inside the
+  container. This is the intended sandbox boundary.
+- Agent Circus does not yet translate `[[mcp_servers]]` into Pi's
+  `~/.pi/agent/mcp.json` format. Configure Pi's MCP servers inside the
+  container for now.
+- pi-acp is an MVP-stage adapter that expects minor breaking changes. Pin
+  `PI_ACP_VERSION` and bump it deliberately.
+
 ### Host Credentials
 
 > [!IMPORTANT]
@@ -813,6 +884,7 @@ project-local copy described in [Authentication](#authentication).
 | `codex`        | `~/.codex/auth.json`                | `/home/node/.codex/auth.json`               |
 | `mistral-vibe` | `~/.vibe/.env`                      | `/home/node/.vibe/.env`                     |
 | `opencode`     | `~/.local/share/opencode/auth.json` | `/home/node/.local/share/opencode/auth.json`|
+| `pi`           | `~/.pi/agent/auth.json`             | `/home/node/.pi/agent/auth.json`            |
 
 Two of these paths are governed by variables, not fixed locations:
 
@@ -1412,6 +1484,7 @@ Works in both instant mode and deploy mode."
             ('codex "codex")
             ('mistral-vibe "mistral-vibe")
             ('opencode "opencode")
+            ('pi "pi")
             (_ "opencode"))))
     (list "agent-circus" "--log-level" "DEBUG" "--log-file" "/tmp/agent-circus.log" "exec" service "--")))
 
