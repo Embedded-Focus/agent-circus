@@ -10,6 +10,7 @@
     pkgs.git-absorb
     pkgs.sops
     pkgs.age
+    pkgs.yq-go
   ];
 
   # https://devenv.sh/languages/
