@@ -7,7 +7,7 @@ requires-python = "==3.14.*"
 dependencies = [
     "gitpython >= 3.1.59",
     # https://github.com/mistralai/mistral-vibe
-    "mistral-vibe>=2.26.1",
+    "mistral-vibe>=3.0.1",
 ]
 
 [tool.uv]
@@ -25,4 +25,6 @@ override-dependencies = [
     # GHSA-84m7-p3x7-pcfv (CVE-2026-59951); mistral-vibe pins mcp==1.28.1,
     # override to the fixed 1.x line.  2.x would change the API vibe uses.
     "mcp>=1.30.0,<2.0.0",
+    # GHSA-6q48-6c7w-9gw2 (PYSEC-2026-4320); mistral-vibe pins # certifi==2026.7.22
+    "certifi>=2026.10.19",
 ]
