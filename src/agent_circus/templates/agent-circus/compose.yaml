@@ -1,7 +1,7 @@
 ---
 x-common-build-args: &common-build-args
   TZ: ${TZ:-Europe/Vienna}
-  NPM_VERSION: 12.2.0
+  NPM_VERSION: 12.2.1
 
 x-common-build: &common-build
   context: .
@@ -30,7 +30,7 @@ services:
       target: claude-code
       args:
         <<: *common-build-args
-        CLAUDE_CODE_VERSION: 2.1.306
+        CLAUDE_CODE_VERSION: 2.1.308
         # https://github.com/agentclientprotocol/claude-agent-acp
         CLAUDE_AGENT_ACP_VERSION: 0.94.0
         # https://github.com/oven-sh/bun
@@ -98,7 +98,7 @@ services:
       args:
         <<: *common-build-args
         # https://github.com/earendil-works/pi
-        PI_VERSION: 1.3.0
+        PI_VERSION: 1.4.0
         # https://github.com/svkozak/pi-acp
         PI_ACP_VERSION: 0.0.34
     volumes:
