@@ -8,6 +8,11 @@ inputs:
     inputs:
       nixpkgs:
         follows: nixpkgs
+  # Extra input only for fetching up-to-date packages (e.g. uv) that
+  # cachix/devenv-nixpkgs has not picked up yet in its rolling sync.
+  nixpkgs-uvs:
+    url: github:NixOS/nixpkgs/nixpkgs-unstable
+    flake: false
 
 # If you're using non-OSS software, you can set allow_unfree to true.
 # allow_unfree: true

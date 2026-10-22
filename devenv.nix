@@ -2,8 +2,15 @@
   pkgs,
   lib,
   config,
+  inputs,
   ...
 }:
+let
+  # Import plain nixpkgs-unstable (as an extra input) just for packages that
+  # cachix/devenv-nixpkgs has not synced yet, e.g. uv. Remove once devenv's
+  # rolling nixpkgs carries a sufficiently new uv.
+  uvs = import inputs.nixpkgs-uvs { system = pkgs.stdenv.hostPlatform.system; };
+in
 {
   packages = [
     pkgs.git
@@ -16,10 +23,13 @@
   # https://devenv.sh/languages/
   languages.python = {
     enable = true;
-    version = "3.14";
+    version = "3.14.8";
     venv.enable = true;
-    uv.enable = true;
-    uv.sync.enable = true;
+    uv = {
+      enable = true;
+      package = uvs.uv;
+      sync.enable = true;
+    };
   };
 
   dotenv.disableHint = true;
