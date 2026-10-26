@@ -176,4 +176,5 @@ node_modules/
 
 # agent-circus
 .agent-circus/
-
+opencode.json
+.pi/
