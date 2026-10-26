@@ -7,7 +7,7 @@ requires-python = "==3.14.*"
 dependencies = [
     "gitpython >= 3.1.59",
     # https://github.com/mistralai/mistral-vibe
-    "mistral-vibe>=3.0.1",
+    "mistral-vibe>=3.0.2",
 ]
 
 [tool.uv]
@@ -27,4 +27,6 @@ override-dependencies = [
     "mcp>=1.30.0,<2.0.0",
     # GHSA-6q48-6c7w-9gw2 (PYSEC-2026-4320); mistral-vibe pins # certifi==2026.7.22
     "certifi>=2026.10.19",
+    # GHSA-xcq7-p3pf-p88h; pinned by mistral-vibe
+    "opentelemetry-api>=1.45.1",
 ]
