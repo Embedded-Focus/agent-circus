@@ -36,6 +36,7 @@ classifiers = [
 dependencies = [
     "docker>=7.0.0",
     "importlib-resources>=5.10; python_version < '3.12'",
+    "microsandbox>=0.7.8",
     "packaging>=24.0",
     "pygithub>=2.9.1",
     "tomli-w>=1.2.0",
@@ -50,9 +51,10 @@ Issues = "https://github.com/Embedded-Focus/agent-circus/issues"
 [project.scripts]
 agent-circus = "agent_circus.cli:run_cli"
 agent-circus-update-templates = "agent_circus.update_versions:run"
+msb-circus = "msb_circus.cli:run_cli"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/agent_circus"]
+packages = ["src/agent_circus", "src/msb_circus"]
 
 [tool.hatch.build.hooks.custom]
 path = "src/hatch_build.py"

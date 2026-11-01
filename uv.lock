@@ -9,6 +9,7 @@ source = { editable = "." }
 dependencies = [
     { name = "docker" },
     { name = "importlib-resources", marker = "python_full_version < '3.12'" },
+    { name = "microsandbox" },
     { name = "packaging" },
     { name = "pygithub" },
     { name = "tomli-w" },
@@ -29,6 +30,7 @@ dev = [
 requires-dist = [
     { name = "docker", specifier = ">=7.0.0" },
     { name = "importlib-resources", marker = "python_full_version < '3.12'", specifier = ">=5.10" },
+    { name = "microsandbox", specifier = ">=0.7.8" },
     { name = "packaging", specifier = ">=24.0" },
     { name = "pygithub", specifier = ">=2.9.1" },
     { name = "tomli-w", specifier = ">=1.2.0" },
@@ -498,6 +500,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d6/54/cfe61301667036ec958cb99bd3efefba235e65cdeb9c84d24a8293ba1d90/mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba", size = 8729, upload-time = "2022-08-14T12:40:10.846Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8", size = 9979, upload-time = "2022-08-14T12:40:09.779Z" },
+]
+
+[[package]]
+name = "microsandbox"
+version = "0.7.12"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/87/3f/a7be47657b89ed730ae3ef158a1ceefcceaf50059f241f2dd2187c819ec4/microsandbox-0.7.12-cp310-abi3-macosx_14_0_arm64.whl", hash = "sha256:b157ebb43cf43c7ad0ade68202f97045cbd40bed38247223af2b9bc52b82a7b3", size = 47841439, upload-time = "2026-10-31T17:17:38.941Z" },
+    { url = "https://files.pythonhosted.org/packages/13/2a/e1c4f81829ebc62742eb7d1b15d7bdabb667c931ccb9b5fa58a606624679/microsandbox-0.7.12-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:857fb2b077f38baaff0dbb678af009e296116db61ee644ba24f781814458c7b5", size = 50992666, upload-time = "2026-10-31T17:17:43.266Z" },
+    { url = "https://files.pythonhosted.org/packages/48/54/63bb702d06ca0032278db590342471c75ebcc08621fb2f4db928bbbd708d/microsandbox-0.7.12-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:532ebfd40d491a757fdbee4509cf05a367013116ae389143cd656074332fab3a", size = 49086302, upload-time = "2026-10-31T17:17:47.772Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/55/9e95cde06d4580d3ba6e460167e0505b901454a0f4504fd92415f335e707/microsandbox-0.7.12-cp310-abi3-win_amd64.whl", hash = "sha256:4ab74d8f7f23e6bcc86f3bdc372545cea42ed4a2f06ebc8ccb9977f7e4c8381a", size = 45152125, upload-time = "2026-10-31T17:17:51.367Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/41/6c6f467b4697b03d341243b74bebd0b4277b5881bc067823e0f232770d9b/microsandbox-0.7.12-cp310-abi3-win_arm64.whl", hash = "sha256:7f3d51de9b59040f13e5809b6ab49689d1d463d4994481d34a23e514d32bfe3b", size = 47706200, upload-time = "2026-10-31T17:17:55.574Z" },
 ]
 
 [[package]]

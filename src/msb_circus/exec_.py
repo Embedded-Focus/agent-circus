@@ -1,0 +1,209 @@
+"""``msb exec`` argv builders and the ACP stream pump."""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+import threading
+
+ACP_FLAGS: tuple[str, ...] = ("--stream", "--quiet")
+INTERACTIVE_FLAGS: tuple[str, ...] = ("--tty",)
+
+_COPY_CHUNK = 65536
+
+
+def build_exec_args(
+    name: str,
+    command: list[str],
+    *,
+    acp: bool = False,
+    env: dict[str, str] | None = None,
+    workdir: str | None = None,
+    user: str | None = None,
+    tty: bool | None = True,
+) -> list[str]:
+    """Build argv for ``msb exec``.
+
+    Transport modes:
+
+    - Interactive (default): a PTY session, ``--tty``.
+    - ACP (``acp=True``): bidirectional streaming without a PTY —
+      ``--stream --quiet`` with piped stdin. Never combine ``--stream``
+      with ``--tty`` (echo/CRLF translation corrupts JSON lines), and do
+      not use ``--no-stdin``.
+    - Auto (``tty=None``): no TTY flag; msb decides. Used for scripted
+      probes — this matches the invocation verified manually against the
+      pinned msb release (``--no-tty`` was observed to fail probes even
+      with a healthy dockerd).
+
+    :param name: Sandbox name.
+    :param command: Command (and arguments) to run inside the sandbox.
+    :param acp: Select ACP streaming mode instead of a PTY session.
+    :param env: Optional per-execution environment overrides.
+    :param workdir: Optional guest working directory.
+    :param user: Optional guest user.
+    :param tty: ``True`` for ``--tty``, ``False`` for ``--no-tty``,
+        ``None`` to pass no TTY flag (ignored when *acp* is set).
+    :returns: Argv list; a ``--`` separator followed by the command is
+        appended after the sandbox name (required by the msb CLI:
+        ``msb exec [OPTIONS] <NAME> [-- <COMMAND>]...``).
+    :raises ValueError: If *command* is empty.
+    """
+    if not command:
+        raise ValueError("command must not be empty")
+    args = ["exec"]
+    if acp:
+        args += ACP_FLAGS
+    elif tty is None:
+        pass
+    elif tty:
+        args.append("--tty")
+    else:
+        args.append("--no-tty")
+    for key, value in (env or {}).items():
+        args += ["--env", f"{key}={value}"]
+    if workdir:
+        args += ["--workdir", workdir]
+    if user:
+        args += ["--user", user]
+    args.append(name)
+    args.append("--")
+    args += command
+    return args
+
+
+def _copy_bytes(src, dst) -> bool:
+    """Copy *src* to *dst* in chunks until EOF.
+
+    :param src: Source binary file-like object (blocking reads).
+    :param dst: Destination binary file-like object.
+    :returns: ``True`` on clean EOF, ``False`` on an I/O error (e.g. a
+        broken pipe because the peer went away).
+    """
+    try:
+        while True:
+            chunk = src.read(_COPY_CHUNK)
+            if not chunk:
+                return True
+            dst.write(chunk)
+            dst.flush()
+    except (OSError, ValueError):
+        return False
+
+
+def _terminate(proc: subprocess.Popen) -> None:
+    """Terminate *proc* if it is still running (best effort)."""
+    if proc.poll() is None:
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+
+
+def run_acp_stream(
+    argv: list[str],
+    *,
+    stdin=None,
+    stdout=None,
+    stderr=None,
+    grace_seconds: float = 5.0,
+) -> int:
+    """Run *argv* as a bidirectional, byte-faithful ACP stream.
+
+    Host stdin is forwarded verbatim to the child process, child stdout to
+    host stdout, and child stderr to host stderr — the latter concurrently
+    on a separate thread so heavy stderr output cannot deadlock the ACP
+    channel. Bytes are never buffered, transformed, or re-framed.
+
+    The child is terminated (without affecting the reported exit code,
+    which becomes 0) when the host side disappears, and shortly after
+    host stdin reaches EOF if the child does not exit on its own — so an
+    IDE disconnect never leaves an unintended agent process behind.
+    Genuine child exit codes propagate unchanged.
+
+    :param argv: Full argv (including the msb binary) to execute.
+    :param stdin: Host stdin (binary); defaults to ``sys.stdin.buffer``.
+    :param stdout: Host stdout (binary); defaults to ``sys.stdout.buffer``.
+    :param stderr: Host stderr (binary); defaults to ``sys.stderr.buffer``.
+    :param grace_seconds: Grace period after stdin EOF or before forced
+        kill on termination.
+    :returns: Child exit code; 0 when the host side disconnected.
+    """
+    if stdin is None:
+        stdin = sys.stdin.buffer
+    if stdout is None:
+        stdout = sys.stdout.buffer
+    if stderr is None:
+        stderr = sys.stderr.buffer
+
+    proc = subprocess.Popen(
+        argv,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
+    child_stdin = proc.stdin
+    child_stdout = proc.stdout
+    child_stderr = proc.stderr
+    assert child_stdin is not None and child_stdout is not None  # PIPEs
+    assert child_stderr is not None
+    stdin_done = threading.Event()
+    host_gone = threading.Event()
+    killed = threading.Event()
+
+    def pump_input() -> None:
+        try:
+            if not _copy_bytes(stdin, child_stdin):
+                host_gone.set()
+        finally:
+            try:
+                child_stdin.close()
+            except OSError:
+                pass
+            stdin_done.set()
+
+    def pump_errors() -> None:
+        if not _copy_bytes(child_stderr, stderr):
+            host_gone.set()
+
+    def watchdog() -> None:
+        """After stdin EOF, kill a child that refuses to exit on its own."""
+        stdin_done.wait()
+        try:
+            proc.wait(timeout=grace_seconds)
+        except subprocess.TimeoutExpired:
+            _terminate(proc)
+            killed.set()
+
+    input_thread = threading.Thread(target=pump_input, daemon=True)
+    error_thread = threading.Thread(target=pump_errors, daemon=True)
+    watchdog_thread = threading.Thread(target=watchdog, daemon=True)
+    input_thread.start()
+    error_thread.start()
+    watchdog_thread.start()
+
+    if not _copy_bytes(child_stdout, stdout):
+        host_gone.set()
+
+    if host_gone.is_set() and proc.poll() is None:
+        _terminate(proc)
+        killed.set()
+
+    try:
+        returncode = proc.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        killed.set()
+        try:
+            proc.wait(timeout=grace_seconds)
+        except subprocess.TimeoutExpired:
+            pass
+        returncode = proc.returncode
+
+    for thread in (input_thread, error_thread, watchdog_thread):
+        thread.join(timeout=1)
+
+    if host_gone.is_set() or killed.is_set():
+        return 0
+    return returncode if returncode is not None else 0

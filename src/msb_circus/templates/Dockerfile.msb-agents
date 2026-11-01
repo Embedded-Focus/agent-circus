@@ -1,0 +1,96 @@
+# syntax=docker/dockerfile:1
+
+# Base: official Node image on Debian slim (trixie). Pinned to the multi-arch
+# manifest-list digest of node:26-slim; podman selects the matching arch.
+# Per-arch digests if you prefer a single-platform pin:
+#   amd64: sha256:18f03e4b532a63baf09809fe8349c2171807f1818cb6c5230fb12aecd5beda65
+#   arm64: sha256:3591f3d5d65d087d01271d05ee93b6ee693c05a27b7cf80b4de363a1a9c13954
+FROM docker.io/library/node:26-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39 AS base
+
+# uv, pinned to the 0.13.6 multi-arch image digest
+COPY --from=ghcr.io/astral-sh/uv:0.13.6@sha256:af22a52f5eafef3d78e551599d405c02df61919d18028f0cea8eda93bc9986d0 \
+    /uv /uvx /usr/local/bin/
+
+# Docker runtime (dockerd + docker CLI + docker-init/docker-proxy +
+# runc/ctr/containerd shims), copied wholesale from the digest-pinned official
+# dind image. Binaries are static, so the alpine-based source works on Debian.
+# dockerd 27.x embeds containerd, so the containerd binary itself is not
+# needed (upstream excludes it from dind too). The dind helper script and the
+# alpine-oriented entrypoint are removed again right below.
+COPY --from=docker.io/library/docker:27.5.1-dind@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce \
+    /usr/local/bin/ /usr/local/bin/
+COPY --from=docker.io/library/docker:27.5.1-dind@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce \
+    /usr/local/libexec/docker/cli-plugins/ /usr/local/libexec/docker/cli-plugins/
+
+# Runtime dependencies for dockerd (mirrors the upstream dind image's dep
+# list): iptables/ip6tables for bridge networking, pigz/xz-utils for layer
+# compression, uidmap for userns-remap. ca-certificates provides the system
+# trust store that dockerd (Go crypto/x509) reads for registry pulls. This is
+# the only apt layer (apt has no digest pinning); everything else is
+# hash-referenced.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates iptables pigz xz-utils uidmap \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -f /usr/local/bin/dind /usr/local/bin/dockerd-entrypoint.sh
+
+# Python 3.14 interpreter, provisioned by uv. The tarball is fetched from
+# astral-sh/python-build-standalone at build time; uv verifies it against the
+# checksum in its embedded manifest (fixed by the pinned uv version above).
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python \
+    UV_PYTHON=3.14 \
+    PATH=/opt/uv-python/bin:${PATH}
+
+RUN uv python install 3.14 --default
+
+# Pin the default interpreter for uv in this image
+RUN uv python pin 3.14 --global
+
+# Always talk to the local dockerd socket, even if a DOCKER_HOST leaks in
+# from the session environment
+ENV DOCKER_HOST=unix:///var/run/docker.sock
+
+# Create the docker group so dockerd can chown the socket to it; silences
+# the "group docker not found" warning on first boot.
+RUN addgroup --system docker || true
+
+# Entrypoint: start dockerd in the background on boot (unless it is already
+# reachable), wait until it is ready (its log lands in /tmp/dockerd.log), and
+# only then hand over to the image command (default: bash). Written inline
+# with printf so the Dockerfile stays a single file. Before starting dockerd,
+# the sandbox TLS interception CA is imported when TLS interception is enabled
+# (it appears at /.msb/tls/ca.pem in the guest); this must happen before
+# dockerd starts because Go caches the system cert pool per process.
+RUN printf '%s\n' \
+        '#!/bin/sh' \
+        'set -e' \
+        'if [ -r /.msb/tls/ca.pem ] && command -v update-ca-certificates >/dev/null 2>&1; then' \
+        '    if ! cmp -s /.msb/tls/ca.pem /usr/local/share/ca-certificates/msb-intercept.crt; then' \
+        '        mkdir -p /usr/local/share/ca-certificates' \
+        '        cp /.msb/tls/ca.pem /usr/local/share/ca-certificates/msb-intercept.crt' \
+        '        update-ca-certificates' \
+        '    fi' \
+        'fi' \
+        'if ! docker info >/dev/null 2>&1; then' \
+        '    dockerd >/tmp/dockerd.log 2>&1 &' \
+        '    if ! timeout 60 sh -c "until docker info >/dev/null 2>&1; do sleep 1; done"; then' \
+        '        echo "dockerd failed to become ready; /tmp/dockerd.log follows:" >&2' \
+        '        cat /tmp/dockerd.log >&2' \
+        '        exit 1' \
+        '    fi' \
+        'fi' \
+        'exec "$@"' \
+        > /usr/local/bin/docker-entrypoint.sh \
+    && chmod +x /usr/local/bin/docker-entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+
+# --- Agents target: build with --target agents -------------------------------
+
+FROM base AS agents
+
+# Exact versions; npm enforces registry integrity hashes on install
+RUN npm install --global \
+        --allow-scripts=@opencode/cli @opencode/cli@2.2.2 \
+        @earendil-works/pi-coding-agent@1.4.0 pi-acp@0.0.34
+
+CMD ["bash"]
