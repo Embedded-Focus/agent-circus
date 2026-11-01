@@ -21,7 +21,7 @@ from .config import (
     sandbox_name_for_workspace,
 )
 from .envs import parse_env_assignments, resolve_passthrough
-from .exceptions import ConfigurationError, MsbCircusError
+from .exceptions import ConfigurationError, MsbCircusError, MsbCommandError
 from .exec_ import build_exec_args, run_acp_stream
 from .images import (
     build_image_inspect_args,
@@ -33,11 +33,14 @@ from .images import (
 from .msb import MsbInvoker, check_version, resolve_msb_binary
 from .sandbox import (
     SandboxInfo,
+    build_inspect_args,
     build_list_args,
     build_remove_args,
     build_run_args,
     build_start_args,
     build_stop_args,
+    configured_ports,
+    parse_inspect_ports,
     parse_sandbox_list_output,
 )
 
@@ -596,6 +599,37 @@ def up(
     )
 
 
+def _warn_on_port_drift(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
+    """Warn when configured port forwards differ from the sandbox's ports.
+
+    msb fixes port mappings at sandbox creation and ``msb modify`` cannot
+    change them, so a config change only applies to a newly created
+    sandbox. Failures here are non-fatal (probes, never raises).
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param config: Resolved msb-circus configuration.
+    :param name: Sandbox name to inspect.
+    """
+    configured = configured_ports(config.port_forwards)
+    if not configured:
+        return
+    try:
+        result = invoker.run(build_inspect_args(name))
+        published = parse_inspect_ports(result.stdout)
+    except (MsbCommandError, ConfigurationError) as e:
+        logger.debug("Port drift check for %s failed: %s", name, e)
+        return
+    if published == configured:
+        return
+    typer.echo(
+        f"Warning: port forwards for {name} differ from the configuration. "
+        "msb fixes ports at sandbox creation, so the change is not applied "
+        "to this sandbox. Remove and re-create it to apply: "
+        f"msb-circus rm -f && msb-circus up (ports: {sorted(published)}).",
+        err=True,
+    )
+
+
 def _ensure_sandbox_running(
     invoker: MsbInvoker,
     config: MsbConfig,
@@ -662,11 +696,13 @@ def _ensure_sandbox_running(
     existing = {s.name: s for s in sandboxes}.get(name)
     if existing is not None and (existing.status or "").lower() == "running":
         typer.echo(f"Sandbox {name} is already running; reusing it.", err=True)
+        _warn_on_port_drift(invoker, config, name)
         return
 
     if existing is not None:
         typer.echo(f"Starting existing sandbox {name}...", err=True)
         invoker.run(build_start_args(name))
+        _warn_on_port_drift(invoker, config, name)
     else:
         typer.echo(f"Booting sandbox {name} from {image_tag}...", err=True)
         invoker.run(
@@ -677,6 +713,7 @@ def _ensure_sandbox_running(
                 cpus=config.sandbox.cpus,
                 mounts=effective_mounts(config, workspace),
                 net=config.network.mode,
+                port_forwards=config.port_forwards,
                 env=config.env,
                 workdir=config.agent.workdir,
             )

@@ -11,7 +11,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from .config import DEFAULT_MEMORY
+from .config import DEFAULT_MEMORY, PortForward
 from .exceptions import ConfigurationError
 
 SANDBOX_COMMANDS = ("run", "create", "start", "stop", "list", "remove")
@@ -25,6 +25,7 @@ def build_run_args(
     cpus: int | None = None,
     mounts: dict[str, str] | None = None,
     net: str | None = None,
+    port_forwards: tuple[PortForward, ...] | list[PortForward] | None = None,
     env: dict[str, str] | None = None,
     workdir: str | None = None,
     detach: bool = True,
@@ -42,6 +43,7 @@ def build_run_args(
     :param mounts: Host path -> guest spec mapping (guest spec may include
         options, e.g. ``"/workspace:ro"``).
     :param net: Optional network profile (e.g. ``"public,private"``).
+    :param port_forwards: Optional guest ports to publish on the host.
     :param env: Optional sandbox-level environment variables.
     :param workdir: Optional guest working directory.
     :param detach: Whether to boot detached (default True).
@@ -54,6 +56,11 @@ def build_run_args(
         args += ["--volume", f"{host}:{guest}"]
     if net:
         args += ["--net", net]
+    for forward in port_forwards or ():
+        token = f"{forward.host}:{forward.host_port}:{forward.guest_port}"
+        if forward.protocol == "udp":
+            token += "/udp"
+        args += ["--port", token]
     for key, value in (env or {}).items():
         args += ["--env", f"{key}={value}"]
     if workdir:
@@ -76,6 +83,19 @@ def build_list_args(
     args = ["list"]
     if running_only:
         args.append("--running")
+    if json_format:
+        args += ["--format", "json"]
+    return args
+
+
+def build_inspect_args(name: str, *, json_format: bool = True) -> list[str]:
+    """Build argv for ``msb inspect``.
+
+    :param name: Sandbox name.
+    :param json_format: Request machine-readable JSON output.
+    :returns: Argv list.
+    """
+    args = ["inspect", name]
     if json_format:
         args += ["--format", "json"]
     return args
@@ -116,6 +136,82 @@ def build_remove_args(name: str, *, force: bool = False) -> list[str]:
         args.append("--force")
     args.append(name)
     return args
+
+
+def parse_inspect_ports(output: str) -> frozenset[tuple[str, int, int, str]]:
+    """Extract published ports from ``msb inspect --format json`` output.
+
+    msb reports port mappings under ``config.network.ports`` (with an
+    ``active_config`` mirror) as objects of ``host_bind``, ``host_port``,
+    ``guest_port``, and ``protocol``. Ranges given on the command line are
+    expanded to one entry per port. The parse is defensive: msb is beta
+    and its schema may change between releases.
+
+    :param output: Raw stdout of the inspect command.
+    :returns: Set of ``(host, host_port, guest_port, protocol)`` tuples;
+        an empty set when no ports are published.
+    :raises ConfigurationError: If the output is not valid JSON, has an
+        unexpected shape, or contains a malformed port entry.
+    """
+    try:
+        document = json.loads(output)
+    except json.JSONDecodeError as e:
+        raise ConfigurationError(
+            f"Could not parse msb inspect output as JSON: {e}"
+        ) from e
+    if not isinstance(document, dict):
+        raise ConfigurationError("Unexpected msb inspect output: expected an object")
+    config = document.get("config")
+    if not isinstance(config, dict):
+        config = document.get("active_config")
+    if not isinstance(config, dict):
+        raise ConfigurationError(
+            "Unexpected msb inspect output: no 'config' or 'active_config' object"
+        )
+    network = config.get("network")
+    ports = network.get("ports") if isinstance(network, dict) else None
+    if ports is None:
+        # A sandbox without published ports may omit the table entirely.
+        return frozenset()
+    if not isinstance(ports, list):
+        raise ConfigurationError("Unexpected msb inspect output: network.ports")
+    published: set[tuple[str, int, int, str]] = set()
+    for index, entry in enumerate(ports):
+        if not isinstance(entry, dict):
+            raise ConfigurationError(
+                f"Unexpected msb inspect port entry at index {index}: expected an object"
+            )
+        host = entry.get("host_bind", "127.0.0.1")
+        protocol = entry.get("protocol", "tcp")
+        host_port = entry.get("host_port")
+        guest_port = entry.get("guest_port")
+        if (
+            not isinstance(host, str)
+            or not isinstance(protocol, str)
+            or isinstance(host_port, bool)
+            or not isinstance(host_port, int)
+            or isinstance(guest_port, bool)
+            or not isinstance(guest_port, int)
+        ):
+            raise ConfigurationError(
+                f"Malformed msb inspect port entry at index {index}"
+            )
+        published.add((host, host_port, guest_port, protocol))
+    return frozenset(published)
+
+
+def configured_ports(
+    port_forwards: tuple[PortForward, ...] | list[PortForward],
+) -> frozenset[tuple[str, int, int, str]]:
+    """Normalize configured port forwards to the parsed-inspect shape.
+
+    :param port_forwards: Port forwards from :class:`msb_circus.config.MsbConfig`.
+    :returns: Set of ``(host, host_port, guest_port, protocol)`` tuples,
+        matching :func:`parse_inspect_ports`.
+    """
+    return frozenset(
+        (f.host, f.host_port, f.guest_port, f.protocol) for f in port_forwards
+    )
 
 
 @dataclass(frozen=True)

@@ -32,6 +32,12 @@ class FakeInvoker:
                 stdout="",
                 stderr="",
             )
+        if args[0] == "inspect":
+            return SimpleNamespace(
+                returncode=0,
+                stdout=self.behavior.get("inspect_json", "{}"),
+                stderr="",
+            )
         if args[0] == "list":
             return SimpleNamespace(
                 returncode=0,
@@ -112,6 +118,87 @@ def test_up_starts_stopped_sandbox(tmp_path, fake_msb):
     assert result.exit_code == 0
     assert ["start", name] in fake_msb["calls"]
     assert not [c for c in fake_msb["calls"] if c[0] == "run"]
+
+
+def test_up_publishes_configured_port_forwards(tmp_path, fake_msb):
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b"[[port_forwards]]\n"
+        b"container_port = 8000\n\n"
+        b"[[port_forwards]]\n"
+        b'guest_port = 8080\nhost_port = 18080\nhost = "0.0.0.0"\nprotocol = "udp"\n'
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    assert len(run_calls) == 1
+    args = run_calls[0]
+    assert args[args.index("--port") + 1] == "127.0.0.1:8000:8000"
+    assert args[args.index("--port", args.index("--port") + 1) + 1] == (
+        "0.0.0.0:18080:8080/udp"
+    )
+
+
+def test_up_warns_on_port_drift_for_existing_sandbox(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b"[[port_forwards]]\ncontainer_port = 8000\n"
+    )
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    # The sandbox was created with a different mapping than configured now.
+    fake_msb["inspect_json"] = json.dumps(
+        {
+            "config": {
+                "network": {
+                    "ports": [
+                        {
+                            "guest_port": 9000,
+                            "host_bind": "127.0.0.1",
+                            "host_port": 9000,
+                            "protocol": "tcp",
+                        }
+                    ]
+                }
+            }
+        }
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "port forwards" in result.output
+    assert "differ" in result.output
+    assert not [c for c in fake_msb["calls"] if c[0] == "run"]
+
+
+def test_up_does_not_warn_when_port_forwards_match(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b"[[port_forwards]]\ncontainer_port = 8000\n"
+    )
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["inspect_json"] = json.dumps(
+        {
+            "config": {
+                "network": {
+                    "ports": [
+                        {
+                            "guest_port": 8000,
+                            "host_bind": "127.0.0.1",
+                            "host_port": 8000,
+                            "protocol": "tcp",
+                        }
+                    ]
+                }
+            }
+        }
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "differ" not in result.output
 
 
 def test_up_builds_when_requested(tmp_path, fake_msb):

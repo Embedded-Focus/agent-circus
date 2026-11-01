@@ -28,7 +28,7 @@ USER_CONFIG_DIR_ENV_VAR = "XDG_CONFIG_HOME"
 
 #: Top-level config keys interpreted by msb-circus; everything else warns.
 SUPPORTED_TOP_LEVEL_KEYS: frozenset[str] = frozenset(
-    {"msb", "logging", "env_passthrough", "additional_dirs"}
+    {"msb", "logging", "env_passthrough", "additional_dirs", "port_forwards"}
 )
 
 DEFAULT_IMAGE_TAG = "docker.io/library/msb-agents:26"
@@ -36,6 +36,8 @@ DEFAULT_MEMORY = "4G"
 DEFAULT_NETWORK_MODE = "public,private"
 DEFAULT_AGENT_COMMAND: tuple[str, ...] = ("pi",)
 DEFAULT_WORKDIR = "/workspace"
+#: Default host bind address for published ports (msb's own default too).
+DEFAULT_PORT_HOST = "127.0.0.1"
 DEFAULT_SANDBOX_NAME_PREFIX = "agents"
 DEFAULT_MOUNTS: dict[str, str] = {".": "/workspace"}
 ADDITIONAL_DIRS_GUEST_BASE = "/workspaces"
@@ -85,6 +87,30 @@ class AgentConfig:
 
 
 @dataclass(frozen=True)
+class PortForward:
+    """An entry of the ``[[port_forwards]]`` array.
+
+    Publishes a guest port on the host. The field names follow
+    agent-circus (``container_port``) so the same table works in both
+    tools; ``guest_port`` is accepted as an msb-native alias. The
+    ``service`` field of agent-circus entries is accepted but ignored:
+    msb-circus runs one sandbox per workspace, so there is nothing to
+    select a service from.
+
+    :ivar guest_port: Port inside the sandbox.
+    :ivar host_port: Port on the host; defaults to ``guest_port``.
+    :ivar host: Host bind address; defaults to ``127.0.0.1`` (msb's own
+        default, keeping published ports off the network by default).
+    :ivar protocol: ``"tcp"`` or ``"udp"``.
+    """
+
+    guest_port: int
+    host_port: int
+    host: str = DEFAULT_PORT_HOST
+    protocol: str = "tcp"
+
+
+@dataclass(frozen=True)
 class AdditionalDir:
     """An entry of the ``[[additional_dirs]]`` array.
 
@@ -115,6 +141,8 @@ class MsbConfig:
         the workspace at ``/workspace`` per the documented workflow.
     :ivar additional_dirs: Extra host directories mounted under
         ``/workspaces/<name>`` (agent-circus compatible).
+    :ivar port_forwards: Guest ports published on the host
+        (``[[port_forwards]]``, agent-circus compatible).
     :ivar env: Sandbox-level environment variables (non-secret defaults).
     :ivar env_passthrough: Names of host environment variables required to
         exist on the host and be passed into the sandbox.
@@ -129,6 +157,7 @@ class MsbConfig:
     agent: AgentConfig = field(default_factory=AgentConfig)
     mounts: dict[str, str] = field(default_factory=dict)
     additional_dirs: tuple[AdditionalDir, ...] = ()
+    port_forwards: tuple[PortForward, ...] = ()
     env: dict[str, str] = field(default_factory=dict)
     env_passthrough: tuple[str, ...] = ()
     logging_level: str = "INFO"
@@ -388,6 +417,70 @@ def _parse_network(raw: Any) -> NetworkConfig:
     return NetworkConfig(mode=mode)
 
 
+def _validate_port(value: Any, label: str) -> int:
+    """Validate a port number.
+
+    :param value: Raw value from the configuration.
+    :param label: Field name used in the error message.
+    :returns: The validated port number.
+    :raises ConfigurationError: If the value is not an integer in
+        ``1..65535``.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConfigurationError(f"{label} must be an integer")
+    if not 1 <= value <= 65535:
+        raise ConfigurationError(f"{label} must be in range 1..65535")
+    return value
+
+
+def _parse_port_forwards(raw: Any) -> tuple[PortForward, ...]:
+    """Parse the ``[[port_forwards]]`` array.
+
+    Accepts agent-circus entries (``container_port`` plus an ignored
+    ``service``) and msb-native entries (``guest_port``). ``host``,
+    ``host_port``, and ``protocol`` are optional.
+
+    :param raw: Raw array value or ``None``.
+    :returns: Tuple of validated port forwards.
+    :raises ConfigurationError: If an entry is malformed.
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ConfigurationError("port_forwards must be a list of tables")
+    forwards: list[PortForward] = []
+    for index, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            raise ConfigurationError(f"port_forwards[{index}] must be a table")
+        guest_port = entry.get("guest_port", entry.get("container_port"))
+        if guest_port is None:
+            raise ConfigurationError(
+                f"port_forwards[{index}] needs a guest_port (or container_port)"
+            )
+        guest_port = _validate_port(guest_port, f"port_forwards[{index}] guest_port")
+        host_port = entry.get("host_port", guest_port)
+        host_port = _validate_port(host_port, f"port_forwards[{index}] host_port")
+        host = entry.get("host", DEFAULT_PORT_HOST)
+        if not isinstance(host, str) or not host:
+            raise ConfigurationError(
+                f"port_forwards[{index}] host must be a non-empty string"
+            )
+        protocol = entry.get("protocol", "tcp")
+        if protocol not in ("tcp", "udp"):
+            raise ConfigurationError(
+                f"port_forwards[{index}] protocol must be 'tcp' or 'udp'"
+            )
+        forwards.append(
+            PortForward(
+                guest_port=guest_port,
+                host_port=host_port,
+                host=host,
+                protocol=protocol,
+            )
+        )
+    return tuple(forwards)
+
+
 def _parse_agent(raw: Any) -> AgentConfig:
     """Parse the ``[msb.agent]`` table.
 
@@ -496,6 +589,7 @@ def parse_config(config: dict[str, Any]) -> MsbConfig:
             _parse_string_dict(msb_raw.get("mounts"), "msb.mounts") or DEFAULT_MOUNTS
         ),
         additional_dirs=_parse_additional_dirs(config.get("additional_dirs")),
+        port_forwards=_parse_port_forwards(config.get("port_forwards")),
         env=_parse_string_dict(msb_raw.get("env"), "msb.env"),
         env_passthrough=_parse_env_passthrough(config.get("env_passthrough")),
         logging_level=level,

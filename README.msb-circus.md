@@ -272,9 +272,9 @@ layering as agent-circus: a user-global file from
 project file wins.
 
 msb-circus applies its own `[msb]` table, plus the `logging`,
-`env_passthrough`, and `additional_dirs` keys of agent-circus. Every other
-key produces a warning. agent-circus in turn logs a warning for the unknown
-`[msb]` table and continues.
+`env_passthrough`, `additional_dirs`, and `port_forwards` keys of
+agent-circus. Every other key produces a warning. agent-circus in turn logs
+a warning for the unknown `[msb]` table and continues.
 
 The `[[additional_dirs]]` array mounts extra host directories into the
 sandbox under `/workspaces/<name>`, next to the project at `/workspace`.
@@ -313,6 +313,12 @@ memory = "4G"
 [msb.network]
 mode = "public,private"                # default; unrestricted network access
 
+[[port_forwards]]                       # publish a guest port on the host
+guest_port = 8000                       # or container_port (agent-circus style)
+# host_port = 8000                      # default: guest_port
+# host = "127.0.0.1"                    # default: loopback only
+# protocol = "tcp"                      # or "udp"
+
 [msb.agent]
 command = ["pi"]                       # default exec target
 workdir = "/workspace"
@@ -344,6 +350,56 @@ msb-circus does not yet translate a network policy into msb network rules.
 Until that feature exists, treat the default as an open profile and keep
 sensitive host services outside the reach of the sandbox.
 
+### Port Forwarding
+
+Use the `[[port_forwards]]` array to publish a guest port on the host, for
+example to reach a dev server, a debugger, or an MCP server that the agent
+starts inside the sandbox:
+
+``` toml
+[[port_forwards]]
+container_port = 3333
+# host_port = 3333      # default: container_port
+# host = "127.0.0.1"    # default: loopback only
+# protocol = "tcp"      # or "udp"
+```
+
+The fields match [agent-circus](README.md), so the same table works in both
+tools. The `service` field of agent-circus entries is accepted but ignored:
+msb-circus runs one sandbox per workspace, so there is nothing to select a
+service from. `guest_port` is accepted as an alias for `container_port`.
+
+Forwarded ports bind to `127.0.0.1` on the host by default — the same
+default msb itself uses. Set `host = "0.0.0.0"` only when the service should
+be reachable from other machines on your network. The process inside the
+sandbox must bind to `0.0.0.0` or the guest network interface; a server
+bound to `127.0.0.1` inside the guest is not reachable through the forward.
+Servers differ in how they opt in, for example:
+
+``` shell
+opencode serve --hostname 0.0.0.0 --port 4096
+```
+
+Port mappings are fixed when the sandbox is created. `msb start` and `msb
+modify` cannot change them. When `up` reuses an existing sandbox whose
+mappings differ from the configuration, msb-circus prints a warning. Remove
+and re-create the sandbox to apply the new ports:
+
+``` shell
+msb-circus rm -f
+msb-circus up
+```
+
+If a forwarded port does not answer from the host with `Empty reply from
+server` (or hangs), the service inside the sandbox most likely bound to the
+guest loopback interface (`127.0.0.1`) instead of all interfaces. The
+forward targets the guest network interface, so it cannot reach a
+loopback-bound server. Restart the service bound to `0.0.0.0` in the guest,
+for example `opencode serve --hostname 0.0.0.0 --port <port>`. If that does
+not help, check whether another process on the host holds the port; msb
+does not reliably fail at boot when the host port is already taken, so
+msb-circus does not check for conflicts either.
+
 ## Troubleshooting
 
 If the sandbox boots but the Docker engine stays unreachable, read the guest
@@ -366,6 +422,10 @@ chmod g-w,o-w ~/.microsandbox
 If `up` or `start` reports that dockerd did not become ready, the warning
 names the probe error and the diagnostic commands. Run the commands from the
 warning and compare their output with the guest log above.
+
+If a forwarded port answers with `Empty reply from server`, see the
+Port Forwarding section under Networking: the server inside the sandbox is
+bound to `127.0.0.1` in the guest and must be restarted on `0.0.0.0`.
 
 If a mounted directory is empty inside the sandbox, make sure that the host
 path in the configuration contains files. msb-circus fails the boot when a
