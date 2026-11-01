@@ -174,6 +174,14 @@ msb-circus exec -- opencode
 mounted at the same absolute path as on the host, so file paths agree
 between your editor and the agent.
 
+msb-circus pre-trusts the agent workdir (`[msb.agent] workdir`) and every
+`additional_dirs` mount for pi and pi-acp: after each boot or start it
+writes `~/.pi/agent/trust.json` in the guest, so the first harness start in
+a new sandbox does not ask to trust the directory. The write is idempotent
+and **overwrites** an existing trust file — add your own entries through
+the configuration, not by editing the file in the guest. If the write
+fails, msb-circus warns and pi simply asks on first start, as before.
+
 ### ACP Sessions
 
 For an ACP session from an editor or IDE, add `--acp`:

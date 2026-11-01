@@ -2,14 +2,47 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import threading
+from collections.abc import Sequence
 
 ACP_FLAGS: tuple[str, ...] = ("--stream", "--quiet")
 INTERACTIVE_FLAGS: tuple[str, ...] = ("--tty",)
 
 _COPY_CHUNK = 65536
+
+#: Heredoc delimiter for the pi trust-file script; JSON payloads are single-
+#: line, so a delimiter collision is impossible.
+_TRUST_HEREDOC_DELIMITER = "MSB_CIRCUS_EOF"
+
+
+def build_write_trust_args(name: str, dirs: Sequence[str]) -> list[str]:
+    """Build argv for an idempotent ``msb exec`` writing the pi trust file.
+
+    The generated script writes ``$HOME/.pi/agent/trust.json`` containing
+    ``{"<dir>": true}`` for every directory in *dirs*, overwriting any
+    existing file. The JSON payload is built with :func:`json.dumps` and
+    embedded via a quoted heredoc, so paths with quotes, spaces, or shell
+    metacharacters arrive intact.
+
+    :param name: Sandbox name.
+    :param dirs: Guest directories to trust (non-empty).
+    :returns: Argv list for :class:`msb_circus.msb.MsbInvoker`.
+    :raises ValueError: If *dirs* is empty.
+    """
+    if not dirs:
+        raise ValueError("at least one directory is required")
+    payload = json.dumps(dict.fromkeys(dirs, True))
+    script = (
+        'mkdir -p "$HOME/.pi/agent" && '
+        'cat > "$HOME/.pi/agent/trust.json" '
+        f"<<'{_TRUST_HEREDOC_DELIMITER}'\n"
+        f"{payload}\n"
+        f"{_TRUST_HEREDOC_DELIMITER}"
+    )
+    return build_exec_args(name, ["sh", "-c", script], tty=None)
 
 
 def build_exec_args(

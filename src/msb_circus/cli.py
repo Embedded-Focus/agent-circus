@@ -15,6 +15,7 @@ import typer
 
 from . import __version__
 from .config import (
+    ADDITIONAL_DIRS_GUEST_BASE,
     MsbConfig,
     effective_mounts,
     load_config,
@@ -22,7 +23,7 @@ from .config import (
 )
 from .envs import parse_env_assignments, resolve_passthrough
 from .exceptions import ConfigurationError, MsbCircusError, MsbCommandError
-from .exec_ import build_exec_args, run_acp_stream
+from .exec_ import build_exec_args, build_write_trust_args, run_acp_stream
 from .images import (
     build_image_inspect_args,
     build_load_args,
@@ -630,6 +631,52 @@ def _warn_on_port_drift(invoker: MsbInvoker, config: MsbConfig, name: str) -> No
     )
 
 
+def _pi_trust_dirs(config: MsbConfig) -> list[str]:
+    """Return the guest directories to pre-trust for pi and pi-acp.
+
+    The exec workdir plus every ``additional_dirs`` guest target, in first-
+    occurrence order and without duplicates.
+
+    :param config: Resolved msb-circus configuration.
+    :returns: Guest directory paths.
+    """
+    dirs = [config.agent.workdir]
+    dirs += [
+        f"{ADDITIONAL_DIRS_GUEST_BASE}/{entry.name}" for entry in config.additional_dirs
+    ]
+    return list(dict.fromkeys(dirs))
+
+
+def _ensure_pi_trust(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
+    """Pre-trust the mounted work directories for pi and pi-acp.
+
+    Writes ``$HOME/.pi/agent/trust.json`` in the guest so the first harness
+    start in a fresh sandbox does not prompt for directory trust. The write
+    is idempotent and overwrites an existing trust file. Failures are
+    non-fatal: pi then simply asks on first start, as before.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param config: Resolved msb-circus configuration.
+    :param name: Sandbox name.
+    """
+    try:
+        result = invoker.run(
+            build_write_trust_args(name, _pi_trust_dirs(config)), check=False
+        )
+    except MsbCommandError as e:
+        result = None
+        detail = str(e)
+    if result is not None and result.returncode == 0:
+        return
+    if result is not None:
+        detail = (result.stderr or result.stdout or "").strip()
+    typer.echo(
+        f"Warning: could not pre-trust the work directories for pi in "
+        f"{name}; pi may ask to trust the directory on first start ({detail})",
+        err=True,
+    )
+
+
 def _ensure_sandbox_running(
     invoker: MsbInvoker,
     config: MsbConfig,
@@ -696,12 +743,14 @@ def _ensure_sandbox_running(
     existing = {s.name: s for s in sandboxes}.get(name)
     if existing is not None and (existing.status or "").lower() == "running":
         typer.echo(f"Sandbox {name} is already running; reusing it.", err=True)
+        _ensure_pi_trust(invoker, config, name)
         _warn_on_port_drift(invoker, config, name)
         return
 
     if existing is not None:
         typer.echo(f"Starting existing sandbox {name}...", err=True)
         invoker.run(build_start_args(name))
+        _ensure_pi_trust(invoker, config, name)
         _warn_on_port_drift(invoker, config, name)
     else:
         typer.echo(f"Booting sandbox {name} from {image_tag}...", err=True)
@@ -718,6 +767,7 @@ def _ensure_sandbox_running(
                 workdir=config.agent.workdir,
             )
         )
+        _ensure_pi_trust(invoker, config, name)
 
     ready, last_error = _probe_dockerd(invoker, name)
     if ready:

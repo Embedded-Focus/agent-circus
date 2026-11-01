@@ -51,6 +51,10 @@ class FakeInvoker:
                     returncode=1, stdout="", stderr="permission denied"
                 )
             return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if args[0] == "exec" and "trust.json" in args[-1]:
+            if self.behavior.get("trust_fail"):
+                return SimpleNamespace(returncode=1, stdout="", stderr="denied")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
         if args[0] == "load" and self.behavior.get("load_fail"):
             raise MsbCommandError("msb load failed", returncode=1)
         return SimpleNamespace(returncode=0, stdout="[]", stderr="")
@@ -318,3 +322,38 @@ def test_destroy_force_skips_prompt(tmp_path, fake_msb):
     result = runner.invoke(app, ["destroy", "-f", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
     assert ["remove", "--force", name] in fake_msb["calls"]
+
+
+def test_up_writes_pi_trust_for_workdir_and_additional_dirs(tmp_path, fake_msb):
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (tmp_path / "shared-libs").mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b"[[additional_dirs]]\n"
+        b'path = "' + str(tmp_path / "shared-libs").encode() + b'"\n'
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    trust_calls = [
+        c for c in fake_msb["calls"] if c[0] == "exec" and "trust.json" in c[-1]
+    ]
+    assert len(trust_calls) == 1
+    script = trust_calls[0][-1]
+    assert '{"/workspace": true, "/workspaces/shared-libs": true}' in script
+
+
+def test_up_writes_pi_trust_when_reusing_running_sandbox(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert [c for c in fake_msb["calls"] if c[0] == "exec" and "trust.json" in c[-1]]
+
+
+def test_up_survives_pi_trust_write_failure(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["trust_fail"] = True
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "pre-trust" in result.output

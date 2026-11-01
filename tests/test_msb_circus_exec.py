@@ -231,3 +231,43 @@ def test_exec_boots_sandbox_when_not_running(tmp_path, fake_msb):
     run_calls = [c for c in FakeInvoker.behavior["calls"] if c[0] == "run"]
     assert len(run_calls) == 1
     assert run_calls[0][run_calls[0].index("--name") + 1] == name
+
+
+def test_build_write_trust_args_single_dir():
+    from msb_circus.exec_ import build_write_trust_args
+
+    args = build_write_trust_args("agents-proj", ["/workspace"])
+    assert args[:3] == ["exec", "agents-proj", "--"]
+    assert args[3:5] == ["sh", "-c"]
+    script = args[5]
+    assert 'mkdir -p "$HOME/.pi/agent"' in script
+    assert 'cat > "$HOME/.pi/agent/trust.json"' in script
+    assert "<<'MSB_CIRCUS_EOF'" in script
+    assert '{"/workspace": true}' in script
+
+
+def test_build_write_trust_args_multiple_dirs_deduplicated():
+    from msb_circus.exec_ import build_write_trust_args
+
+    args = build_write_trust_args(
+        "agents-proj", ["/workspace", "/workspaces/other", "/workspace"]
+    )
+    script = args[-1]
+    assert '{"/workspace": true, "/workspaces/other": true}' in script
+
+
+def test_build_write_trust_args_escapes_shell_metacharacters():
+    from msb_circus.exec_ import build_write_trust_args
+
+    args = build_write_trust_args("agents-proj", ["/tmp/a'b\"c $HOME dir"])
+    script = args[-1]
+    # The payload is embedded verbatim inside a quoted heredoc, so shell
+    # metacharacters in the path need no escaping.
+    assert '{"/tmp/a\'b\\"c $HOME dir": true}' in script
+
+
+def test_build_write_trust_args_rejects_empty_dirs():
+    from msb_circus.exec_ import build_write_trust_args
+
+    with pytest.raises(ValueError, match="at least one directory"):
+        build_write_trust_args("agents-proj", [])
