@@ -29,4 +29,8 @@ override-dependencies = [
     "certifi>=2026.10.19",
     # GHSA-xcq7-p3pf-p88h; pinned by mistral-vibe
     "opentelemetry-api>=1.45.1",
+    # GHSA-9m75-vc3g-4x39, GHSA-mm57-4v3p-rchx, GHSA-fm9c-5rcf-2q5p,
+    # GHSA-2qm8-x737-gmw5 (CVE-2026-119194..119197); mistral-vibe pins
+    # pyasn1==0.6.4
+    "pyasn1>=0.6.5",
 ]
