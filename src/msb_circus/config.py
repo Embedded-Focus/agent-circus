@@ -28,7 +28,7 @@ USER_CONFIG_DIR_ENV_VAR = "XDG_CONFIG_HOME"
 
 #: Top-level config keys interpreted by msb-circus; everything else warns.
 SUPPORTED_TOP_LEVEL_KEYS: frozenset[str] = frozenset(
-    {"msb", "logging", "env_passthrough"}
+    {"msb", "logging", "env_passthrough", "additional_dirs"}
 )
 
 DEFAULT_IMAGE_TAG = "docker.io/library/msb-agents:26"
@@ -38,6 +38,7 @@ DEFAULT_AGENT_COMMAND: tuple[str, ...] = ("pi",)
 DEFAULT_WORKDIR = "/workspace"
 DEFAULT_SANDBOX_NAME_PREFIX = "agents"
 DEFAULT_MOUNTS: dict[str, str] = {".": "/workspace"}
+ADDITIONAL_DIRS_GUEST_BASE = "/workspaces"
 
 
 @dataclass(frozen=True)
@@ -84,6 +85,23 @@ class AgentConfig:
 
 
 @dataclass(frozen=True)
+class AdditionalDir:
+    """An entry of the ``[[additional_dirs]]`` array.
+
+    Mirrors the agent-circus semantics: an extra host directory mounted
+    into the guest under ``/workspaces/<name>``.
+
+    :ivar path: Absolute path on the host.
+    :ivar name: Guest mount name (``/workspaces/<name>``).
+    :ivar readonly: Mount read-only when ``True``.
+    """
+
+    path: str
+    name: str
+    readonly: bool = False
+
+
+@dataclass(frozen=True)
 class MsbConfig:
     """Resolved msb-circus configuration.
 
@@ -95,6 +113,8 @@ class MsbConfig:
     :ivar mounts: Host path -> guest path mapping (options may be appended
         to the guest path, e.g. ``"/workspace:ro"``). Defaults to mounting
         the workspace at ``/workspace`` per the documented workflow.
+    :ivar additional_dirs: Extra host directories mounted under
+        ``/workspaces/<name>`` (agent-circus compatible).
     :ivar env: Sandbox-level environment variables (non-secret defaults).
     :ivar env_passthrough: Names of host environment variables required to
         exist on the host and be passed into the sandbox.
@@ -108,6 +128,7 @@ class MsbConfig:
     network: NetworkConfig = field(default_factory=NetworkConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     mounts: dict[str, str] = field(default_factory=dict)
+    additional_dirs: tuple[AdditionalDir, ...] = ()
     env: dict[str, str] = field(default_factory=dict)
     env_passthrough: tuple[str, ...] = ()
     logging_level: str = "INFO"
@@ -208,6 +229,88 @@ def resolve_mounts(mounts: dict[str, str], workspace: Path) -> dict[str, str]:
     for host, guest in mounts.items():
         resolved[str(workspace) if host == "." else host] = guest
     return resolved
+
+
+def _parse_additional_dirs(raw: Any) -> tuple[AdditionalDir, ...]:
+    """Parse the ``[[additional_dirs]]`` array.
+
+    Mirrors the agent-circus fields: ``path`` (required, absolute),
+    ``readonly`` (default ``False``), and ``name`` (default: the basename
+    of *path*). Names and paths must be unique across entries.
+
+    :param raw: Raw value or ``None``.
+    :returns: Tuple of parsed entries.
+    :raises ConfigurationError: If the value is malformed or ambiguous.
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ConfigurationError(
+            "additional_dirs must be an array of tables ([[additional_dirs]])"
+        )
+    dirs: list[AdditionalDir] = []
+    names: set[str] = set()
+    paths: set[str] = set()
+    for index, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            raise ConfigurationError(f"additional_dirs[{index}] must be a table")
+        path = entry.get("path")
+        if not isinstance(path, str) or not path:
+            raise ConfigurationError(
+                f"additional_dirs[{index}].path must be a non-empty string"
+            )
+        if not os.path.isabs(path):
+            raise ConfigurationError(
+                f"additional_dirs[{index}].path must be an absolute path"
+            )
+        readonly = entry.get("readonly", False)
+        if not isinstance(readonly, bool):
+            raise ConfigurationError(
+                f"additional_dirs[{index}].readonly must be a boolean"
+            )
+        name = entry.get("name", os.path.basename(os.path.normpath(path)))
+        if not isinstance(name, str) or not name:
+            raise ConfigurationError(
+                f"additional_dirs[{index}].name must be a non-empty string"
+            )
+        if name in names:
+            raise ConfigurationError(
+                f"additional_dirs[{index}].name {name!r} duplicates an earlier entry"
+            )
+        if path in paths:
+            raise ConfigurationError(
+                f"additional_dirs[{index}].path {path!r} duplicates an earlier entry"
+            )
+        names.add(name)
+        paths.add(path)
+        dirs.append(AdditionalDir(path=path, name=name, readonly=readonly))
+    return tuple(dirs)
+
+
+def effective_mounts(config: MsbConfig, workspace: Path) -> dict[str, str]:
+    """Combine ``[msb.mounts]`` and ``additional_dirs`` into msb volumes.
+
+    Resolves the ``.`` workspace mount to the absolute workspace path and
+    appends every additional directory as ``/workspaces/<name>``,
+    read-only when the entry says so.
+
+    :param config: Resolved msb-circus configuration.
+    :param workspace: Workspace directory.
+    :returns: Host path -> guest mount specification mapping.
+    :raises ConfigurationError: If a guest target collides with another.
+    """
+    mounts = resolve_mounts(config.mounts, workspace)
+    taken = {guest.split(":", 1)[0] for guest in mounts.values()}
+    for entry in config.additional_dirs:
+        guest = f"{ADDITIONAL_DIRS_GUEST_BASE}/{entry.name}"
+        if guest in taken:
+            raise ConfigurationError(
+                f"additional_dirs entry {entry.name!r} conflicts with the "
+                f"existing mount target {guest}"
+            )
+        taken.add(guest)
+        mounts[entry.path] = f"{guest}:ro" if entry.readonly else guest
+    return mounts
 
 
 def sandbox_name_for_workspace(workspace: Path) -> str:
@@ -392,6 +495,7 @@ def parse_config(config: dict[str, Any]) -> MsbConfig:
         mounts=(
             _parse_string_dict(msb_raw.get("mounts"), "msb.mounts") or DEFAULT_MOUNTS
         ),
+        additional_dirs=_parse_additional_dirs(config.get("additional_dirs")),
         env=_parse_string_dict(msb_raw.get("env"), "msb.env"),
         env_passthrough=_parse_env_passthrough(config.get("env_passthrough")),
         logging_level=level,

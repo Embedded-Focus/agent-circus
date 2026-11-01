@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from msb_circus.config import (
+    effective_mounts,
     get_user_config_path,
     load_config,
     parse_config,
@@ -139,3 +140,89 @@ def test_sandbox_name_for_workspace(tmp_path):
 def test_sandbox_name_for_workspace_rejects_empty_project(tmp_path):
     with pytest.raises(ConfigurationError, match="Cannot derive a sandbox name"):
         sandbox_name_for_workspace(tmp_path / "...")
+
+
+def test_parse_additional_dirs_with_defaults_and_explicit_fields():
+    config = parse_config(
+        {
+            "additional_dirs": [
+                {"path": "/home/user/shared-libs", "readonly": True},
+                {"path": "/home/user/other-project", "name": "other"},
+            ]
+        }
+    )
+    assert config.additional_dirs[0].path == "/home/user/shared-libs"
+    assert config.additional_dirs[0].name == "shared-libs"  # basename default
+    assert config.additional_dirs[0].readonly is True
+    assert config.additional_dirs[1].name == "other"
+    assert config.additional_dirs[1].readonly is False
+
+
+def test_additional_dirs_is_supported_and_does_not_warn(caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        parse_config({"additional_dirs": [{"path": "/data"}]})
+    assert not [r for r in caplog.records if "additional_dirs" in r.getMessage()]
+
+
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        ({"additional_dirs": "nope"}, "must be an array of tables"),
+        ({"additional_dirs": [{}]}, "path must be a non-empty string"),
+        ({"additional_dirs": [{"path": "relative/dir"}]}, "absolute path"),
+        ({"additional_dirs": [{"path": "/d", "readonly": "yes"}]}, "boolean"),
+        (
+            {"additional_dirs": [{"path": "/d", "name": ""}]},
+            "name must be a non-empty string",
+        ),
+        (
+            {
+                "additional_dirs": [
+                    {"path": "/a", "name": "x"},
+                    {"path": "/b", "name": "x"},
+                ]
+            },
+            "duplicates an earlier entry",
+        ),
+        (
+            {
+                "additional_dirs": [
+                    {"path": "/a"},
+                    {"path": "/a"},
+                ]
+            },
+            "duplicates an earlier entry",
+        ),
+    ],
+)
+def test_parse_additional_dirs_rejects_malformed_entries(raw, message):
+    with pytest.raises(ConfigurationError, match=message):
+        parse_config(raw)
+
+
+def test_effective_mounts_appends_additional_dirs(tmp_path):
+    config = parse_config(
+        {
+            "additional_dirs": [
+                {"path": "/home/user/shared-libs", "readonly": True},
+                {"path": "/home/user/other-project", "name": "other"},
+            ]
+        }
+    )
+    mounts = effective_mounts(config, tmp_path)
+    assert mounts[str(tmp_path)] == "/workspace"
+    assert mounts["/home/user/shared-libs"] == "/workspaces/shared-libs:ro"
+    assert mounts["/home/user/other-project"] == "/workspaces/other"
+
+
+def test_effective_mounts_rejects_guest_target_collision(tmp_path):
+    config = parse_config(
+        {
+            "msb": {"mounts": {"/srv/data": "/workspaces/shared-libs"}},
+            "additional_dirs": [{"path": "/home/user/shared-libs"}],
+        }
+    )
+    with pytest.raises(ConfigurationError, match="conflicts with the existing mount"):
+        effective_mounts(config, tmp_path)

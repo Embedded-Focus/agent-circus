@@ -124,6 +124,36 @@ def test_up_builds_when_requested(tmp_path, fake_msb):
     assert [c[0] for c in fake_msb["calls"] if c[0] == "run"] == ["run"]
 
 
+def test_up_mounts_additional_dirs(tmp_path, fake_msb):
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b'[[additional_dirs]]\npath = "/home/user/shared-libs"\n'
+        b"readonly = true\n\n[[additional_dirs]]\n"
+        b'path = "/home/user/other-project"\nname = "other"\n'
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_call = next(c for c in fake_msb["calls"] if c[0] == "run")
+    volumes = [run_call[i + 1] for i, a in enumerate(run_call) if a == "--volume"]
+    assert f"{tmp_path}:/workspace" in volumes
+    assert "/home/user/shared-libs:/workspaces/shared-libs:ro" in volumes
+    assert "/home/user/other-project:/workspaces/other" in volumes
+
+
+def test_up_reports_mount_collision_as_clean_error(tmp_path, fake_msb):
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b'[msb.mounts]\n"/srv/data" = "/workspaces/shared-libs"\n'
+        b'[[additional_dirs]]\npath = "/home/user/shared-libs"\n'
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "conflicts with the existing mount" in result.output
+    assert not [c for c in FakeInvoker.behavior.get("calls", []) if c[0] == "run"]
+
+
 def test_up_warns_when_dockerd_never_becomes_ready(tmp_path, fake_msb):
     fake_msb["dockerd_ready"] = False
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])

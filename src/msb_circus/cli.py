@@ -16,8 +16,8 @@ import typer
 from . import __version__
 from .config import (
     MsbConfig,
+    effective_mounts,
     load_config,
-    resolve_mounts,
     sandbox_name_for_workspace,
 )
 from .envs import parse_env_assignments, resolve_passthrough
@@ -619,6 +619,11 @@ def _ensure_sandbox_running(
     """
     name = sandbox_name_for_workspace(workspace)
     image_tag = config.image.tag
+    try:
+        effective_mounts(config, workspace)
+    except ConfigurationError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
 
     probe = invoker.run(build_image_inspect_args(image_tag), check=False)
     if probe.returncode != 0:
@@ -656,7 +661,7 @@ def _ensure_sandbox_running(
                 image=image_tag,
                 memory=config.sandbox.memory,
                 cpus=config.sandbox.cpus,
-                mounts=resolve_mounts(config.mounts, workspace),
+                mounts=effective_mounts(config, workspace),
                 net=config.network.mode,
                 env=config.env,
                 workdir=config.agent.workdir,

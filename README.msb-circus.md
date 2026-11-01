@@ -271,10 +271,26 @@ layering as agent-circus: a user-global file from
 `$XDG_CONFIG_HOME/agent-circus/config.toml`, then the project file. The
 project file wins.
 
-msb-circus applies its own `[msb]` table, plus the `logging` and
-`env_passthrough` keys of agent-circus. Every other key produces a warning.
-agent-circus in turn logs a warning for the unknown `[msb]` table and
-continues.
+msb-circus applies its own `[msb]` table, plus the `logging`,
+`env_passthrough`, and `additional_dirs` keys of agent-circus. Every other
+key produces a warning. agent-circus in turn logs a warning for the unknown
+`[msb]` table and continues.
+
+The `[[additional_dirs]]` array mounts extra host directories into the
+sandbox under `/workspaces/<name>`, next to the project at `/workspace`.
+The fields match agent-circus: `path` is required, `readonly` defaults to
+false, and `name` defaults to the basename of `path`.
+
+``` toml
+[[additional_dirs]]
+path = "/home/user/shared-libs"
+readonly = true
+
+[[additional_dirs]]
+path = "/home/user/other-project"
+# name defaults to the basename of path
+name = "other-project"
+```
 
 ``` toml
 env_passthrough = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
@@ -350,6 +366,11 @@ chmod g-w,o-w ~/.microsandbox
 If `up` or `start` reports that dockerd did not become ready, the warning
 names the probe error and the diagnostic commands. Run the commands from the
 warning and compare their output with the guest log above.
+
+If a mounted directory is empty inside the sandbox, make sure that the host
+path in the configuration exists and contains files. msb-circus does not
+check host paths against the filesystem before the boot, and an empty or
+missing source directory produces an empty guest directory.
 
 ## Limitations
 
