@@ -368,9 +368,9 @@ names the probe error and the diagnostic commands. Run the commands from the
 warning and compare their output with the guest log above.
 
 If a mounted directory is empty inside the sandbox, make sure that the host
-path in the configuration exists and contains files. msb-circus does not
-check host paths against the filesystem before the boot, and an empty or
-missing source directory produces an empty guest directory.
+path in the configuration contains files. msb-circus fails the boot when a
+host path does not exist or is not a directory, but it cannot see inside
+the directory, so an empty source produces an empty guest directory.
 
 ## Limitations
 

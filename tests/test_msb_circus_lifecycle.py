@@ -127,18 +127,45 @@ def test_up_builds_when_requested(tmp_path, fake_msb):
 def test_up_mounts_additional_dirs(tmp_path, fake_msb):
     config_dir = tmp_path / ".agent-circus"
     config_dir.mkdir()
+    (tmp_path / "shared-libs").mkdir()
+    (tmp_path / "other-project").mkdir()
     (config_dir / "config.toml").write_bytes(
-        b'[[additional_dirs]]\npath = "/home/user/shared-libs"\n'
-        b"readonly = true\n\n[[additional_dirs]]\n"
-        b'path = "/home/user/other-project"\nname = "other"\n'
+        b"[[additional_dirs]]\n"
+        b'path = "'
+        + str(tmp_path / "shared-libs").encode()
+        + b'"\nreadonly = true\n\n[[additional_dirs]]\n'
+        b'path = "' + str(tmp_path / "other-project").encode() + b'"\nname = "other"\n'
     )
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
     run_call = next(c for c in fake_msb["calls"] if c[0] == "run")
-    volumes = [run_call[i + 1] for i, a in enumerate(run_call) if a == "--volume"]
-    assert f"{tmp_path}:/workspace" in volumes
-    assert "/home/user/shared-libs:/workspaces/shared-libs:ro" in volumes
-    assert "/home/user/other-project:/workspaces/other" in volumes
+    mount_dirs = [run_call[i + 1] for i, a in enumerate(run_call) if a == "--volume"]
+    assert f"{tmp_path / 'shared-libs'}:/workspaces/shared-libs:ro" in mount_dirs
+    assert f"{tmp_path / 'other-project'}:/workspaces/other" in mount_dirs
+
+
+def test_up_fails_when_additional_dir_does_not_exist(tmp_path, fake_msb):
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b'[[additional_dirs]]\npath = "' + str(tmp_path / "missing").encode() + b'"\n'
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "does not exist on the host" in result.output
+    assert not [c for c in FakeInvoker.behavior.get("calls", []) if c[0] == "run"]
+
+
+def test_up_fails_when_additional_dir_is_a_file(tmp_path, fake_msb):
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (tmp_path / "afile").write_text("x")
+    (config_dir / "config.toml").write_bytes(
+        b'[[additional_dirs]]\npath = "' + str(tmp_path / "afile").encode() + b'"\n'
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "exists but is not a directory" in result.output
 
 
 def test_up_reports_mount_collision_as_clean_error(tmp_path, fake_msb):

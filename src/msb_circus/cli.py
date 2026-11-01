@@ -625,6 +625,20 @@ def _ensure_sandbox_running(
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
 
+    for entry in config.additional_dirs:
+        if os.path.isdir(entry.path):
+            continue
+        if os.path.exists(entry.path):
+            detail = "exists but is not a directory"
+        else:
+            detail = "does not exist on the host"
+        typer.echo(
+            f"Error: additional_dirs entry {entry.name!r}: host path "
+            f"{entry.path!r} {detail}.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
     probe = invoker.run(build_image_inspect_args(image_tag), check=False)
     if probe.returncode != 0:
         if not allow_build:
