@@ -29,7 +29,14 @@ COPY --from=docker.io/library/docker:27.5.1-dind@sha256:aa3df78ecf320f5fafdce71c
 # the only apt layer (apt has no digest pinning); everything else is
 # hash-referenced.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates iptables pigz xz-utils uidmap \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+        iptables \
+        jq \
+        pigz \
+        uidmap \
+        xz-utils \
     && rm -rf /var/lib/apt/lists/* \
     && rm -f /usr/local/bin/dind /usr/local/bin/dockerd-entrypoint.sh
 
