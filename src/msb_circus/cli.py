@@ -45,6 +45,7 @@ from .sandbox import (
     parse_inspect_ports,
     parse_sandbox_list_output,
 )
+from .utils import setup_logging
 
 app = typer.Typer(
     name="msb-circus",
@@ -70,11 +71,30 @@ def main(
             help="Set the log level (DEBUG, INFO, WARNING, ERROR, CRITICAL).",
         ),
     ] = None,
+    log_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--log-file",
+            envvar="LOGFILE",
+            help="Path to a log file. Logs are written to both stderr and this file.",
+        ),
+    ] = None,
 ) -> None:
     """Manage AI coding-agent sandboxes with Microsandbox."""
-    logging.basicConfig(
-        level=log_level or "INFO", format="%(levelname)s %(name)s: %(message)s"
-    )
+    # The workspace option is per-command, so fall back to the current
+    # directory for the [logging] defaults. A malformed config must not
+    # break unrelated commands; the invoked command surfaces the error.
+    if log_level is None or log_file is None:
+        try:
+            config = load_config(Path("."))
+        except MsbCircusError:
+            config = None
+        if config is not None:
+            log_level = log_level or config.logging_level
+            log_file = log_file or (
+                Path(config.logging_file) if config.logging_file else None
+            )
+    setup_logging(level=log_level or "INFO", log_file=log_file)
 
 
 @app.command()

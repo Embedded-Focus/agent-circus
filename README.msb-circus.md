@@ -284,6 +284,19 @@ msb-circus applies its own `[msb]` table, plus the `logging`,
 agent-circus. Every other key produces a warning. agent-circus in turn logs
 a warning for the unknown `[msb]` table and continues.
 
+msb-circus logs to stderr. Set the level and an optional log file either on
+the command line or in the config; the command line wins.
+
+``` shell
+msb-circus --log-level DEBUG --log-file /tmp/msb-circus.log exec --acp --
+```
+
+``` toml
+[logging]
+level = "DEBUG"
+file = "/tmp/msb-circus.log"
+```
+
 The `[[additional_dirs]]` array mounts extra host directories into the
 sandbox under `/workspaces/<name>`, next to the project at `/workspace`.
 The fields match agent-circus: `path` is required, `readonly` defaults to
