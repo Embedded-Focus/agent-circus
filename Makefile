@@ -30,10 +30,10 @@ audit: ## Audit locked Python dependencies
 pre-commit: ## Run pre-commit hooks on all tracked files
 	uv run pre-commit run --all-files
 
-update-templates-dryrun: ## Print current vs. latest pinned versions in the agent-circus template
+update-templates-dryrun: ## Print current vs. latest pinned versions in the agent-circus and msb-agents templates
 	uv run agent-circus-update-templates
 
-update-templates: ## Write latest pinned versions into the agent-circus template
+update-templates: ## Write latest pinned versions into the agent-circus and msb-agents templates
 	uv run agent-circus-update-templates --apply
 
 sops-edit: ## Edit a SOPS-encrypted file
