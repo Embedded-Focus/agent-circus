@@ -65,10 +65,35 @@ class SandboxConfig:
 
     The sandbox name itself is derived from the workspace directory, not
     configured: ``agents-<sanitized project name>``.
+
+    :ivar memory: Memory limit string passed to ``msb`` verbatim.
+    :ivar cpus: Optional CPU count.
+    :ivar root_disk: Optional ``--root-disk`` spec (e.g. ``"flat:32G"``);
+        ``None`` keeps msb's managed default root.
+    :ivar docker_disk: Optional size of a dedicated ext4 disk mounted at
+        ``/var/lib/docker`` (the docker opt-in); ``None`` disables docker.
     """
 
     memory: str = DEFAULT_MEMORY
     cpus: int | None = None
+    root_disk: str | None = None
+    docker_disk: str | None = None
+
+
+def docker_enabled(config: MsbConfig) -> bool:
+    """Return whether the sandbox provides a usable docker storage backend.
+
+    Docker 29 needs a real filesystem under ``/var/lib/docker``. That is
+    the case when a dedicated docker disk is requested, or when the root
+    disk is a flat (non-overlayfs) root.
+
+    :param config: Resolved msb-circus configuration.
+    :returns: ``True`` when dockerd can create containers in the sandbox.
+    """
+    if config.sandbox.docker_disk is not None:
+        return True
+    root_disk = config.sandbox.root_disk
+    return root_disk is not None and root_disk.startswith("flat:")
 
 
 @dataclass(frozen=True)
@@ -399,7 +424,27 @@ def _parse_sandbox(raw: Any) -> SandboxConfig:
     cpus = raw.get("cpus")
     if cpus is not None and not isinstance(cpus, int):
         raise ConfigurationError("msb.sandbox.cpus must be an integer")
-    return SandboxConfig(memory=memory, cpus=cpus)
+
+    # Size/spec strings are passed to msb verbatim: msb is the authority on
+    # the grammar and validates it at sandbox creation.
+    root_disk = raw.get("root_disk")
+    if root_disk is not None and (not isinstance(root_disk, str) or not root_disk):
+        raise ConfigurationError(
+            'msb.sandbox.root_disk must be a non-empty string (e.g. "flat:32G")'
+        )
+    docker_disk = raw.get("docker_disk")
+    if docker_disk is not None and (
+        not isinstance(docker_disk, str) or not docker_disk
+    ):
+        raise ConfigurationError(
+            'msb.sandbox.docker_disk must be a non-empty string (e.g. "10G")'
+        )
+    return SandboxConfig(
+        memory=memory,
+        cpus=cpus,
+        root_disk=root_disk,
+        docker_disk=docker_disk,
+    )
 
 
 def _parse_network(raw: Any) -> NetworkConfig:

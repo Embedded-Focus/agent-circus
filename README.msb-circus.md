@@ -338,7 +338,10 @@ tag = "docker.io/library/msb-agents:26"
 
 [msb.sandbox]
 memory = "4G"
-# cpus = 2                             # default: 1
+# cpus = 2                              # default: 1
+# root_disk = "flat:32G"                # root disk spec, see "Docker and Disks"
+# docker_disk = "10G"                   # docker opt-in: dedicated ext4 disk
+                                        # for /var/lib/docker; unset = no docker
 
 [msb.mounts]
 "." = "/workspace"                     # default; more mounts: "/data" = "/data:ro"
@@ -439,6 +442,56 @@ mapping when it is already bound (for example by a second VM); the probe is
 best-effort, so msb may still report a conflict grabbed between probe and
 boot.
 
+## Docker and Disks
+
+The sandbox image ships Docker 29. Docker 29 stores images and containers
+with the overlayfs snapshotter, and that snapshotter needs a real
+filesystem under `/var/lib/docker`. The sandbox root filesystem is an
+overlayfs by default, and the kernel refuses to stack one overlayfs on
+another. A sandbox without disk configuration therefore cannot run
+containers. The sandbox boots, and every `docker` command fails with
+"Cannot connect to the Docker daemon". The boot log explains why.
+
+Enable docker with one of two settings under `[msb.sandbox]`:
+
+``` toml
+[msb.sandbox]
+# Option 1: a dedicated ext4 disk for docker data, removed with the
+# sandbox. Docker data does not count against the root disk size.
+docker_disk = "10G"
+
+# Option 2: a flat root. The whole root filesystem becomes one real
+# filesystem with no overlayfs, and docker data shares it with the rest
+# of the guest. Size it for image content plus docker data (about 3G of
+# image content plus your docker usage).
+root_disk = "flat:32G"
+```
+
+Both settings can be combined: `root_disk = "flat:32G"` with
+`docker_disk = "10G"` puts docker data on its own disk inside a flat
+root. A plain size such as `root_disk = "16G"` keeps the managed root
+and does not enable docker.
+
+Without `root_disk`, the managed root stays at the msb default of 4G.
+Docker data does not count against it, but image content and rootfs
+writes do. The sandbox image carries about 3G of content, so expect
+roughly 1G of headroom. If your agents write a lot outside
+`/var/lib/docker`, raise the root next to the docker disk.
+
+Disk settings apply at sandbox creation. msb-circus warns when the
+settings of an existing sandbox differ from the configuration. Remove and
+re-create the sandbox to apply them:
+
+``` shell
+msb-circus rm && msb-circus up
+```
+
+Removing the sandbox deletes the docker data disk, together with all
+images and containers in it. The disk survives `stop` and `start`.
+
+Host storage lives under the msb storage root (`~/.microsandbox` by
+default). A flat root or a docker disk adds its size there per sandbox.
+
 ## Troubleshooting
 
 If the sandbox boots but the Docker engine stays unreachable, read the guest
@@ -461,6 +514,12 @@ chmod g-w,o-w ~/.microsandbox
 If `up` or `start` reports that dockerd did not become ready, the warning
 names the probe error and the diagnostic commands. Run the commands from the
 warning and compare their output with the guest log above.
+
+If `docker` commands fail with "Cannot connect to the Docker daemon" and
+the boot log says that the docker data root is on overlayfs, docker is
+not enabled for this sandbox. Add `docker_disk = "10G"` or
+`root_disk = "flat:32G"` under `[msb.sandbox]`, then remove and re-create
+the sandbox. See the Docker and Disks section.
 
 If a forwarded port answers with `Empty reply from server`, see the
 Port Forwarding section under Networking: the server inside the sandbox is

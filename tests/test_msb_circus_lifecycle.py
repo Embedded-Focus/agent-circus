@@ -92,6 +92,7 @@ def test_up_errors_when_image_missing_without_build(tmp_path, fake_msb):
 
 def test_up_boots_fresh_sandbox_with_documented_workflow(tmp_path, fake_msb):
     name = sandbox_name_for_workspace(tmp_path)
+    _enable_docker(tmp_path)
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
     run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
@@ -102,9 +103,46 @@ def test_up_boots_fresh_sandbox_with_documented_workflow(tmp_path, fake_msb):
     assert args[args.index("--volume") + 1] == f"{tmp_path}:/workspace"
     assert args[args.index("--net") + 1] == "public,private"
     assert args[args.index("--workdir") + 1] == "/workspace"
+    assert args[args.index("--mount-owned") + 1] == (
+        "/var/lib/docker:kind=disk,size=10G"
+    )
     assert "--detach" in args
     assert args[-1] == "docker.io/library/msb-agents:26"
     assert "dockerd is ready" in result.output
+
+
+def _enable_docker(tmp_path: Path, size: str = "10G") -> None:
+    """Write a config that opts into docker via a dedicated disk."""
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir(exist_ok=True)
+    (config_dir / "config.toml").write_bytes(
+        f'[msb.sandbox]\ndocker_disk = "{size}"\n'.encode()
+    )
+
+
+def test_up_skips_dockerd_probe_when_docker_is_disabled(tmp_path, fake_msb):
+    """No disk config means no usable docker: no probe, but a visible warning."""
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    probe_calls = [
+        c for c in fake_msb["calls"] if c[0] == "exec" and c[-2:] == ["docker", "info"]
+    ]
+    assert probe_calls == []
+    assert "dockerd is ready" not in result.output
+    assert "docker is not enabled" in result.output
+    assert "docker_disk" in result.output  # the fix is actionable
+
+
+def test_up_warns_docker_disabled_when_reusing_running_sandbox(tmp_path, fake_msb):
+    """The reuse path must surface docker unavailability, not silently skip."""
+    name = sandbox_name_for_workspace(tmp_path)
+    fake_msb["list_output"] = json.dumps(
+        [{"name": name, "status": "Running", "id": "abc"}]
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert not [c for c in fake_msb["calls"] if c[0] == "run"]
+    assert "docker is not enabled" in result.output
 
 
 def test_up_reuses_running_sandbox(tmp_path, fake_msb):
@@ -248,6 +286,60 @@ def test_up_does_not_warn_when_port_forwards_match(tmp_path, fake_msb):
     assert "differ" not in result.output
 
 
+DISK_INSPECT_MATCHING = json.dumps(
+    {
+        "config": {
+            "spec": {
+                "root_disk": {"kind": "managed", "size_mib": 4096},
+                "mounts": [
+                    {
+                        "type": "Owned",
+                        "guest": "/var/lib/docker",
+                        "storage": {"kind": "disk", "capacity_mib": 10240},
+                        "options": {"readonly": False, "noexec": False},
+                    }
+                ],
+            }
+        }
+    }
+)
+
+
+def test_up_warns_on_disk_drift_for_existing_sandbox(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    _enable_docker(tmp_path, size="20G")
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    # The sandbox was created with a 10G docker disk; the config now asks
+    # for 20G. Disks are creation-time only, so this must warn.
+    fake_msb["inspect_json"] = DISK_INSPECT_MATCHING
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "Disk settings" in result.output
+    assert "differ" in result.output
+    assert not [c for c in fake_msb["calls"] if c[0] == "run"]
+
+
+def test_up_does_not_warn_when_disk_settings_match(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    _enable_docker(tmp_path)
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["inspect_json"] = DISK_INSPECT_MATCHING
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "differ" not in result.output
+
+
+def test_up_does_not_warn_when_disk_schema_is_unrecognized(tmp_path, fake_msb):
+    """An unreadable inspect output must not produce a false warning."""
+    name = sandbox_name_for_workspace(tmp_path)
+    _enable_docker(tmp_path)
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["inspect_json"] = json.dumps({"config": {"unrelated": 1}})
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "differ" not in result.output
+
+
 def test_up_builds_when_requested(tmp_path, fake_msb):
     fake_msb["inspect_rc"] = 1  # force the build path
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path), "--build"])
@@ -315,7 +407,24 @@ def test_up_reports_mount_collision_as_clean_error(tmp_path, fake_msb):
     assert not [c for c in FakeInvoker.behavior.get("calls", []) if c[0] == "run"]
 
 
+def test_up_probes_dockerd_when_reusing_running_sandbox(tmp_path, fake_msb):
+    """The reuse path probes dockerd when docker is enabled."""
+    name = sandbox_name_for_workspace(tmp_path)
+    _enable_docker(tmp_path)
+    fake_msb["list_output"] = json.dumps(
+        [{"name": name, "status": "Running", "id": "abc"}]
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    probe_calls = [
+        c for c in fake_msb["calls"] if c[0] == "exec" and c[-2:] == ["docker", "info"]
+    ]
+    assert probe_calls == [["exec", name, "--", "docker", "info"]]
+    assert "dockerd is ready" in result.output
+
+
 def test_up_warns_when_dockerd_never_becomes_ready(tmp_path, fake_msb):
+    _enable_docker(tmp_path)
     fake_msb["dockerd_ready"] = False
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
@@ -325,6 +434,7 @@ def test_up_warns_when_dockerd_never_becomes_ready(tmp_path, fake_msb):
 
 def test_dockerd_probe_uses_plain_exec_without_no_tty(tmp_path, fake_msb):
     """The probe matches the manually verified invocation (no --no-tty)."""
+    _enable_docker(tmp_path)
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
     probe_calls = [

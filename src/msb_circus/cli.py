@@ -17,6 +17,7 @@ from . import __version__
 from .config import (
     ADDITIONAL_DIRS_GUEST_BASE,
     MsbConfig,
+    docker_enabled,
     effective_mounts,
     load_config,
     sandbox_name_for_workspace,
@@ -42,8 +43,11 @@ from .sandbox import (
     build_start_args,
     build_stop_args,
     configured_ports,
+    parse_inspect_disk_config,
     parse_inspect_ports,
+    parse_root_disk_spec,
     parse_sandbox_list_output,
+    parse_size_mib,
 )
 from .utils import setup_logging
 
@@ -616,6 +620,38 @@ def _dockerd_warning(name: str, last_error: str) -> str:
     return "\n".join(lines)
 
 
+def _check_dockerd(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
+    """Probe dockerd readiness or explain why docker is unavailable.
+
+    When the sandbox has no usable docker storage backend (no docker disk
+    and no flat root), dockerd is never started by the image entrypoint and
+    ``docker`` commands in the guest fail with a socket error. That state
+    is reported as a visible warning — including for already-running
+    sandboxes, which skip the boot/start paths — together with the fix.
+    Otherwise dockerd readiness is probed and a failure warns with
+    diagnostics.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param config: Resolved msb-circus configuration.
+    :param name: Sandbox name.
+    """
+    if not docker_enabled(config):
+        logger.warning(
+            "docker is not enabled for sandbox %s: the guest has no usable "
+            "docker storage backend, so docker commands will fail. Enable "
+            'it with docker_disk = "10G" (or root_disk = "flat:32G") under '
+            "[msb.sandbox] in .agent-circus/config.toml, then recreate the "
+            "sandbox: msb-circus rm -f && msb-circus up.",
+            name,
+        )
+        return
+    ready, last_error = _probe_dockerd(invoker, name)
+    if ready:
+        logger.info("dockerd is ready in the guest.")
+    else:
+        logger.warning("%s", _dockerd_warning(name, last_error))
+
+
 @app.command()
 def up(
     workspace: Annotated[
@@ -687,6 +723,89 @@ def _warn_on_port_drift(invoker: MsbInvoker, config: MsbConfig, name: str) -> No
         "msb-circus rm -f && msb-circus up (ports: %s).",
         name,
         sorted(published),
+    )
+
+
+def _warn_on_disk_drift(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
+    """Warn when configured disk settings differ from the sandbox's disks.
+
+    msb fixes disks at sandbox creation and ``msb modify`` cannot add
+    mounts, so a config change only applies to a newly created sandbox.
+    Failures here are non-fatal: an unreadable or unrecognized inspect
+    output skips the check instead of reporting a false mismatch.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param config: Resolved msb-circus configuration.
+    :param name: Sandbox name to inspect.
+    """
+    try:
+        result = invoker.run(build_inspect_args(name))
+        guest = parse_inspect_disk_config(result.stdout)
+    except (MsbCommandError, ConfigurationError) as e:
+        logger.debug("Disk drift check for %s failed: %s", name, e)
+        return
+
+    problems: list[str] = []
+
+    # Docker data disk: compare presence and size. A smaller persisted
+    # disk is a drift; a larger one is fine (the user raised it via
+    # `msb modify`-style growth or manually).
+    requested_docker_disk = config.sandbox.docker_disk
+    if requested_docker_disk is not None:
+        if guest.docker_disk_size_mib is None:
+            if guest.mounts_seen:
+                problems.append(
+                    f"docker_disk={requested_docker_disk} is not present in the sandbox"
+                )
+        else:
+            wanted = parse_size_mib(requested_docker_disk)
+            if wanted is not None and guest.docker_disk_size_mib < wanted:
+                problems.append(
+                    f"docker disk is {guest.docker_disk_size_mib} MiB, smaller than "
+                    f"the configured {requested_docker_disk}"
+                )
+    elif guest.docker_disk_size_mib is not None:
+        problems.append(
+            "sandbox has a docker data disk but the config does not set "
+            "msb.sandbox.docker_disk"
+        )
+
+    # Root disk: compare kind always, size only when both are known. With
+    # no root_disk configured, the expected kind is msb's managed default.
+    requested_kind, requested_size_mib = (
+        parse_root_disk_spec(config.sandbox.root_disk)
+        if config.sandbox.root_disk is not None
+        else ("managed", None)
+    )
+    if (
+        requested_kind is not None
+        and guest.root_disk_kind is not None
+        and guest.root_disk_kind != requested_kind
+    ):
+        problems.append(
+            f"root disk kind is {guest.root_disk_kind}, but the config asks "
+            f"for {requested_kind}"
+        )
+    elif (
+        guest.root_disk_kind == requested_kind
+        and requested_size_mib is not None
+        and guest.root_disk_size_mib is not None
+        and guest.root_disk_size_mib < requested_size_mib
+    ):
+        problems.append(
+            f"root disk is {guest.root_disk_size_mib} MiB, smaller than the "
+            f"configured {requested_size_mib} MiB"
+        )
+
+    if not problems:
+        return
+    logger.warning(
+        "Disk settings of sandbox %s differ from the configuration. Disks are "
+        "fixed at sandbox creation, so the change is not applied to this "
+        "sandbox. Remove and re-create it to apply (this deletes the docker "
+        "data disk): msb-circus rm -f && msb-circus up (%s).",
+        name,
+        "; ".join(problems),
     )
 
 
@@ -827,6 +946,8 @@ def _ensure_sandbox_running(
         logger.info("Sandbox %s is already running; reusing it.", name)
         _ensure_pi_trust(invoker, config, name)
         _warn_on_port_drift(invoker, config, name)
+        _warn_on_disk_drift(invoker, config, name)
+        _check_dockerd(invoker, config, name)
         return
 
     if existing is not None:
@@ -835,6 +956,7 @@ def _ensure_sandbox_running(
         invoker.run(build_start_args(name))
         _ensure_pi_trust(invoker, config, name)
         _warn_on_port_drift(invoker, config, name)
+        _warn_on_disk_drift(invoker, config, name)
     else:
         logger.info("Booting sandbox %s from %s...", name, image_tag)
         _fail_on_occupied_ports(config)
@@ -849,15 +971,13 @@ def _ensure_sandbox_running(
                 port_forwards=config.port_forwards,
                 env=config.env,
                 workdir=config.agent.workdir,
+                docker_disk=config.sandbox.docker_disk,
+                root_disk=config.sandbox.root_disk,
             )
         )
         _ensure_pi_trust(invoker, config, name)
 
-    ready, last_error = _probe_dockerd(invoker, name)
-    if ready:
-        logger.info("dockerd is ready in the guest.")
-    else:
-        logger.warning("%s", _dockerd_warning(name, last_error))
+    _check_dockerd(invoker, config, name)
 
 
 @app.command()
@@ -907,11 +1027,15 @@ def start(
     if name not in running:
         _fail_on_occupied_ports(config)
     invoker.run(build_start_args(name))
-    ready, last_error = _probe_dockerd(invoker, name)
-    if ready:
-        typer.echo(f"✓ Started {name}; dockerd is ready.")
+    _warn_on_disk_drift(invoker, config, name)
+    if docker_enabled(config):
+        ready, last_error = _probe_dockerd(invoker, name)
+        if ready:
+            typer.echo(f"✓ Started {name}; dockerd is ready.")
+        else:
+            typer.echo(_dockerd_warning(name, last_error), err=True)
     else:
-        typer.echo(_dockerd_warning(name, last_error), err=True)
+        typer.echo(f"✓ Started {name} (docker is not enabled for this sandbox)")
 
 
 @app.command()
