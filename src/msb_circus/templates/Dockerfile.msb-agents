@@ -31,6 +31,7 @@ COPY --from=docker.io/library/docker:29.9.2-dind@sha256:9e79b879b177fbd72c34376a
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        e2fsprogs \
         git \
         iptables \
         jq \
@@ -67,6 +68,19 @@ RUN addgroup --system docker || true
 # the sandbox TLS interception CA is imported when TLS interception is enabled
 # (it appears at /.msb/tls/ca.pem in the guest); this must happen before
 # dockerd starts because Go caches the system cert pool per process.
+#
+# The sandbox root filesystem is an overlayfs, and the kernel refuses to use
+# an overlayfs as an overlayfs upperdir (EINVAL on mount). dockerd would
+# therefore fail every container create with "failed to mount ... invalid
+# argument". When /var/lib/docker sits on such a filesystem, a sparse ext4
+# image is loop-mounted there first, giving dockerd a real filesystem for its
+# overlayfs snapshots. The image does not ship /var/lib/docker (it is not
+# created by the base image nor by the copied docker binaries), so the
+# entrypoint creates it before stat'ing; otherwise stat fails with ENOENT and
+# the setup would be silently skipped on a fresh sandbox. If the sandbox
+# already provides a proper disk (msb --root-disk flat / --mount-owned
+# /var/lib/docker:kind=disk), the setup is skipped. The image size can be
+# tuned with DOCKER_DATA_DISK_SIZE.
 RUN printf '%s\n' \
         '#!/bin/sh' \
         'set -e' \
@@ -75,6 +89,22 @@ RUN printf '%s\n' \
         '        mkdir -p /usr/local/share/ca-certificates' \
         '        cp /.msb/tls/ca.pem /usr/local/share/ca-certificates/msb-intercept.crt' \
         '        update-ca-certificates' \
+        '    fi' \
+        'fi' \
+        'if ! mountpoint -q /var/lib/docker 2>/dev/null; then' \
+        '    mkdir -p /var/lib/docker' \
+        '    if [ "$(stat -f -c %T /var/lib/docker)" = "overlayfs" ]; then' \
+        '        echo "docker data root is on overlayfs; attaching loop-mounted ext4" >&2' \
+        '        img=/var/lib/docker.img' \
+        '        if [ ! -s "$img" ]; then' \
+        '            truncate -s "${DOCKER_DATA_DISK_SIZE:-3G}" "$img"' \
+        '            mkfs.ext4 -q -F -E lazy_itable_init=0 "$img"' \
+        '        fi' \
+        '        dev=$(losetup -j "$img" | cut -d: -f1 | head -n 1)' \
+        '        if [ -z "$dev" ]; then' \
+        '            dev=$(losetup -f --show "$img")' \
+        '        fi' \
+        '        mount "$dev" /var/lib/docker' \
         '    fi' \
         'fi' \
         'if ! docker info >/dev/null 2>&1; then' \
