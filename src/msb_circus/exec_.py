@@ -108,14 +108,22 @@ def build_exec_args(
 def _copy_bytes(src, dst) -> bool:
     """Copy *src* to *dst* in chunks until EOF.
 
+    Reads use ``read1`` when available (buffered and raw streams) so a
+    partially filled pipe is forwarded immediately. A blocking
+    ``BufferedReader.read(n)`` would wait for the full chunk or EOF — an
+    ACP peer that writes one small request and then waits for the reply
+    would deadlock the stream. Sources without ``read1`` (e.g.
+    :class:`io.BytesIO` in tests) fall back to ``read``.
+
     :param src: Source binary file-like object (blocking reads).
     :param dst: Destination binary file-like object.
     :returns: ``True`` on clean EOF, ``False`` on an I/O error (e.g. a
         broken pipe because the peer went away).
     """
     try:
+        read = getattr(src, "read1", None) or src.read
         while True:
-            chunk = src.read(_COPY_CHUNK)
+            chunk = read(_COPY_CHUNK)
             if not chunk:
                 return True
             dst.write(chunk)

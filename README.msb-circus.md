@@ -193,9 +193,15 @@ msb-circus exec --acp -- opencode acp
 
 In ACP mode, msb-circus streams the session between your editor and the
 sandbox without a pseudo-terminal. Standard output carries only ACP
-messages. Diagnostics go to standard error. The stream copies bytes without
-change, so large messages and non-ASCII text arrive intact. When the editor
-disconnects, msb-circus stops the agent process in the sandbox.
+messages. msb-circus keeps standard error silent: editors treat any
+stderr output from the agent as an API error and show an error dialog
+for it. Warnings and status messages therefore go to the log file (see
+[Configuration](#configuration) below); pass `--log-file` or configure
+`[logging]` to keep them, otherwise `/tmp/msb-circus-acp.log` is used. Fatal errors
+still print to standard error right before msb-circus exits. The stream
+copies bytes without change, so large messages and non-ASCII text
+arrive intact. When the editor disconnects, msb-circus stops the agent
+process in the sandbox.
 
 ## Setting up Editors to Work with ACP
 
@@ -296,6 +302,12 @@ msb-circus --log-level DEBUG --log-file /tmp/msb-circus.log exec --acp --
 level = "DEBUG"
 file = "/tmp/msb-circus.log"
 ```
+
+In ACP mode (`msb-circus exec --acp`), msb-circus never writes logs to
+stderr — editors report stderr output from the agent process as API
+errors (see [ACP Sessions](#acp-sessions)). Logs then go to the log file
+only; when no log file is configured, `/tmp/msb-circus-acp.log` is
+used.
 
 The `[[additional_dirs]]` array mounts extra host directories into the
 sandbox under `/workspaces/<name>`, next to the project at `/workspace`.

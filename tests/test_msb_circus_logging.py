@@ -40,6 +40,13 @@ def test_setup_logging_without_file_uses_stderr_only():
     assert _file_handlers() == []
 
 
+def test_setup_logging_without_stderr_requires_log_file():
+    # ACP mode must never end up with zero handlers: logs would be lost
+    # or leak through the last-resort handler to stderr.
+    with pytest.raises(ValueError, match="log_file"):
+        setup_logging(level="INFO", to_stderr=False)
+
+
 def test_cli_log_file_option_creates_log_file(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     log_file = tmp_path / "out.log"

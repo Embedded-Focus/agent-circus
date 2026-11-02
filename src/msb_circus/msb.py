@@ -230,6 +230,13 @@ class MsbInvoker:
     ) -> subprocess.CompletedProcess[str]:
         """Run an ``msb`` subcommand.
 
+        The child's stdin is connected to :data:`os.devnull`. Piped ``msb
+        exec`` invocations read host stdin unconditionally (forwarding it to
+        the guest), so an inherited stdin would steal bytes from a concurrent
+        ACP stream on the same descriptor — e.g. the editor's initialize
+        request would be consumed by a dockerd probe instead of reaching the
+        agent. Interactive sessions do not go through this method.
+
         :param args: Full argv including the subcommand (e.g. ``["run", ...]``).
         :param capture_output: Whether to capture stdout/stderr instead of
             letting them through to the terminal.
@@ -247,6 +254,7 @@ class MsbInvoker:
             result = subprocess.run(
                 argv,
                 capture_output=capture_output,
+                stdin=subprocess.DEVNULL,
                 text=True,
                 check=False,
                 timeout=timeout,

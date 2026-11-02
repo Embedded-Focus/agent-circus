@@ -1,8 +1,15 @@
 """Tests for the ACP stream pump and the exec command."""
 
 import io
+import json
+import logging
+import os
+import selectors
+import subprocess
 import sys
 import textwrap
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar
@@ -18,6 +25,32 @@ from msb_circus.exceptions import ConfigurationError
 from msb_circus.exec_ import run_acp_stream
 
 runner = CliRunner()
+
+
+def _stderr_stream_handlers() -> list[logging.StreamHandler]:
+    """Return root logger StreamHandlers that are not FileHandlers."""
+    return [
+        handler
+        for handler in logging.root.handlers
+        if isinstance(handler, logging.StreamHandler)
+        and not isinstance(handler, logging.FileHandler)
+    ]
+
+
+def _file_handlers() -> list[logging.FileHandler]:
+    """Return root logger FileHandlers."""
+    return [h for h in logging.root.handlers if isinstance(h, logging.FileHandler)]
+
+
+@pytest.fixture(autouse=True)
+def _clean_root_handlers():
+    """Keep the root logger pristine around each test."""
+    handlers = logging.root.handlers[:]
+    level = logging.root.level
+    logging.root.handlers.clear()
+    yield
+    logging.root.handlers[:] = handlers
+    logging.root.setLevel(level)
 
 
 class FakeInvoker:
@@ -150,6 +183,57 @@ def test_acp_stream_terminates_hung_agent_after_stdin_eof():
     assert returncode == 0  # clean disconnect, no hang, no leaked process
 
 
+def test_acp_stream_forwards_before_stdin_eof():
+    """A small request must reach the agent while stdin stays open.
+
+    Regression test: the input pump used ``BufferedReader.read(n)``, which
+    blocks until the full chunk or EOF. An editor that writes one small
+    request and then waits for the reply (acp.el's initialize) deadlocked
+    the stream — the request never reached the agent.
+    """
+    stdin_read, stdin_write = os.pipe()
+    stdout_read, stdout_write = os.pipe()
+    agent = [
+        sys.executable,
+        "-c",
+        (
+            "import sys; sys.stdout.buffer.write(sys.stdin.buffer.readline()); "
+            "sys.stdout.buffer.flush(); sys.stdin.buffer.read()"
+        ),
+    ]
+    result: dict = {}
+
+    def run():
+        result["returncode"] = run_acp_stream(
+            agent,
+            stdin=os.fdopen(stdin_read, "rb"),  # buffered, like the editor's pipe
+            stdout=os.fdopen(stdout_write, "wb", buffering=0),
+            stderr=io.BytesIO(),
+            grace_seconds=1.0,
+        )
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    try:
+        os.write(stdin_write, b'{"jsonrpc":"2.0","id":1}\n')
+        selector = selectors.DefaultSelector()
+        selector.register(stdout_read, selectors.EVENT_READ)
+        received = b""
+        deadline = time.monotonic() + 10
+        while b'"jsonrpc"' not in received and time.monotonic() < deadline:
+            if selector.select(0.2):
+                chunk = os.read(stdout_read, 65536)
+                if not chunk:
+                    break
+                received += chunk
+        selector.close()
+        assert received == b'{"jsonrpc":"2.0","id":1}\n'
+    finally:
+        os.close(stdin_write)  # end the session like an editor disconnect
+    thread.join(timeout=15)
+    assert result["returncode"] == 0
+
+
 def test_parse_env_assignments():
     assert parse_env_assignments(["A=1", "B=x=y"]) == {"A": "1", "B": "x=y"}
     with pytest.raises(ConfigurationError, match="expected KEY=VALUE"):
@@ -271,3 +355,177 @@ def test_build_write_trust_args_rejects_empty_dirs():
 
     with pytest.raises(ValueError, match="at least one directory"):
         build_write_trust_args("agents-proj", [])
+
+
+def test_exec_acp_routes_logs_to_given_file_only(tmp_path, fake_msb):
+    log_file = tmp_path / "acp.log"
+    result = runner.invoke(
+        app,
+        [
+            "--log-file",
+            str(log_file),
+            "exec",
+            "--acp",
+            "--workspace",
+            str(tmp_path),
+            "--",
+            "pi-acp",
+        ],
+    )
+    assert result.exit_code == 0
+    assert [h.baseFilename for h in _file_handlers()] == [str(log_file)]
+    assert _stderr_stream_handlers() == []
+
+
+def test_exec_acp_without_log_file_uses_default_file(tmp_path, fake_msb):
+    result = runner.invoke(
+        app, ["exec", "--acp", "--workspace", str(tmp_path), "--", "pi-acp"]
+    )
+    assert result.exit_code == 0
+    file_handlers = _file_handlers()
+    assert len(file_handlers) == 1
+    assert Path(file_handlers[0].baseFilename) == cli_module.DEFAULT_ACP_LOG_FILE
+    assert _stderr_stream_handlers() == []
+
+
+def test_exec_without_acp_keeps_stderr_logging(tmp_path, fake_msb):
+    result = runner.invoke(
+        app, ["exec", "--workspace", str(tmp_path), "--", "echo", "hi"]
+    )
+    assert result.exit_code == 0
+    assert _stderr_stream_handlers()
+
+
+def test_exec_acp_status_messages_go_to_log_file(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    FakeInvoker.behavior["list_output"] = json.dumps(
+        [{"name": name, "status": "Running"}]
+    )
+    log_file = tmp_path / "acp.log"
+    result = runner.invoke(
+        app,
+        [
+            "--log-file",
+            str(log_file),
+            "exec",
+            "--acp",
+            "--workspace",
+            str(tmp_path),
+            "--",
+            "pi-acp",
+        ],
+    )
+    assert result.exit_code == 0
+    for handler in _file_handlers():
+        handler.flush()
+    assert "reusing it" in log_file.read_text()
+
+
+def test_exec_acp_config_warnings_go_to_log_file(tmp_path, fake_msb):
+    # Reproduces the reported failure mode: unsupported config keys must
+    # not reach stderr in ACP mode (acp.el treats stderr as API errors).
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b'runtime = "podman"\n')
+    log_file = tmp_path / "acp.log"
+    result = runner.invoke(
+        app,
+        [
+            "--log-file",
+            str(log_file),
+            "exec",
+            "--acp",
+            "--workspace",
+            str(tmp_path),
+            "--",
+            "pi-acp",
+        ],
+    )
+    assert result.exit_code == 0
+    for handler in _file_handlers():
+        handler.flush()
+    assert "Unsupported config key 'runtime'" in log_file.read_text()
+
+
+# A fake msb that mimics the real binary's stdin behavior: every piped
+# ``exec`` reads one chunk of host stdin (like the real run_piped /
+# forward_stdin path) and forwards it to the guest command. Probe-style
+# commands (``docker info``, the trust-write ``sh -c``) discard their stdin.
+_FAKE_MSB = """#!/bin/sh
+case "$1" in
+  --version) echo "msb 0.7.12"; exit 0;;
+  run) exit 0;;
+esac
+if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then exit 0; fi
+if [ "$1" = "list" ]; then echo "[]"; exit 0; fi
+if [ "$1" = "exec" ]; then
+  shift
+  d="{drain_dir}/drain.$$"
+  dd bs=8192 count=1 of="$d" 2>/dev/null
+  while [ $# -gt 0 ]; do case "$1" in --) shift; break;; *) shift;; esac; done
+  case "$1" in
+    docker) rm -f "$d"; exit 0;;
+    sh) rm -f "$d"; exit 0;;
+    *) cat "$d" 2>/dev/null; rm -f "$d"; exec "$@";;
+  esac
+fi
+exit 0
+"""
+
+
+def test_exec_acp_survives_stdin_consuming_probes(tmp_path):
+    """The ACP stream must survive helper execs that read host stdin.
+
+    Regression test: the pi trust write and the dockerd probe used to inherit
+    the caller's stdin. Real msb always reads host stdin in its piped exec
+    path, so those probes consumed the editor's initialize request before the
+    ACP pump could forward it — the agent never responded and the session
+    hung silently.
+    """
+    drain_dir = tmp_path / "drain"
+    drain_dir.mkdir()
+    fake_msb = tmp_path / "msb"
+    fake_msb.write_text(_FAKE_MSB.format(drain_dir=drain_dir))
+    fake_msb.chmod(0o755)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_text(f'[msb]\nbinary = "{fake_msb}"\n')
+
+    payload = (
+        b'{"jsonrpc":"2.0","method":"initialize","id":1,"params":'
+        b'{"clientInfo":{"name":"agent-shell"},"protocolVersion":1}}\n'
+    )
+    child_code = (
+        "import sys; from msb_circus.cli import run_cli; "
+        "sys.argv = ['msb-circus', '--log-level', 'DEBUG', "
+        "'--log-file', '/dev/null', 'exec', '--acp', '--workspace', "
+        f"'{tmp_path}', '--', 'cat']; run_cli()"
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", child_code],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,  # raw pipes; read() then returns whatever is available
+    )
+    assert proc.stdin is not None and proc.stdout is not None
+    proc.stdin.write(payload)
+    proc.stdin.flush()
+    # Emulate acp.el: the request is written once and the editor's stdin
+    # pipe stays open for the whole session. The response must arrive while
+    # stdin is still open — the probe execs (trust write, dockerd probe)
+    # must not have consumed it, and the pump must not buffer it until EOF.
+    selector = selectors.DefaultSelector()
+    selector.register(proc.stdout, selectors.EVENT_READ)
+    received = b""
+    deadline = time.monotonic() + 10
+    while payload.strip() not in received and time.monotonic() < deadline:
+        if selector.select(0.2):
+            chunk = proc.stdout.read(65536)
+            if not chunk:
+                break
+            received += chunk
+    selector.close()
+    assert payload.strip() in received
+    proc.stdin.close()
+    proc.wait(timeout=30)

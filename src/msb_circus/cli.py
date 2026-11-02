@@ -59,6 +59,29 @@ logger = logging.getLogger(__name__)
 DOCKERD_PROBE_ATTEMPTS = 20
 DOCKERD_PROBE_DELAY = 1.5
 
+#: Log file used by ``exec --acp`` when neither ``--log-file`` nor the
+#: ``[logging]`` config selects one. ACP mode never writes logs to stderr
+#: (the ACP backend treats any stderr output as an API error), so a file
+#: is mandatory; the default keeps the logs in a predictable place.
+DEFAULT_ACP_LOG_FILE = Path(tempfile.gettempdir()) / "msb-circus-acp.log"
+
+
+def _configure_acp_logging(settings: object) -> None:
+    """Reconfigure logging for ACP mode: log file only, never stderr.
+
+    Must run before any config load or sandbox probe so that their
+    warnings stay off stderr. Fatal errors that immediately precede a
+    ``typer.Exit`` keep using ``typer.echo(..., err=True)``: the process
+    is about to die anyway, and the backend should surface the reason.
+
+    :param settings: Value of ``ctx.obj`` as set by the ``main`` callback
+        (a dict with ``log_level`` and ``log_file`` keys).
+    """
+    options = settings if isinstance(settings, dict) else {}
+    level = options.get("log_level") or "INFO"
+    log_file = options.get("log_file") or DEFAULT_ACP_LOG_FILE
+    setup_logging(level=str(level), log_file=Path(log_file), to_stderr=False)
+
 
 @app.callback()
 def main(
@@ -76,7 +99,10 @@ def main(
         typer.Option(
             "--log-file",
             envvar="LOGFILE",
-            help="Path to a log file. Logs are written to both stderr and this file.",
+            help=(
+                "Path to a log file. Logs are written to stderr and this "
+                "file; in ACP mode (exec --acp) only to this file."
+            ),
         ),
     ] = None,
 ) -> None:
@@ -85,16 +111,27 @@ def main(
     # directory for the [logging] defaults. A malformed config must not
     # break unrelated commands; the invoked command surfaces the error.
     if log_level is None or log_file is None:
+        config_logger = logging.getLogger("msb_circus.config")
+        # Silence config warnings from this probe load; the command's own
+        # config load re-emits them to the fully configured handlers
+        # (otherwise they would run through the last-resort handler to
+        # stderr before setup_logging has been called).
+        config_logger.disabled = True
         try:
             config = load_config(Path("."))
         except MsbCircusError:
             config = None
+        finally:
+            config_logger.disabled = False
         if config is not None:
             log_level = log_level or config.logging_level
             log_file = log_file or (
                 Path(config.logging_file) if config.logging_file else None
             )
     setup_logging(level=log_level or "INFO", log_file=log_file)
+    # Resolved settings for commands that must reconfigure logging
+    # (exec --acp switches to file-only); obj propagates to subcommands.
+    ctx.obj = {"log_level": log_level or "INFO", "log_file": log_file}
 
 
 @app.command()
@@ -643,12 +680,13 @@ def _warn_on_port_drift(invoker: MsbInvoker, config: MsbConfig, name: str) -> No
         return
     if published == configured:
         return
-    typer.echo(
-        f"Warning: port forwards for {name} differ from the configuration. "
+    logger.warning(
+        "Port forwards for %s differ from the configuration. "
         "msb fixes ports at sandbox creation, so the change is not applied "
         "to this sandbox. Remove and re-create it to apply: "
-        f"msb-circus rm -f && msb-circus up (ports: {sorted(published)}).",
-        err=True,
+        "msb-circus rm -f && msb-circus up (ports: %s).",
+        name,
+        sorted(published),
     )
 
 
@@ -711,17 +749,12 @@ def _ensure_pi_trust(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
             build_write_trust_args(name, _pi_trust_dirs(config)), check=False
         )
     except MsbCommandError as e:
-        result = None
-        detail = str(e)
-    if result is not None and result.returncode == 0:
-        return
-    if result is not None:
-        detail = (result.stderr or result.stdout or "").strip()
-    typer.echo(
-        f"Warning: could not pre-trust the work directories for pi in "
-        f"{name}; pi may ask to trust the directory on first start ({detail})",
-        err=True,
-    )
+        logger.warning(
+            "Could not pre-trust the work directories for pi in %s; pi may ask "
+            "to trust the directory on first start (%s)",
+            name,
+            e,
+        )
 
 
 def _ensure_sandbox_running(
@@ -734,8 +767,10 @@ def _ensure_sandbox_running(
 ) -> None:
     """Ensure the workspace sandbox exists and is running.
 
-    Status messages go to stderr so this is safe to call before an ACP
-    stream that owns stdout.
+    Status messages go through logging (stderr by default, file-only in
+    ACP mode), so this is safe to call before an ACP stream that owns
+    stdout and must not receive stderr output. Fatal errors print to
+    stderr and exit.
 
     :param invoker: Invoker bound to the resolved msb binary.
     :param config: Resolved msb-circus configuration.
@@ -789,19 +824,19 @@ def _ensure_sandbox_running(
     sandboxes = _list_sandboxes(invoker, running_only=False)
     existing = {s.name: s for s in sandboxes}.get(name)
     if existing is not None and (existing.status or "").lower() == "running":
-        typer.echo(f"Sandbox {name} is already running; reusing it.", err=True)
+        logger.info("Sandbox %s is already running; reusing it.", name)
         _ensure_pi_trust(invoker, config, name)
         _warn_on_port_drift(invoker, config, name)
         return
 
     if existing is not None:
-        typer.echo(f"Starting existing sandbox {name}...", err=True)
+        logger.info("Starting existing sandbox %s...", name)
         _fail_on_occupied_ports(config)
         invoker.run(build_start_args(name))
         _ensure_pi_trust(invoker, config, name)
         _warn_on_port_drift(invoker, config, name)
     else:
-        typer.echo(f"Booting sandbox {name} from {image_tag}...", err=True)
+        logger.info("Booting sandbox %s from %s...", name, image_tag)
         _fail_on_occupied_ports(config)
         invoker.run(
             build_run_args(
@@ -820,9 +855,9 @@ def _ensure_sandbox_running(
 
     ready, last_error = _probe_dockerd(invoker, name)
     if ready:
-        typer.echo("dockerd is ready in the guest.", err=True)
+        logger.info("dockerd is ready in the guest.")
     else:
-        typer.echo(_dockerd_warning(name, last_error), err=True)
+        logger.warning("%s", _dockerd_warning(name, last_error))
 
 
 @app.command()
@@ -920,6 +955,7 @@ def destroy(
 
 @app.command(name="exec")
 def exec_(
+    ctx: typer.Context,
     command: Annotated[
         list[str] | None,
         typer.Argument(
@@ -976,9 +1012,13 @@ def exec_(
     """Run a command (or an ACP session) in the workspace sandbox.
 
     Boot the sandbox first with 'msb-circus up'; this command boots it
-    automatically when it is not running. In ACP mode, all diagnostics go
-    to stderr and stdout carries only the ACP byte stream.
+    automatically when it is not running. In ACP mode, warnings and status
+    messages go to the log file only (never stderr, which the ACP backend
+    treats as an error channel) and stdout carries only the ACP byte
+    stream. Fatal errors still print to stderr right before exiting.
     """
+    if acp:
+        _configure_acp_logging(ctx.obj)
     config, invoker = _resolve_invoker(workspace)
     name = sandbox_name_for_workspace(workspace)
     cmd = list(command) if command else list(config.agent.command)

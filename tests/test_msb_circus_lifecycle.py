@@ -214,7 +214,7 @@ def test_up_warns_on_port_drift_for_existing_sandbox(tmp_path, fake_msb):
     )
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
-    assert "port forwards" in result.output
+    assert "Port forwards" in result.output
     assert "differ" in result.output
     assert not [c for c in fake_msb["calls"] if c[0] == "run"]
 

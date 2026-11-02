@@ -157,6 +157,29 @@ def test_invoker_times_out(tmp_path):
         MsbInvoker(fake).run(["list"], timeout=0.2)
 
 
+def test_invoker_run_never_reads_host_stdin(tmp_path, monkeypatch):
+    """Helper invocations must not consume the host's stdin descriptor.
+
+    Piped ``msb exec`` reads host stdin unconditionally (forwarding it to the
+    guest). When msb-circus probes the sandbox or writes the pi trust file,
+    an inherited stdin would steal bytes from a concurrent ACP stream — for
+    example the editor's initialize request.
+    """
+    recorded: dict = {}
+    real_run = msb_module.subprocess.run
+
+    def fake_run(argv, **kwargs):
+        recorded["stdin"] = kwargs.get("stdin")
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(msb_module.subprocess, "run", fake_run)
+    fake = tmp_path / "msb"
+    fake.write_text("#!/bin/sh\necho ok\n")
+    fake.chmod(0o755)
+    MsbInvoker(fake).run(["list"])
+    assert recorded["stdin"] is subprocess.DEVNULL
+
+
 def test_version_probe_uses_real_bundled_binary_when_available():
     """Smoke check: the bundled msb reports the installed wheel version."""
     pytest.importorskip("microsandbox")
