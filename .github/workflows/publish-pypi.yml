@@ -20,7 +20,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v10.3.0
+        uses: astral-sh/setup-uv@v10.3.2
         with:
           enable-cache: false
           version: latest-known
@@ -88,7 +88,7 @@ jobs:
 
     steps:
       - name: Set up uv
-        uses: astral-sh/setup-uv@v10.3.0
+        uses: astral-sh/setup-uv@v10.3.2
         with:
           enable-cache: false
           version: latest-known
@@ -100,7 +100,7 @@ jobs:
           path: dist/
 
       - name: Generate PEP 740 attestations
-        uses: astral-sh/attest-action@v0.0.6
+        uses: astral-sh/attest-action@v0.0.7
 
       - name: Publish to PyPI
         run: uv publish
