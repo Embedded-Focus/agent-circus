@@ -24,6 +24,7 @@ from .config import (
 from .envs import parse_env_assignments, resolve_passthrough
 from .exceptions import ConfigurationError, MsbCircusError, MsbCommandError
 from .exec_ import build_exec_args, build_write_trust_args, run_acp_stream
+from .hostports import find_occupied_ports
 from .images import (
     build_image_inspect_args,
     build_load_args,
@@ -631,6 +632,32 @@ def _warn_on_port_drift(invoker: MsbInvoker, config: MsbConfig, name: str) -> No
     )
 
 
+def _fail_on_occupied_ports(config: MsbConfig) -> None:
+    """Hard-fail when a configured host port is already bound on the host.
+
+    msb does not reliably fail at boot when the host port is held by
+    another process (e.g. a second VM); the forward then only answers
+    with empty replies. The probe is best-effort: a port grabbed between
+    probe and boot is still reported by msb itself.
+
+    :param config: Resolved msb-circus configuration.
+    :raises typer.Exit: If any configured host port is occupied.
+    """
+    occupied = find_occupied_ports(config.port_forwards)
+    if not occupied:
+        return
+    detail = ", ".join(
+        f"{f.host}:{f.host_port} -> {f.guest_port}/{f.protocol}" for f in occupied
+    )
+    typer.echo(
+        f"Error: host port(s) already bound by another process: {detail}. "
+        "Stop the conflicting process (another VM or sandbox?) or change "
+        "host_port in the [[port_forwards]] entry.",
+        err=True,
+    )
+    raise typer.Exit(code=1)
+
+
 def _pi_trust_dirs(config: MsbConfig) -> list[str]:
     """Return the guest directories to pre-trust for pi and pi-acp.
 
@@ -749,11 +776,13 @@ def _ensure_sandbox_running(
 
     if existing is not None:
         typer.echo(f"Starting existing sandbox {name}...", err=True)
+        _fail_on_occupied_ports(config)
         invoker.run(build_start_args(name))
         _ensure_pi_trust(invoker, config, name)
         _warn_on_port_drift(invoker, config, name)
     else:
         typer.echo(f"Booting sandbox {name} from {image_tag}...", err=True)
+        _fail_on_occupied_ports(config)
         invoker.run(
             build_run_args(
                 name=name,
@@ -812,8 +841,16 @@ def start(
     ] = Path("."),
 ) -> None:
     """Start the workspace sandbox and verify dockerd readiness."""
-    _config, invoker = _resolve_invoker(workspace)
+    config, invoker = _resolve_invoker(workspace)
     name = sandbox_name_for_workspace(workspace)
+    # A running sandbox holds its own forwarded ports; only probe before a
+    # real start. If the status probe fails, still run the check.
+    try:
+        running = {s.name for s in _list_sandboxes(invoker, running_only=True)}
+    except (MsbCommandError, ConfigurationError):
+        running = set()
+    if name not in running:
+        _fail_on_occupied_ports(config)
     invoker.run(build_start_args(name))
     ready, last_error = _probe_dockerd(invoker, name)
     if ready:

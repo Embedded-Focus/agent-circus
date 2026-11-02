@@ -1,6 +1,7 @@
 """Tests for the msb-circus lifecycle commands: up, stop, start, destroy."""
 
 import json
+import socket
 from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar
@@ -142,6 +143,48 @@ def test_up_publishes_configured_port_forwards(tmp_path, fake_msb):
     assert args[args.index("--port", args.index("--port") + 1) + 1] == (
         "0.0.0.0:18080:8080/udp"
     )
+
+
+def test_up_fails_when_configured_port_is_already_bound(tmp_path, fake_msb):
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b"[[port_forwards]]\ncontainer_port = 8000\n"
+    )
+    blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    blocker.bind(("127.0.0.1", 0))
+    blocker.listen(1)
+    try:
+        host_port = blocker.getsockname()[1]
+        (config_dir / "config.toml").write_bytes(
+            f"[[port_forwards]]\ncontainer_port = 8000\nhost_port = {host_port}\n".encode()
+        )
+        result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "already bound" in result.stderr
+        assert not [c for c in fake_msb["calls"] if c[0] == "run"]
+    finally:
+        blocker.close()
+
+
+def test_up_skips_port_check_when_reusing_running_sandbox(tmp_path, fake_msb):
+    """A running sandbox holds its own forwarded ports; the probe must not fail."""
+    name = sandbox_name_for_workspace(tmp_path)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    blocker.bind(("127.0.0.1", 0))
+    blocker.listen(1)
+    try:
+        host_port = blocker.getsockname()[1]
+        (config_dir / "config.toml").write_bytes(
+            f"[[port_forwards]]\ncontainer_port = 8000\nhost_port = {host_port}\n".encode()
+        )
+        fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+        result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+        assert result.exit_code == 0
+    finally:
+        blocker.close()
 
 
 def test_up_warns_on_port_drift_for_existing_sandbox(tmp_path, fake_msb):

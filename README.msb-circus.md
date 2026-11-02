@@ -407,9 +407,12 @@ guest loopback interface (`127.0.0.1`) instead of all interfaces. The
 forward targets the guest network interface, so it cannot reach a
 loopback-bound server. Restart the service bound to `0.0.0.0` in the guest,
 for example `opencode serve --hostname 0.0.0.0 --port <port>`. If that does
-not help, check whether another process on the host holds the port; msb
-does not reliably fail at boot when the host port is already taken, so
-msb-circus does not check for conflicts either.
+not help, check whether another process
+on the host holds the port. msb-circus probes every configured host port
+before booting and fails with the conflicting `host:port -> guest/protocol`
+mapping when it is already bound (for example by a second VM); the probe is
+best-effort, so msb may still report a conflict grabbed between probe and
+boot.
 
 ## Troubleshooting
 
