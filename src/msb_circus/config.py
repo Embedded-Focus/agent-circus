@@ -144,8 +144,10 @@ class MsbConfig:
     :ivar port_forwards: Guest ports published on the host
         (``[[port_forwards]]``, agent-circus compatible).
     :ivar env: Sandbox-level environment variables (non-secret defaults).
-    :ivar env_passthrough: Names of host environment variables required to
-        exist on the host and be passed into the sandbox.
+    :ivar env_passthrough: Host environment variables to pass into the
+        sandbox. Literal names are required to exist on the host; entries
+        are otherwise treated as glob or ``re:``-prefixed regex patterns
+        (like agent-circus's ``filter_env``).
     :ivar logging_level: Log level for msb-circus's own logging.
     :ivar logging_file: Optional log file path.
     """

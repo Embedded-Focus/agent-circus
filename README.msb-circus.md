@@ -344,8 +344,11 @@ msb-circus exec -e OPENAI_API_KEY=sk-... -- pi
 ```
 
 msb-circus reads the variables under `env_passthrough` from your host shell
-at every command. If a variable is unset, the command fails before msb
-starts. Log output never contains secret values.
+at every command. Entries are patterns, like in agent-circus: a plain name
+must exist, or the command fails before msb starts. A glob (`LG_*`) or a
+regex with the `re:` prefix (`re:^LG_`, matched case-insensitively) expands
+to every matching variable that is set. Log output never contains secret
+values.
 
 ## Networking
 

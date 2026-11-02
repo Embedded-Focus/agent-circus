@@ -175,5 +175,42 @@ def test_resolve_passthrough_fails_fast_on_missing():
         resolve_passthrough(("MISSING_ONE", "MISSING_TWO"), environ={"PRESENT": "x"})
 
 
+def test_resolve_passthrough_regex_prefix_expands_matches():
+    result = resolve_passthrough(
+        ("re:^LG_",), environ={"LG_APIKEY": "123", "OTHER": "x"}
+    )
+    assert result == {"LG_APIKEY": "123"}
+
+
+def test_resolve_passthrough_regex_is_case_insensitive():
+    result = resolve_passthrough(("re:^github_",), environ={"GITHUB_HOST": "x"})
+    assert result == {"GITHUB_HOST": "x"}
+
+
+def test_resolve_passthrough_regex_no_match_is_not_an_error():
+    assert resolve_passthrough(("re:^NOMATCH_",), environ={"A": "1"}) == {}
+
+
+def test_resolve_passthrough_glob_expands_matches():
+    result = resolve_passthrough(("LG_*",), environ={"LG_APIKEY": "1", "HOME": "/h"})
+    assert result == {"LG_APIKEY": "1"}
+
+
+def test_resolve_passthrough_glob_no_match_is_not_an_error():
+    assert resolve_passthrough(("NOMATCH_*",), environ={"A": "1"}) == {}
+
+
+def test_resolve_passthrough_literal_names_still_required():
+    with pytest.raises(ConfigurationError, match="TOKEN"):
+        resolve_passthrough(("TOKEN",), environ={"TOKENX": "1"})
+
+
+def test_resolve_passthrough_mixed_literals_and_patterns():
+    result = resolve_passthrough(
+        ("FIXED", "re:^LG_"), environ={"FIXED": "f", "LG_A": "1", "LG_B": "2"}
+    )
+    assert result == {"FIXED": "f", "LG_A": "1", "LG_B": "2"}
+
+
 def test_redact_env_hides_values():
     assert redact_env({"KEY": "secret"}) == {"KEY": "<redacted>"}
