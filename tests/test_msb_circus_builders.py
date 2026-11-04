@@ -25,7 +25,7 @@ def test_build_run_args_matches_documented_workflow():
         name="agents-agent-circus",
         image="docker.io/library/msb-agents:26",
         memory="4G",
-        mounts={".": "/workspace"},
+        mounts=[(".", "/workspace")],
         net="public,private",
         workdir="/workspace",
     )
@@ -51,7 +51,7 @@ def test_build_run_args_includes_cpus_env_and_mount_options():
         name="agents-x",
         image="img:1",
         cpus=2,
-        mounts={"/data": "/data:ro"},
+        mounts=[("/data", "/data:ro")],
         env={"FOO": "bar"},
         detach=False,
     )

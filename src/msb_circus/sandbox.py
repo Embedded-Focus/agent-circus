@@ -31,7 +31,7 @@ def build_run_args(
     image: str,
     memory: str = DEFAULT_MEMORY,
     cpus: int | None = None,
-    mounts: dict[str, str] | None = None,
+    mounts: list[tuple[str, str]] | None = None,
     net: str | None = None,
     port_forwards: tuple[PortForward, ...] | list[PortForward] | None = None,
     env: dict[str, str] | None = None,
@@ -50,8 +50,10 @@ def build_run_args(
     :param image: Image reference to boot.
     :param memory: Memory limit (e.g. ``"4G"``).
     :param cpus: Optional CPU count.
-    :param mounts: Host path -> guest spec mapping (guest spec may include
-        options, e.g. ``"/workspace:ro"``).
+    :param mounts: ``(host path, guest spec)`` pairs (guest spec may
+        include options, e.g. ``"/workspace:ro"``). A list because the
+        same host path may be mounted at several guest targets (git
+        worktree mirror).
     :param net: Optional network profile (e.g. ``"public,private"``).
     :param port_forwards: Optional guest ports to publish on the host.
     :param env: Optional sandbox-level environment variables.
@@ -67,7 +69,7 @@ def build_run_args(
     args = ["run", "--name", name, "--memory", memory]
     if cpus is not None:
         args += ["--cpus", str(cpus)]
-    for host, guest in (mounts or {}).items():
+    for host, guest in mounts or []:
         args += ["--volume", f"{host}:{guest}"]
     if root_disk is not None:
         args += ["--root-disk", root_disk]
@@ -175,21 +177,7 @@ def parse_inspect_ports(output: str) -> frozenset[tuple[str, int, int, str]]:
     :raises ConfigurationError: If the output is not valid JSON, has an
         unexpected shape, or contains a malformed port entry.
     """
-    try:
-        document = json.loads(output)
-    except json.JSONDecodeError as e:
-        raise ConfigurationError(
-            f"Could not parse msb inspect output as JSON: {e}"
-        ) from e
-    if not isinstance(document, dict):
-        raise ConfigurationError("Unexpected msb inspect output: expected an object")
-    config = document.get("config")
-    if not isinstance(config, dict):
-        config = document.get("active_config")
-    if not isinstance(config, dict):
-        raise ConfigurationError(
-            "Unexpected msb inspect output: no 'config' or 'active_config' object"
-        )
+    config = _load_inspect_config(output)
     network = config.get("network")
     ports = network.get("ports") if isinstance(network, dict) else None
     if ports is None:
@@ -323,6 +311,53 @@ def _walk_dicts(node: Any) -> Iterator[dict[str, Any]]:
             yield from _walk_dicts(item)
 
 
+def _load_inspect_config(output: str) -> dict[str, Any]:
+    """Extract the persisted sandbox config object from inspect output.
+
+    :param output: Raw stdout of an ``msb inspect --format json`` command.
+    :returns: The ``config`` (or ``active_config``) object.
+    :raises ConfigurationError: If the output is not valid JSON or does
+        not have the expected top-level shape.
+    """
+    try:
+        document = json.loads(output)
+    except json.JSONDecodeError as e:
+        raise ConfigurationError(
+            f"Could not parse msb inspect output as JSON: {e}"
+        ) from e
+    if not isinstance(document, dict):
+        raise ConfigurationError("Unexpected msb inspect output: expected an object")
+    config = document.get("config", document.get("active_config"))
+    if not isinstance(config, dict):
+        raise ConfigurationError(
+            "Unexpected msb inspect output: no 'config' or 'active_config' object"
+        )
+    return config
+
+
+def parse_inspect_bind_mounts(output: str) -> list[tuple[str, str]]:
+    """Extract bind mounts from ``msb inspect --format json`` output.
+
+    The parse is defensive: only entries whose ``type`` is ``"Bind"``
+    with string ``host`` and ``guest`` fields are returned (the shape of
+    microsandbox's persisted ``VolumeMount::Bind``); anything else is
+    ignored.
+
+    :param output: Raw stdout of the inspect command.
+    :returns: ``(host_path, guest_path)`` pairs of all bind mounts.
+    :raises ConfigurationError: If the output is not valid JSON or does
+        not have the expected top-level shape.
+    """
+    config = _load_inspect_config(output)
+    return [
+        (entry["host"], entry["guest"])
+        for entry in _walk_dicts(config)
+        if entry.get("type") == "Bind"
+        and isinstance(entry.get("host"), str)
+        and isinstance(entry.get("guest"), str)
+    ]
+
+
 def parse_inspect_disk_config(output: str) -> GuestDiskConfig:
     """Extract disk settings from ``msb inspect --format json`` output.
 
@@ -340,19 +375,7 @@ def parse_inspect_disk_config(output: str) -> GuestDiskConfig:
     :raises ConfigurationError: If the output is not valid JSON or does
         not have the expected top-level shape.
     """
-    try:
-        document = json.loads(output)
-    except json.JSONDecodeError as e:
-        raise ConfigurationError(
-            f"Could not parse msb inspect output as JSON: {e}"
-        ) from e
-    if not isinstance(document, dict):
-        raise ConfigurationError("Unexpected msb inspect output: expected an object")
-    config = document.get("config", document.get("active_config"))
-    if not isinstance(config, dict):
-        raise ConfigurationError(
-            "Unexpected msb inspect output: no 'config' or 'active_config' object"
-        )
+    config = _load_inspect_config(output)
 
     result = GuestDiskConfig()
     for entry in _walk_dicts(config):

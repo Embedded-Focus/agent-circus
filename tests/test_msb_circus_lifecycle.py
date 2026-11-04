@@ -350,6 +350,66 @@ def test_up_builds_when_requested(tmp_path, fake_msb):
     assert [c[0] for c in fake_msb["calls"] if c[0] == "run"] == ["run"]
 
 
+def test_up_boots_with_git_worktree_mirror_mount(tmp_path, fake_msb, monkeypatch):
+    """The mirror adds a second --volume of the workspace at its host path."""
+    # Hermetic $HOME so existing agent config directories on the host
+    # (~/.claude, ~/.codex) cannot add volumes to the assertion below.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    name = sandbox_name_for_workspace(tmp_path)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b"[git]\nworktree_mirror = true\n")
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    assert len(run_calls) == 1
+    volumes = [
+        run_calls[0][i + 1] for i, arg in enumerate(run_calls[0]) if arg == "--volume"
+    ]
+    assert volumes == [f"{tmp_path}:/workspace", f"{tmp_path}:{tmp_path}"]
+    assert run_calls[0][run_calls[0].index("--name") + 1] == name
+
+
+def test_up_warns_on_mount_drift_for_existing_sandbox(tmp_path, fake_msb):
+    """Flag enabled after creation: the mount is missing and must warn."""
+    name = sandbox_name_for_workspace(tmp_path)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b"[git]\nworktree_mirror = true\n")
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    # Persisted config has no bind mount at the host path.
+    fake_msb["inspect_json"] = json.dumps({"config": {"unrelated": 1}})
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "worktree_mirror" in result.output
+    assert "rm -f" in result.output
+    assert not [c for c in fake_msb["calls"] if c[0] == "run"]
+
+
+def test_up_does_not_warn_on_mount_drift_when_mirror_mounted(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b"[git]\nworktree_mirror = true\n")
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["inspect_json"] = json.dumps(
+        {
+            "config": {
+                "volumes": [
+                    {
+                        "type": "Bind",
+                        "host": str(tmp_path),
+                        "guest": str(tmp_path),
+                    }
+                ]
+            }
+        }
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "worktree_mirror" not in result.output
+
+
 def test_up_mounts_additional_dirs(tmp_path, fake_msb):
     config_dir = tmp_path / ".agent-circus"
     config_dir.mkdir()

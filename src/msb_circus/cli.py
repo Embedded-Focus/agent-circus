@@ -43,6 +43,7 @@ from .sandbox import (
     build_start_args,
     build_stop_args,
     configured_ports,
+    parse_inspect_bind_mounts,
     parse_inspect_disk_config,
     parse_inspect_ports,
     parse_root_disk_spec,
@@ -809,6 +810,41 @@ def _warn_on_disk_drift(invoker: MsbInvoker, config: MsbConfig, name: str) -> No
     )
 
 
+def _warn_on_mount_drift(
+    invoker: MsbInvoker, config: MsbConfig, name: str, workspace: Path
+) -> None:
+    """Warn when the git worktree mirror is configured but the sandbox lacks it.
+
+    msb fixes mounts at sandbox creation, so enabling
+    ``[git] worktree_mirror`` only applies to a newly created sandbox.
+    Failures here are non-fatal: an unreadable or unrecognized inspect
+    output skips the check instead of reporting a false mismatch.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param config: Resolved msb-circus configuration.
+    :param name: Sandbox name to inspect.
+    :param workspace: Workspace directory whose host path should be mirrored.
+    """
+    if not config.git_worktree_mirror:
+        return
+    try:
+        result = invoker.run(build_inspect_args(name))
+        binds = parse_inspect_bind_mounts(result.stdout)
+    except (MsbCommandError, ConfigurationError) as e:
+        logger.debug("Mount drift check for %s failed: %s", name, e)
+        return
+    host_path = str(workspace)
+    if (host_path, host_path) in binds:
+        return
+    logger.warning(
+        "git.worktree_mirror is enabled in the configuration, but sandbox %s "
+        "was created without the workspace mirror mount. Mounts are fixed at "
+        "sandbox creation, so the change is not applied to this sandbox. "
+        "Remove and re-create it to apply: msb-circus rm -f && msb-circus up.",
+        name,
+    )
+
+
 def _fail_on_occupied_ports(config: MsbConfig) -> None:
     """Hard-fail when a configured host port is already bound on the host.
 
@@ -947,6 +983,7 @@ def _ensure_sandbox_running(
         _ensure_pi_trust(invoker, config, name)
         _warn_on_port_drift(invoker, config, name)
         _warn_on_disk_drift(invoker, config, name)
+        _warn_on_mount_drift(invoker, config, name, workspace)
         _check_dockerd(invoker, config, name)
         return
 
@@ -957,6 +994,7 @@ def _ensure_sandbox_running(
         _ensure_pi_trust(invoker, config, name)
         _warn_on_port_drift(invoker, config, name)
         _warn_on_disk_drift(invoker, config, name)
+        _warn_on_mount_drift(invoker, config, name, workspace)
     else:
         logger.info("Booting sandbox %s from %s...", name, image_tag)
         _fail_on_occupied_ports(config)
@@ -1028,6 +1066,7 @@ def start(
         _fail_on_occupied_ports(config)
     invoker.run(build_start_args(name))
     _warn_on_disk_drift(invoker, config, name)
+    _warn_on_mount_drift(invoker, config, name, workspace)
     if docker_enabled(config):
         ready, last_error = _probe_dockerd(invoker, name)
         if ready:

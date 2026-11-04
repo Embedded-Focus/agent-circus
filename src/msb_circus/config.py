@@ -28,7 +28,7 @@ USER_CONFIG_DIR_ENV_VAR = "XDG_CONFIG_HOME"
 
 #: Top-level config keys interpreted by msb-circus; everything else warns.
 SUPPORTED_TOP_LEVEL_KEYS: frozenset[str] = frozenset(
-    {"msb", "logging", "env_passthrough", "additional_dirs", "port_forwards"}
+    {"msb", "logging", "env_passthrough", "additional_dirs", "port_forwards", "git"}
 )
 
 DEFAULT_IMAGE_TAG = "docker.io/library/msb-agents:26"
@@ -173,6 +173,9 @@ class MsbConfig:
         sandbox. Literal names are required to exist on the host; entries
         are otherwise treated as glob or ``re:``-prefixed regex patterns
         (like agent-circus's ``filter_env``).
+    :ivar git_worktree_mirror: Mount the workspace a second time at its
+        exact host absolute path (``[git] worktree_mirror``) so Git's
+        recorded paths stay valid across the sandbox boundary.
     :ivar logging_level: Log level for msb-circus's own logging.
     :ivar logging_file: Optional log file path.
     """
@@ -187,6 +190,7 @@ class MsbConfig:
     port_forwards: tuple[PortForward, ...] = ()
     env: dict[str, str] = field(default_factory=dict)
     env_passthrough: tuple[str, ...] = ()
+    git_worktree_mirror: bool = False
     logging_level: str = "INFO"
     logging_file: str | None = None
 
@@ -343,20 +347,34 @@ def _parse_additional_dirs(raw: Any) -> tuple[AdditionalDir, ...]:
     return tuple(dirs)
 
 
-def effective_mounts(config: MsbConfig, workspace: Path) -> dict[str, str]:
-    """Combine ``[msb.mounts]`` and ``additional_dirs`` into msb volumes.
+def effective_mounts(config: MsbConfig, workspace: Path) -> list[tuple[str, str]]:
+    """Combine ``[msb.mounts]``, the git worktree mirror, and
+    ``additional_dirs`` into msb volumes.
 
-    Resolves the ``.`` workspace mount to the absolute workspace path and
-    appends every additional directory as ``/workspaces/<name>``,
-    read-only when the entry says so.
+    Resolves the ``.`` workspace mount to the absolute workspace path,
+    optionally adds the git worktree mirror (the workspace mounted a
+    second time at its exact host absolute path), and appends every
+    additional directory as ``/workspaces/<name>``, read-only when the
+    entry says so.
 
     :param config: Resolved msb-circus configuration.
     :param workspace: Workspace directory.
-    :returns: Host path -> guest mount specification mapping.
+    :returns: ``(host path, guest mount specification)`` pairs. A list
+        because the same host path may appear at several guest targets.
     :raises ConfigurationError: If a guest target collides with another.
     """
-    mounts = resolve_mounts(config.mounts, workspace)
-    taken = {guest.split(":", 1)[0] for guest in mounts.values()}
+    resolved = resolve_mounts(config.mounts, workspace)
+    mounts: list[tuple[str, str]] = list(resolved.items())
+    taken = {guest.split(":", 1)[0] for guest in resolved.values()}
+    if config.git_worktree_mirror:
+        host_path = str(workspace)
+        if host_path in taken:
+            raise ConfigurationError(
+                f"git.worktree_mirror cannot mount the workspace at {host_path!r}: "
+                "the path is already used as a mount target"
+            )
+        mounts.append((host_path, host_path))
+        taken.add(host_path)
     for entry in config.additional_dirs:
         guest = f"{ADDITIONAL_DIRS_GUEST_BASE}/{entry.name}"
         if guest in taken:
@@ -365,7 +383,7 @@ def effective_mounts(config: MsbConfig, workspace: Path) -> dict[str, str]:
                 f"existing mount target {guest}"
             )
         taken.add(guest)
-        mounts[entry.path] = f"{guest}:ro" if entry.readonly else guest
+        mounts.append((entry.path, f"{guest}:ro" if entry.readonly else guest))
     return mounts
 
 
@@ -554,6 +572,33 @@ def _parse_agent(raw: Any) -> AgentConfig:
     return AgentConfig(command=tuple(command), workdir=workdir)
 
 
+def _parse_git(raw: Any) -> bool:
+    """Parse the ``[git]`` table.
+
+    Only ``worktree_mirror`` is interpreted. The remaining agent-circus
+    git keys (``config_path``, ``signing_key_path``, ...) describe
+    Docker-specific mounts and have no msb-circus meaning; they warn and
+    are ignored.
+
+    :param raw: Raw table value or ``None``.
+    :returns: The ``worktree_mirror`` flag.
+    :raises ConfigurationError: If the table is malformed.
+    """
+    if raw is None:
+        return False
+    if not isinstance(raw, dict):
+        raise ConfigurationError("git must be a table")
+    worktree_mirror = raw.get("worktree_mirror", False)
+    if not isinstance(worktree_mirror, bool):
+        raise ConfigurationError("git.worktree_mirror must be a boolean")
+    for key in raw:
+        if key != "worktree_mirror":
+            logger.warning(
+                "Unsupported config key 'git.%s' for msb-circus — ignoring", key
+            )
+    return worktree_mirror
+
+
 def _parse_string_dict(raw: Any, label: str) -> dict[str, str]:
     """Parse a ``KEY = "value"`` table into a plain string dict.
 
@@ -639,6 +684,7 @@ def parse_config(config: dict[str, Any]) -> MsbConfig:
         port_forwards=_parse_port_forwards(config.get("port_forwards")),
         env=_parse_string_dict(msb_raw.get("env"), "msb.env"),
         env_passthrough=_parse_env_passthrough(config.get("env_passthrough")),
+        git_worktree_mirror=_parse_git(config.get("git")),
         logging_level=level,
         logging_file=log_file,
     )

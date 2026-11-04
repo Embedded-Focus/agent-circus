@@ -212,9 +212,11 @@ def test_effective_mounts_appends_additional_dirs(tmp_path):
         }
     )
     mounts = effective_mounts(config, tmp_path)
-    assert mounts[str(tmp_path)] == "/workspace"
-    assert mounts["/home/user/shared-libs"] == "/workspaces/shared-libs:ro"
-    assert mounts["/home/user/other-project"] == "/workspaces/other"
+    assert mounts == [
+        (str(tmp_path), "/workspace"),
+        ("/home/user/shared-libs", "/workspaces/shared-libs:ro"),
+        ("/home/user/other-project", "/workspaces/other"),
+    ]
 
 
 def test_effective_mounts_rejects_guest_target_collision(tmp_path):

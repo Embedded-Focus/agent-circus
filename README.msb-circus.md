@@ -286,9 +286,10 @@ layering as agent-circus: a user-global file from
 project file wins.
 
 msb-circus applies its own `[msb]` table, plus the `logging`,
-`env_passthrough`, `additional_dirs`, and `port_forwards` keys of
-agent-circus. Every other key produces a warning. agent-circus in turn logs
-a warning for the unknown `[msb]` table and continues.
+`env_passthrough`, `additional_dirs`, `git` (only `worktree_mirror`), and
+`port_forwards` keys of agent-circus. Every other key produces a warning.
+agent-circus in turn logs a warning for the unknown `[msb]` table and
+continues.
 
 msb-circus logs to stderr. Set the level and an optional log file either on
 the command line or in the config; the command line wins.
@@ -491,6 +492,51 @@ images and containers in it. The disk survives `stop` and `start`.
 
 Host storage lives under the msb storage root (`~/.microsandbox` by
 default). A flat root or a docker disk adds its size there per sandbox.
+
+## Git Worktrees
+
+Set `git.worktree_mirror = true` when the repository is also used outside
+the sandbox and you need transparent Git worktree support:
+
+``` toml
+[git]
+worktree_mirror = true
+```
+
+This adds a second bind mount for the workspace at its exact host absolute
+path inside the sandbox (in addition to the standard `/workspace` mount).
+Both paths point to the same directory, so Git's recorded absolute paths
+are valid on both sides of the sandbox boundary — `git worktree list`,
+`git worktree add`, and all other operations that consume or emit absolute
+paths work without any manual path rewriting.
+
+The mount applies at sandbox creation, like all msb mounts. msb-circus
+warns when an existing sandbox was created without the mirror. Remove and
+re-create the sandbox to apply the flag:
+
+``` shell
+msb-circus rm && msb-circus up
+```
+
+For best results, tell your agent to prefer the host path over
+`/workspace` for Git operations — Git records the paths it is invoked
+with, so a worktree created under `/workspace` may record paths that only
+exist inside the sandbox. Paste this into your `AGENTS.md` (adjust the
+path to your repository location):
+
+``` markdown
+## Git Operations
+
+This repository is mounted at `/home/user/myrepo` inside the agent
+sandbox in addition to the standard `/workspace` mount. When performing
+Git operations that involve absolute paths — such as `git worktree`
+commands — use `/home/user/myrepo` rather than `/workspace` to ensure
+Git's recorded paths remain consistent with the host.
+```
+
+The remaining agent-circus `[git]` keys (`config_path`,
+`signing_key_path`, ...) describe Docker-specific mounts and are not
+supported; msb-circus warns about them and ignores them.
 
 ## Troubleshooting
 
