@@ -91,11 +91,13 @@ Running sessions keep the backend they started with."
 (defun rpo/agent-shell-circus--msb-harness (identifier)
   "Return the msb-circus harness command for IDENTIFIER.
 
-The msb-circus sandbox carries Pi and OpenCode. Every identifier
-without a harness in the sandbox falls back to Pi through the
-pi-acp adapter."
+The msb-circus sandbox carries Pi, OpenCode, Claude Code, and
+Codex. Every identifier without a harness in the sandbox falls
+back to Pi through the pi-acp adapter."
   (pcase identifier
     ('opencode '("opencode" "acp"))
+    ('claude-code '("claude-agent-acp"))
+    ('codex '("codex-acp"))
     (_ '("pi-acp"))))
 
 (defun rpo/agent-shell-circus-resolve-path (path)

@@ -25,16 +25,21 @@ COPY --from=docker.io/library/docker:29.9.2-dind@sha256:9e79b879b177fbd72c34376a
 # Runtime dependencies for dockerd (mirrors the upstream dind image's dep
 # list): iptables/ip6tables for bridge networking, pigz/xz-utils for layer
 # compression, uidmap for userns-remap. ca-certificates provides the system
-# trust store that dockerd (Go crypto/x509) reads for registry pulls. This is
-# the only apt layer (apt has no digest pinning); everything else is
-# hash-referenced.
+# trust store that dockerd (Go crypto/x509) reads for registry pulls. procps
+# is needed by codex, whose pid-managed app server shells out to `ps` at
+# startup. bubblewrap is codex's Linux sandboxing backend (codex falls back
+# to its bundled copy, but the distro package is the supported path).
+# This is the only apt layer (apt has no digest pinning); everything
+# else is hash-referenced.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        bubblewrap \
         ca-certificates \
         git \
         iptables \
         jq \
         pigz \
+        procps \
         uidmap \
         xz-utils \
     && rm -rf /var/lib/apt/lists/* \
@@ -122,9 +127,21 @@ ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 
 FROM base AS agents
 
-# Exact versions; npm enforces registry integrity hashes on install
+# NODE_OPTIONS matches agent-circus's claude-code service (large JS heap for
+# long Claude Code sessions).
+ENV NODE_OPTIONS=--max-old-space-size=4096
+
+# Exact versions; npm enforces registry integrity hashes on install.
+# claude-code and @opencode/cli run install scripts and are allow-listed
+# explicitly (npm blocks lifecycle scripts otherwise). Versions are kept in
+# sync with the agent-circus template via agent-circus-update-templates.
 RUN npm install --global \
-        --allow-scripts=@opencode/cli @opencode/cli@2.2.5 \
+        --allow-scripts=@opencode/cli,@anthropic-ai/claude-code \
+        @opencode/cli@2.2.5 \
+        @anthropic-ai/claude-code@2.1.316 \
+        @agentclientprotocol/claude-agent-acp@0.100.0 \
+        @openai/codex@0.166.0 \
+        @agentclientprotocol/codex-acp@2.5.0 \
         @earendil-works/pi-coding-agent@1.5.0 pi-acp@0.0.34
 
 CMD ["bash"]

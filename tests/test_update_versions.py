@@ -142,6 +142,10 @@ def test_msb_pins_cover_every_pinned_component_in_msb_dockerfile() -> None:
         "uv (msb-agents)",
         "docker (msb-agents)",
         "opencode (msb-agents)",
+        "claude-code (msb-agents)",
+        "claude-agent-acp (msb-agents)",
+        "codex (msb-agents)",
+        "codex-acp (msb-agents)",
         "pi (msb-agents)",
         "pi-acp (msb-agents)",
     }

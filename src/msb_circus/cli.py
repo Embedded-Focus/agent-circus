@@ -16,10 +16,12 @@ import typer
 from . import __version__
 from .config import (
     ADDITIONAL_DIRS_GUEST_BASE,
+    AGENT_CONFIG_FILE_COPIES,
     MsbConfig,
     docker_enabled,
     effective_mounts,
     load_config,
+    resolve_agent_config_mounts,
     sandbox_name_for_workspace,
 )
 from .envs import parse_env_assignments, resolve_passthrough
@@ -36,6 +38,7 @@ from .images import (
 from .msb import MsbInvoker, check_version, resolve_msb_binary
 from .sandbox import (
     SandboxInfo,
+    build_copy_args,
     build_inspect_args,
     build_list_args,
     build_remove_args,
@@ -912,6 +915,74 @@ def _ensure_pi_trust(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
         )
 
 
+def _ensure_agent_config_copies(invoker: MsbInvoker, name: str) -> None:
+    """Copy host agent harness config files into the guest (one-way).
+
+    Refreshes every entry of :data:`AGENT_CONFIG_FILE_COPIES` after boot or
+    start so the guest sees the host's current settings. Host files that do
+    not exist are skipped silently (the harness starts without them, as
+    before); a failed ``msb copy`` warns and leaves the previous guest copy
+    in place. The copies are best-effort and never block the boot.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param name: Sandbox name.
+    """
+    home = Path.home()
+    for harness, below_home, guest in AGENT_CONFIG_FILE_COPIES:
+        host_file = home / below_home
+        if not host_file.is_file():
+            logger.debug(
+                "Skipping %s config copy: %s does not exist on the host",
+                harness,
+                host_file,
+            )
+            continue
+        try:
+            invoker.run(build_copy_args(name, str(host_file), guest))
+        except MsbCommandError as e:
+            logger.warning(
+                "Could not copy the %s config file %s into sandbox %s; the "
+                "harness keeps its previous guest copy (%s)",
+                harness,
+                host_file,
+                name,
+                e,
+            )
+
+
+def _warn_on_agent_config_mount_drift(invoker: MsbInvoker, name: str) -> None:
+    """Warn when an expected agent config-dir mount is missing.
+
+    msb fixes mounts at sandbox creation, so adding a config directory
+    mount (or creating ``~/.claude`` / ``~/.codex`` after the sandbox was
+    created) only applies to a newly created sandbox. Failures here are
+    non-fatal: an unreadable inspect output skips the check.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param name: Sandbox name to inspect.
+    """
+    expected = resolve_agent_config_mounts()
+    if not expected:
+        return
+    try:
+        result = invoker.run(build_inspect_args(name))
+        binds = parse_inspect_bind_mounts(result.stdout)
+    except (MsbCommandError, ConfigurationError) as e:
+        logger.debug("Agent config mount drift check for %s failed: %s", name, e)
+        return
+    missing = [guest for host, guest in expected if (host, guest) not in binds]
+    if not missing:
+        return
+    logger.warning(
+        "Agent config directory mounts (%s) are missing from sandbox %s. "
+        "Mounts are fixed at sandbox creation, so the harnesses start "
+        "without host config and credentials in this sandbox. Remove and "
+        "re-create it to apply: msb-circus rm -f && msb-circus up.",
+        ", ".join(missing),
+        name,
+    )
+
+
 def _ensure_sandbox_running(
     invoker: MsbInvoker,
     config: MsbConfig,
@@ -981,6 +1052,8 @@ def _ensure_sandbox_running(
     if existing is not None and (existing.status or "").lower() == "running":
         logger.info("Sandbox %s is already running; reusing it.", name)
         _ensure_pi_trust(invoker, config, name)
+        _ensure_agent_config_copies(invoker, name)
+        _warn_on_agent_config_mount_drift(invoker, name)
         _warn_on_port_drift(invoker, config, name)
         _warn_on_disk_drift(invoker, config, name)
         _warn_on_mount_drift(invoker, config, name, workspace)
@@ -992,6 +1065,8 @@ def _ensure_sandbox_running(
         _fail_on_occupied_ports(config)
         invoker.run(build_start_args(name))
         _ensure_pi_trust(invoker, config, name)
+        _ensure_agent_config_copies(invoker, name)
+        _warn_on_agent_config_mount_drift(invoker, name)
         _warn_on_port_drift(invoker, config, name)
         _warn_on_disk_drift(invoker, config, name)
         _warn_on_mount_drift(invoker, config, name, workspace)
@@ -1004,7 +1079,9 @@ def _ensure_sandbox_running(
                 image=image_tag,
                 memory=config.sandbox.memory,
                 cpus=config.sandbox.cpus,
-                mounts=effective_mounts(config, workspace),
+                mounts=(
+                    effective_mounts(config, workspace) + resolve_agent_config_mounts()
+                ),
                 net=config.network.mode,
                 port_forwards=config.port_forwards,
                 env=config.env,
@@ -1014,6 +1091,7 @@ def _ensure_sandbox_running(
             )
         )
         _ensure_pi_trust(invoker, config, name)
+        _ensure_agent_config_copies(invoker, name)
 
     _check_dockerd(invoker, config, name)
 

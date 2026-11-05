@@ -42,6 +42,34 @@ DEFAULT_SANDBOX_NAME_PREFIX = "agents"
 DEFAULT_MOUNTS: dict[str, str] = {".": "/workspace"}
 ADDITIONAL_DIRS_GUEST_BASE = "/workspaces"
 
+#: Read-write bind mounts of host agent harness config directories into the
+#: guest, mirroring agent-circus's ``DEFAULT_AGENT_CONFIG_MOUNTS``. Values
+#: are ``(directory below $HOME, guest path)``; the guest runs as root, so
+#: the guest paths live under ``/root``. The mount carries the harness's
+#: credentials file (``.credentials.json`` / ``auth.json``) so token
+#: refreshes persist to the host, and is applied at sandbox creation when
+#: the host directory exists (missing directories are skipped with a
+#: warning). msb fixes mounts at creation, so changes require a re-create.
+AGENT_CONFIG_DIR_MOUNTS: dict[str, tuple[str, str]] = {
+    "claude-code": (".claude", "/root/.claude"),
+    "codex": (".codex", "/root/.codex"),
+}
+
+#: Host agent harness config files copied into the guest (one-way) after
+#: every boot or start. Entries are ``(harness, path below $HOME, guest
+#: path)``. Missing host files are skipped silently; a failed copy warns.
+#: Unlike :data:`AGENT_CONFIG_DIR_MOUNTS` these copies do not round-trip:
+#: guest-side edits are lost on the next refresh.
+AGENT_CONFIG_FILE_COPIES: tuple[tuple[str, str, str], ...] = (
+    ("pi", ".pi/agent/settings.json", "/root/.pi/agent/settings.json"),
+    ("pi", ".pi/agent/models.json", "/root/.pi/agent/models.json"),
+    (
+        "opencode",
+        ".config/opencode/opencode.json",
+        "/root/.config/opencode/opencode.json",
+    ),
+)
+
 
 @dataclass(frozen=True)
 class ImageConfig:
@@ -384,6 +412,40 @@ def effective_mounts(config: MsbConfig, workspace: Path) -> list[tuple[str, str]
             )
         taken.add(guest)
         mounts.append((entry.path, f"{guest}:ro" if entry.readonly else guest))
+    return mounts
+
+
+def resolve_agent_config_mounts(
+    environ: dict[str, str] | None = None,
+) -> list[tuple[str, str]]:
+    """Return bind mounts for existing agent harness config directories.
+
+    Iterates :data:`AGENT_CONFIG_DIR_MOUNTS`, keeps every entry whose host
+    directory (``$HOME/<dir>``) exists, and logs a warning for each missing
+    one so silent skips stay visible. Guest paths assume the msb-circus
+    image's root user.
+
+    :param environ: Environment mapping for the ``$HOME`` lookup, defaults
+        to :data:`os.environ`.
+    :returns: ``(host directory, guest path)`` pairs in declaration order.
+    """
+    env = os.environ if environ is None else environ
+    home = Path(env.get("HOME", str(Path.home())))
+    mounts: list[tuple[str, str]] = []
+    for harness, (below_home, guest) in AGENT_CONFIG_DIR_MOUNTS.items():
+        host_dir = home / below_home
+        if not host_dir.is_dir():
+            logger.warning(
+                "Host config directory %s for %s not found; skipping its "
+                "sandbox mount (the harness starts without host config and "
+                "credentials). Log in inside the guest or create the "
+                "directory, then re-create the sandbox: msb-circus rm -f "
+                "&& msb-circus up.",
+                host_dir,
+                harness,
+            )
+            continue
+        mounts.append((str(host_dir), guest))
     return mounts
 
 

@@ -34,7 +34,13 @@ The supported agent harnesses come preinstalled in the image:
 
 - [Pi](https://pi.dev/) (Earendil Works), the default interactive harness
 - [OpenCode](https://opencode.ai/) (SST)
+- [Claude Code](https://github.com/anthropics/claude-code) (Anthropic)
+- [Codex](https://github.com/openai/codex) (OpenAI)
 - [pi-acp](https://github.com/svkozak/pi-acp), the ACP adapter for Pi
+- [claude-agent-acp](https://github.com/agentclientprotocol/claude-agent-acp),
+  the ACP adapter for Claude Code
+- [codex-acp](https://github.com/agentclientprotocol/codex-acp), the ACP
+  adapter for Codex
 
 Editors and IDEs connect to the agents through the
 [Agent Client Protocol](https://agentclientprotocol.com/) (ACP). In ACP mode,
@@ -168,11 +174,30 @@ command, pass it after `--`:
 msb-circus exec -- bash
 msb-circus exec -- docker ps
 msb-circus exec -- opencode
+msb-circus exec -- claude
+msb-circus exec -- codex
 ```
 
 `exec` boots the sandbox first when it is not running. The workspace is
 mounted at the same absolute path as on the host, so file paths agree
 between your editor and the agent.
+
+msb-circus brings your host harness configuration into the sandbox:
+
+- **Claude Code and Codex**: the host config directories `~/.claude` and
+  `~/.codex` are bind-mounted into the guest (`/root/.claude` and
+  `/root/.codex`) when the sandbox is created. The mount is read-write and
+  carries the credentials file (`.credentials.json`, `auth.json`), so a
+  login or token refresh inside the sandbox persists on the host, and the
+  other way around. A missing host directory is skipped with a warning;
+  create it and re-create the sandbox (`msb-circus rm -f && msb-circus up`)
+  to mount it. Because msb fixes mounts at creation, msb-circus also warns
+  when a running sandbox was created without a mount that is expected now.
+- **Pi and OpenCode**: selected config files (`~/.pi/agent/settings.json`,
+  `~/.pi/agent/models.json`, `~/.config/opencode/opencode.json`) are copied
+  into the guest after every boot or start. The copy is one-way: guest-side
+  edits to these files are overwritten by the next refresh. Authenticate
+  through `env_passthrough` (see [Secrets](#secrets)).
 
 msb-circus pre-trusts the agent workdir (`[msb.agent] workdir`) and every
 `additional_dirs` mount for pi and pi-acp: after each boot or start it
@@ -189,6 +214,8 @@ For an ACP session from an editor or IDE, add `--acp`:
 ``` shell
 msb-circus exec --acp -- pi-acp
 msb-circus exec --acp -- opencode acp
+msb-circus exec --acp -- claude-agent-acp
+msb-circus exec --acp -- codex-acp
 ```
 
 In ACP mode, msb-circus streams the session between your editor and the
@@ -213,8 +240,9 @@ configuration based on msb-circus. The runner starts the harness through
 path resolver maps file paths between your editor and the `/workspace`
 mount in the sandbox.
 
-The sandbox carries Pi and OpenCode. An identifier without a harness in the
-sandbox falls back to Pi through the pi-acp adapter. API keys do not go into
+The sandbox carries Pi, OpenCode, Claude Code, and Codex. An identifier
+without a harness in the sandbox falls back to Pi through the pi-acp
+adapter. API keys do not go into
 this configuration; msb-circus reads them from `env_passthrough` on the
 host. If you change the mount in `[msb.mounts]`, change the workspace path
 constant to match it.
@@ -251,14 +279,16 @@ For example:
   "Return the msb-circus exec command prefix to run for BUFFER's agent.
 
 Looks up the agent identifier in BUFFER's `agent-shell' config and
-selects the matching harness in the sandbox. The sandbox carries Pi
-and OpenCode; every other identifier falls back to Pi through the
-pi-acp adapter."
+selects the matching harness in the sandbox. The sandbox carries
+Pi, OpenCode, Claude Code, and Codex; every other identifier falls
+back to Pi through the pi-acp adapter."
   (let* ((cfg (agent-shell-get-config buffer))
          (id  (map-elt cfg :identifier))
          (harness
           (pcase id
             ('opencode '("opencode" "acp"))
+            ('claude-code '("claude-agent-acp"))
+            ('codex '("codex-acp"))
             (_ '("pi-acp")))))
     (append (list "msb-circus" "exec" "--acp" "--") harness)))
 
@@ -371,6 +401,12 @@ API keys never go into the image. msb-circus passes them per command with
 ``` shell
 msb-circus exec -e OPENAI_API_KEY=sk-... -- pi
 ```
+
+Claude Code and Codex usually need no API key variable: their credentials
+live in the host config directories that msb-circus bind-mounts into the
+sandbox (see [Running Agents](#running-agents)). `env_passthrough` is the
+way to authenticate Pi and OpenCode, or to override the mounted
+credentials for a single command.
 
 msb-circus reads the variables under `env_passthrough` from your host shell
 at every command. Entries are patterns, like in agent-circus: a plain name

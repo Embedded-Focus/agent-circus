@@ -125,6 +125,18 @@ def build_inspect_args(name: str, *, json_format: bool = True) -> list[str]:
     return args
 
 
+def build_copy_args(name: str, source: str, guest_destination: str) -> list[str]:
+    """Build argv for a host-to-guest ``msb copy``.
+
+    :param name: Sandbox name.
+    :param source: Absolute host path to copy from.
+    :param guest_destination: Absolute guest path to copy to; prefixed
+        with ``<name>:`` here so callers pass plain guest paths.
+    :returns: Argv list for :class:`msb_circus.msb.MsbInvoker`.
+    """
+    return ["copy", "-q", source, f"{name}:{guest_destination}"]
+
+
 def build_stop_args(name: str, *, force: bool = False) -> list[str]:
     """Build argv for ``msb stop``.
 
