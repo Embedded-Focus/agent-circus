@@ -45,6 +45,39 @@ def build_write_trust_args(name: str, dirs: Sequence[str]) -> list[str]:
     return build_exec_args(name, ["sh", "-c", script], tty=None)
 
 
+def build_repair_codex_daemon_args(name: str) -> list[str]:
+    """Build argv for an ``msb exec`` repairing the codex daemon install.
+
+    Codex installs its app-server daemon below ``$CODEX_HOME`` with an
+    *absolute* ``current`` symlink (e.g.
+    ``/home/node/.codex/packages/app-server-daemon/releases/<triple>``).
+    When the host ``~/.codex`` is bind-mounted at ``/root/.codex`` in the
+    guest, that symlink dangles and every codex invocation fails with
+    "daemon executable not found". The script repoints a dangling absolute
+    ``current`` symlink at its releases entry (relative), which resolves on
+    the host as well. A stale absolute ``app-server-control.sock`` symlink
+    left over from another machine is removed when it dangles, because it
+    otherwise aborts daemon startup with ``File exists``. The write is
+    idempotent and mutates only dangling symlinks; live installs and real
+    sockets are left untouched.
+
+    :param name: Sandbox name.
+    :returns: Argv list for :class:`msb_circus.msb.MsbInvoker`.
+    """
+    script = (
+        'd="$HOME/.codex/packages/app-server-daemon"\n'
+        'if [ -L "$d/current" ]; then\n'
+        '  t=$(readlink "$d/current")\n'
+        "  case $t in\n"
+        '    /*) [ -e "$d/current" ] || ln -sfn "$(basename "${t%/*}")/$(basename "$t")" "$d/current" ;;\n'
+        "  esac\n"
+        "fi\n"
+        's="$HOME/.codex/app-server-control/app-server-control.sock"\n'
+        'if [ -L "$s" ] && [ ! -e "$s" ]; then rm -f "$s"; fi'
+    )
+    return build_exec_args(name, ["sh", "-c", script], tty=None)
+
+
 def build_exec_args(
     name: str,
     command: list[str],

@@ -7,6 +7,7 @@ import os
 import selectors
 import subprocess
 import sys
+import tempfile
 import textwrap
 import threading
 import time
@@ -355,6 +356,99 @@ def test_build_write_trust_args_rejects_empty_dirs():
 
     with pytest.raises(ValueError, match="at least one directory"):
         build_write_trust_args("agents-proj", [])
+
+
+def test_build_repair_codex_daemon_args_repairs_dangling_symlinks():
+    from msb_circus.exec_ import build_repair_codex_daemon_args
+
+    args = build_repair_codex_daemon_args("agents-proj")
+    assert args[:3] == ["exec", "agents-proj", "--"]
+    assert args[3:5] == ["sh", "-c"]
+    script = args[5]
+
+    # Simulate the guest state: an absolute, dangling daemon ``current``
+    # symlink (host paths do not exist in the guest) and a stale absolute
+    # control-socket symlink from another machine.
+    with tempfile.TemporaryDirectory() as home:
+        daemon_dir = Path(home) / ".codex/packages/app-server-daemon"
+        (daemon_dir / "releases/0.157.1-x86_64-unknown-linux-musl/bin").mkdir(
+            parents=True
+        )
+        (daemon_dir / "releases/0.157.1-x86_64-unknown-linux-musl/bin/codex").touch()
+        (daemon_dir / "current").symlink_to(
+            "/home/node/.codex/packages/app-server-daemon/releases/"
+            "0.157.1-x86_64-unknown-linux-musl"
+        )
+        control_dir = Path(home) / ".codex/app-server-control"
+        control_dir.mkdir(parents=True)
+        (control_dir / "app-server-control.sock").symlink_to(
+            "/tmp/codex-daemon-1000/some-hash"
+        )
+
+        env = {**os.environ, "HOME": home}
+        subprocess.run(
+            ["sh", "-c", script],
+            env=env,
+            check=True,
+            capture_output=True,
+        )
+
+        current = daemon_dir / "current"
+        assert current.is_symlink()
+        assert os.readlink(current) == ("releases/0.157.1-x86_64-unknown-linux-musl")
+        assert (current / "bin/codex").exists()
+        assert not (control_dir / "app-server-control.sock").is_symlink()
+
+
+def test_build_repair_codex_daemon_args_leaves_live_installs_alone():
+    from msb_circus.exec_ import build_repair_codex_daemon_args
+
+    args = build_repair_codex_daemon_args("agents-proj")
+    script = args[5]
+
+    with tempfile.TemporaryDirectory() as home:
+        daemon_dir = Path(home) / ".codex/packages/app-server-daemon"
+        (daemon_dir / "releases/0.157.1-x86_64-unknown-linux-musl").mkdir(parents=True)
+        # A working relative symlink and a resolvable absolute one must be
+        # preserved; a live socket file must not be removed.
+        relative = daemon_dir / "current"
+        relative.symlink_to("releases/0.157.1-x86_64-unknown-linux-musl")
+        (daemon_dir / "other").symlink_to(
+            str(daemon_dir / "releases/0.157.1-x86_64-unknown-linux-musl")
+        )
+        control_dir = Path(home) / ".codex/app-server-control"
+        control_dir.mkdir(parents=True)
+        socket = control_dir / "app-server-control.sock"
+        socket.touch()
+
+        env = {**os.environ, "HOME": home}
+        subprocess.run(
+            ["sh", "-c", script],
+            env=env,
+            check=True,
+            capture_output=True,
+        )
+
+        assert os.readlink(relative) == "releases/0.157.1-x86_64-unknown-linux-musl"
+        assert (daemon_dir / "other").is_symlink()
+        assert socket.exists()
+
+
+def test_build_repair_codex_daemon_args_is_noop_without_codex_home():
+    from msb_circus.exec_ import build_repair_codex_daemon_args
+
+    args = build_repair_codex_daemon_args("agents-proj")
+    script = args[5]
+
+    with tempfile.TemporaryDirectory() as home:
+        env = {**os.environ, "HOME": home}
+        subprocess.run(
+            ["sh", "-c", script],
+            env=env,
+            check=True,
+            capture_output=True,
+        )
+        assert not (Path(home) / ".codex").exists()
 
 
 def test_exec_acp_routes_logs_to_given_file_only(tmp_path, fake_msb):

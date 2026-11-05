@@ -26,7 +26,12 @@ from .config import (
 )
 from .envs import parse_env_assignments, resolve_passthrough
 from .exceptions import ConfigurationError, MsbCircusError, MsbCommandError
-from .exec_ import build_exec_args, build_write_trust_args, run_acp_stream
+from .exec_ import (
+    build_exec_args,
+    build_repair_codex_daemon_args,
+    build_write_trust_args,
+    run_acp_stream,
+)
 from .hostports import find_occupied_ports
 from .images import (
     build_image_inspect_args,
@@ -906,10 +911,48 @@ def _ensure_pi_trust(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
         result = invoker.run(
             build_write_trust_args(name, _pi_trust_dirs(config)), check=False
         )
+        if result.returncode == 0:
+            return
+        raise MsbCommandError(
+            (result.stderr or result.stdout or "").strip(),
+            returncode=result.returncode,
+            stderr=result.stderr,
+        )
     except MsbCommandError as e:
         logger.warning(
             "Could not pre-trust the work directories for pi in %s; pi may ask "
             "to trust the directory on first start (%s)",
+            name,
+            e,
+        )
+
+
+def _repair_codex_daemon(invoker: MsbInvoker, name: str) -> None:
+    """Repair the codex app-server daemon install inside the guest.
+
+    Codex records its daemon with an absolute ``current`` symlink, which
+    dangles when the host ``~/.codex`` is bind-mounted at ``/root/.codex``
+    (host and guest disagree on the absolute path). A stale control-socket
+    symlink from another machine aborts daemon startup the same way. The
+    repair repoints dangling symlinks so codex starts; it is idempotent and
+    best-effort: failures warn and never block the boot.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param name: Sandbox name.
+    """
+    try:
+        result = invoker.run(build_repair_codex_daemon_args(name), check=False)
+        if result.returncode == 0:
+            return
+        raise MsbCommandError(
+            (result.stderr or result.stdout or "").strip(),
+            returncode=result.returncode,
+            stderr=result.stderr,
+        )
+    except MsbCommandError as e:
+        logger.warning(
+            "Could not repair the codex app-server daemon install in %s; codex "
+            "may fail with 'daemon executable not found' (%s)",
             name,
             e,
         )
@@ -1053,6 +1096,7 @@ def _ensure_sandbox_running(
         logger.info("Sandbox %s is already running; reusing it.", name)
         _ensure_pi_trust(invoker, config, name)
         _ensure_agent_config_copies(invoker, name)
+        _repair_codex_daemon(invoker, name)
         _warn_on_agent_config_mount_drift(invoker, name)
         _warn_on_port_drift(invoker, config, name)
         _warn_on_disk_drift(invoker, config, name)
@@ -1066,6 +1110,7 @@ def _ensure_sandbox_running(
         invoker.run(build_start_args(name))
         _ensure_pi_trust(invoker, config, name)
         _ensure_agent_config_copies(invoker, name)
+        _repair_codex_daemon(invoker, name)
         _warn_on_agent_config_mount_drift(invoker, name)
         _warn_on_port_drift(invoker, config, name)
         _warn_on_disk_drift(invoker, config, name)
@@ -1092,6 +1137,7 @@ def _ensure_sandbox_running(
         )
         _ensure_pi_trust(invoker, config, name)
         _ensure_agent_config_copies(invoker, name)
+        _repair_codex_daemon(invoker, name)
 
     _check_dockerd(invoker, config, name)
 
