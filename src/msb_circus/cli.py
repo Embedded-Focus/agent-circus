@@ -7,6 +7,7 @@ import os
 import subprocess
 import tempfile
 import time
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
@@ -41,7 +42,7 @@ from .images import (
     build_podman_save_args,
     bundled_dockerfile_path,
 )
-from .msb import MsbInvoker, check_version, resolve_msb_binary
+from .msb import MsbInvoker, check_version, probe_version, resolve_msb_binary
 from .sandbox import (
     SandboxInfo,
     build_copy_args,
@@ -59,6 +60,7 @@ from .sandbox import (
     parse_sandbox_list_output,
     parse_size_mib,
 )
+from .tracing import TraceSession
 from .utils import setup_logging
 
 app = typer.Typer(
@@ -1334,6 +1336,38 @@ def exec_(
             help="Guest working directory. Defaults to [msb] agent.workdir.",
         ),
     ] = None,
+    trace: Annotated[
+        bool | None,
+        typer.Option(
+            "--trace/--no-trace",
+            help="Record resource and transport traces for this execution.",
+        ),
+    ] = None,
+    trace_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--trace-dir",
+            help=(
+                "Trace root directory. Relative paths use the project "
+                "workspace as their base."
+            ),
+        ),
+    ] = None,
+    trace_payloads: Annotated[
+        bool | None,
+        typer.Option(
+            "--trace-payloads/--no-trace-payloads",
+            help="Save raw ACP streams. These files can contain sensitive data.",
+        ),
+    ] = None,
+    trace_sample_interval: Annotated[
+        float | None,
+        typer.Option(
+            "--trace-sample-interval",
+            min=0.1,
+            help="Seconds between resource samples.",
+        ),
+    ] = None,
 ) -> None:
     """Run a command (or an ACP session) in the workspace sandbox.
 
@@ -1348,6 +1382,7 @@ def exec_(
     config, invoker = _resolve_invoker(workspace)
     name = sandbox_name_for_workspace(workspace)
     cmd = list(command) if command else list(config.agent.command)
+    guest_workdir = workdir or config.agent.workdir
 
     try:
         env_map = {
@@ -1360,6 +1395,50 @@ def exec_(
 
     _ensure_sandbox_running(invoker, config, workspace)
 
+    tracing = replace(
+        config.tracing,
+        enabled=(
+            trace
+            if trace is not None
+            else (True if trace_payloads is True else config.tracing.enabled)
+        ),
+        directory=(
+            str(trace_dir) if trace_dir is not None else config.tracing.directory
+        ),
+        capture_payloads=(
+            trace_payloads
+            if trace_payloads is not None
+            else config.tracing.capture_payloads
+        ),
+        sample_interval=(
+            trace_sample_interval
+            if trace_sample_interval is not None
+            else config.tracing.sample_interval
+        ),
+    )
+    trace_session: TraceSession | None = None
+    if tracing.enabled:
+        root = Path(tracing.directory)
+        if not root.is_absolute():
+            root = workspace / root
+        try:
+            trace_session = TraceSession.create(
+                workspace=workspace,
+                root=root,
+                config=tracing,
+                msb_config=config,
+                sandbox=name,
+                command=cmd,
+                acp=acp,
+                workdir=guest_workdir,
+                env_names=list(env_map),
+                msb_version=probe_version(invoker.binary),
+            )
+        except OSError as e:
+            typer.echo(f"Error: could not create trace files: {e}", err=True)
+            raise typer.Exit(code=1) from e
+        logger.info("Trace directory: %s", trace_session.directory)
+
     argv = [
         str(invoker.binary),
         *build_exec_args(
@@ -1367,18 +1446,39 @@ def exec_(
             cmd,
             acp=acp,
             env=env_map or None,
-            workdir=workdir or config.agent.workdir,
+            workdir=guest_workdir,
             user=user,
         ),
     ]
+    returncode = 1
     try:
         if acp:
-            returncode = run_acp_stream(argv)
+            if trace_session is None:
+                returncode = run_acp_stream(argv)
+            else:
+                returncode = run_acp_stream(
+                    argv,
+                    observer=trace_session.record_stream,
+                    on_started=lambda _proc: trace_session.start_collectors(
+                        invoker.binary, name
+                    ),
+                )
         else:
-            returncode = subprocess.run(argv, check=False).returncode
+            if trace_session is None:
+                returncode = subprocess.run(argv, check=False).returncode
+            else:
+                with subprocess.Popen(argv) as process:
+                    trace_session.start_collectors(invoker.binary, name)
+                    returncode = process.wait()
     except FileNotFoundError as e:
         typer.echo(f"Error: msb binary not found: {e}", err=True)
         raise typer.Exit(code=1) from e
+    finally:
+        if trace_session is not None:
+            try:
+                trace_session.finish(returncode)
+            except OSError as e:
+                logger.warning("Could not finish the execution trace: %s", e)
     if returncode != 0:
         raise typer.Exit(code=returncode)
 

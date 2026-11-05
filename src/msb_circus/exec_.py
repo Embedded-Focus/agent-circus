@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import sys
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 ACP_FLAGS: tuple[str, ...] = ("--stream", "--quiet")
 INTERACTIVE_FLAGS: tuple[str, ...] = ("--tty",)
 
 _COPY_CHUNK = 65536
+
+logger = logging.getLogger(__name__)
 
 #: Heredoc delimiter for the pi trust-file script; JSON payloads are single-
 #: line, so a delimiter collision is impossible.
@@ -186,7 +189,13 @@ def build_exec_args(
     return args
 
 
-def _copy_bytes(src, dst) -> bool:
+def _copy_bytes(
+    src,
+    dst,
+    *,
+    observer: Callable[[str, bytes], None] | None = None,
+    direction: str = "",
+) -> bool:
     """Copy *src* to *dst* in chunks until EOF.
 
     Reads use ``read1`` when available (buffered and raw streams) so a
@@ -198,6 +207,8 @@ def _copy_bytes(src, dst) -> bool:
 
     :param src: Source binary file-like object (blocking reads).
     :param dst: Destination binary file-like object.
+    :param observer: Optional callback that receives each copied chunk.
+    :param direction: Direction label passed to *observer*.
     :returns: ``True`` on clean EOF, ``False`` on an I/O error (e.g. a
         broken pipe because the peer went away).
     """
@@ -207,6 +218,11 @@ def _copy_bytes(src, dst) -> bool:
             chunk = read(_COPY_CHUNK)
             if not chunk:
                 return True
+            if observer is not None:
+                try:
+                    observer(direction, chunk)
+                except (OSError, ValueError) as error:
+                    logger.warning("ACP trace observer failed: %s", error)
             dst.write(chunk)
             dst.flush()
     except (OSError, ValueError):
@@ -229,6 +245,8 @@ def run_acp_stream(
     stdout=None,
     stderr=None,
     grace_seconds: float = 5.0,
+    observer: Callable[[str, bytes], None] | None = None,
+    on_started: Callable[[subprocess.Popen], None] | None = None,
 ) -> int:
     """Run *argv* as a bidirectional, byte-faithful ACP stream.
 
@@ -249,6 +267,8 @@ def run_acp_stream(
     :param stderr: Host stderr (binary); defaults to ``sys.stderr.buffer``.
     :param grace_seconds: Grace period after stdin EOF or before forced
         kill on termination.
+    :param observer: Optional callback for exact stream chunks.
+    :param on_started: Optional callback after the child starts.
     :returns: Child exit code; 0 when the host side disconnected.
     """
     if stdin is None:
@@ -265,6 +285,8 @@ def run_acp_stream(
         stderr=subprocess.PIPE,
         bufsize=0,
     )
+    if on_started is not None:
+        on_started(proc)
     child_stdin = proc.stdin
     child_stdout = proc.stdout
     child_stderr = proc.stderr
@@ -276,7 +298,12 @@ def run_acp_stream(
 
     def pump_input() -> None:
         try:
-            if not _copy_bytes(stdin, child_stdin):
+            if not _copy_bytes(
+                stdin,
+                child_stdin,
+                observer=observer,
+                direction="client-to-agent",
+            ):
                 host_gone.set()
         finally:
             try:
@@ -286,7 +313,12 @@ def run_acp_stream(
             stdin_done.set()
 
     def pump_errors() -> None:
-        if not _copy_bytes(child_stderr, stderr):
+        if not _copy_bytes(
+            child_stderr,
+            stderr,
+            observer=observer,
+            direction="agent-stderr",
+        ):
             host_gone.set()
 
     def watchdog() -> None:
@@ -305,7 +337,12 @@ def run_acp_stream(
     error_thread.start()
     watchdog_thread.start()
 
-    if not _copy_bytes(child_stdout, stdout):
+    if not _copy_bytes(
+        child_stdout,
+        stdout,
+        observer=observer,
+        direction="agent-to-client",
+    ):
         host_gone.set()
 
     if host_gone.is_set() and proc.poll() is None:

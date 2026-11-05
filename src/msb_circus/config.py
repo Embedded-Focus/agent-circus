@@ -145,6 +145,26 @@ class AgentConfig:
 
 
 @dataclass(frozen=True)
+class TracingConfig:
+    """Trace settings for agent executions (``[msb.tracing]``).
+
+    :ivar enabled: Enable tracing for every ``exec`` command.
+    :ivar directory: Host trace root. Relative paths use the workspace as base.
+    :ivar sample_interval: Interval in seconds for resource samples.
+    :ivar repetition_threshold: Number of equal bytes that creates an event.
+    :ivar capture_payloads: Save raw ACP streams when ``True``.
+    :ivar max_payload_bytes: Maximum bytes saved for each raw ACP stream.
+    """
+
+    enabled: bool = False
+    directory: str = ".agent-circus/traces"
+    sample_interval: float = 1.0
+    repetition_threshold: int = 64
+    capture_payloads: bool = False
+    max_payload_bytes: int = 100 * 1024 * 1024
+
+
+@dataclass(frozen=True)
 class PortForward:
     """An entry of the ``[[port_forwards]]`` array.
 
@@ -194,6 +214,7 @@ class MsbConfig:
     :ivar sandbox: Sandbox resource settings.
     :ivar network: Network profile settings.
     :ivar agent: Default exec target.
+    :ivar tracing: Trace settings for agent executions.
     :ivar mounts: Host path -> guest path mapping (options may be appended
         to the guest path, e.g. ``"/workspace:ro"``). Defaults to mounting
         the workspace at ``/workspace`` per the documented workflow.
@@ -218,6 +239,7 @@ class MsbConfig:
     sandbox: SandboxConfig = field(default_factory=SandboxConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
+    tracing: TracingConfig = field(default_factory=TracingConfig)
     mounts: dict[str, str] = field(default_factory=dict)
     additional_dirs: tuple[AdditionalDir, ...] = ()
     port_forwards: tuple[PortForward, ...] = ()
@@ -549,6 +571,65 @@ def _parse_network(raw: Any) -> NetworkConfig:
     return NetworkConfig(mode=mode)
 
 
+def _parse_tracing(raw: Any) -> TracingConfig:
+    """Parse the ``[msb.tracing]`` table.
+
+    :param raw: Raw table value or ``None``.
+    :returns: Parsed trace settings.
+    :raises ConfigurationError: If the table is malformed.
+    """
+    if raw is None:
+        return TracingConfig()
+    if not isinstance(raw, dict):
+        raise ConfigurationError("msb.tracing must be a table")
+
+    enabled = raw.get("enabled", False)
+    directory = raw.get("directory", ".agent-circus/traces")
+    sample_interval = raw.get("sample_interval", 1.0)
+    repetition_threshold = raw.get("repetition_threshold", 64)
+    capture_payloads = raw.get("capture_payloads", False)
+    max_payload_bytes = raw.get("max_payload_bytes", 100 * 1024 * 1024)
+
+    if not isinstance(enabled, bool):
+        raise ConfigurationError("msb.tracing.enabled must be a boolean")
+    if not isinstance(directory, str) or not directory:
+        raise ConfigurationError("msb.tracing.directory must be a non-empty string")
+    if (
+        isinstance(sample_interval, bool)
+        or not isinstance(sample_interval, int | float)
+        or sample_interval <= 0
+    ):
+        raise ConfigurationError(
+            "msb.tracing.sample_interval must be greater than zero"
+        )
+    if (
+        isinstance(repetition_threshold, bool)
+        or not isinstance(repetition_threshold, int)
+        or repetition_threshold < 2
+    ):
+        raise ConfigurationError(
+            "msb.tracing.repetition_threshold must be an integer of at least 2"
+        )
+    if not isinstance(capture_payloads, bool):
+        raise ConfigurationError("msb.tracing.capture_payloads must be a boolean")
+    if (
+        isinstance(max_payload_bytes, bool)
+        or not isinstance(max_payload_bytes, int)
+        or max_payload_bytes < 1
+    ):
+        raise ConfigurationError(
+            "msb.tracing.max_payload_bytes must be a positive integer"
+        )
+    return TracingConfig(
+        enabled=enabled,
+        directory=directory,
+        sample_interval=float(sample_interval),
+        repetition_threshold=repetition_threshold,
+        capture_payloads=capture_payloads,
+        max_payload_bytes=max_payload_bytes,
+    )
+
+
 def _validate_port(value: Any, label: str) -> int:
     """Validate a port number.
 
@@ -744,6 +825,7 @@ def parse_config(config: dict[str, Any]) -> MsbConfig:
         sandbox=_parse_sandbox(msb_raw.get("sandbox")),
         network=_parse_network(msb_raw.get("network")),
         agent=_parse_agent(msb_raw.get("agent")),
+        tracing=_parse_tracing(msb_raw.get("tracing")),
         mounts=(
             _parse_string_dict(msb_raw.get("mounts"), "msb.mounts") or DEFAULT_MOUNTS
         ),

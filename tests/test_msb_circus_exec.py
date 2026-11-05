@@ -89,6 +89,7 @@ def fake_msb(monkeypatch):
 
     def fake_run_acp_stream(argv, **kwargs):
         recorded["acp_argv"] = argv
+        recorded["acp_kwargs"] = kwargs
         return recorded.get("acp_returncode", 0)
 
     def fake_interactive_run(argv, **kwargs):
@@ -97,6 +98,7 @@ def fake_msb(monkeypatch):
 
     monkeypatch.setattr(cli_module, "resolve_msb_binary", lambda b: Path("/fake"))
     monkeypatch.setattr(cli_module, "check_version", lambda binary: "0.7.12")
+    monkeypatch.setattr(cli_module, "probe_version", lambda binary: "0.7.12")
     monkeypatch.setattr(cli_module, "MsbInvoker", FakeInvoker)
     monkeypatch.setattr(cli_module, "run_acp_stream", fake_run_acp_stream)
     monkeypatch.setattr(cli_module.subprocess, "run", fake_interactive_run)
@@ -125,6 +127,27 @@ def test_acp_stream_roundtrip_is_byte_faithful():
     )
     assert returncode == 0
     assert out.getvalue() == payload  # no bytes added, removed, or reframed
+
+
+def test_acp_stream_observer_sees_exact_bytes():
+    payload = b'{"jsonrpc":"2.0","id":1}\n'
+    observed: dict[str, bytearray] = {}
+
+    def observe(direction: str, chunk: bytes) -> None:
+        observed.setdefault(direction, bytearray()).extend(chunk)
+
+    out = io.BytesIO()
+    returncode = run_acp_stream(
+        echo_agent(),
+        stdin=io.BytesIO(payload),
+        stdout=out,
+        stderr=io.BytesIO(),
+        observer=observe,
+    )
+
+    assert returncode == 0
+    assert bytes(observed["client-to-agent"]) == payload
+    assert bytes(observed["agent-to-client"]) == payload
 
 
 def test_acp_stream_large_message_arrives_intact():
@@ -263,6 +286,50 @@ def test_exec_acp_uses_stream_quiet_without_tty(tmp_path, fake_msb):
     assert "--tty" not in argv and "--no-stdin" not in argv
     assert name in argv
     assert argv[-2:] == ["opencode", "acp"]
+
+
+def test_exec_acp_trace_connects_stream_observer(tmp_path, fake_msb, monkeypatch):
+    class FakeTrace:
+        directory = tmp_path / ".agent-circus" / "traces" / "trace-id"
+
+        def record_stream(self, direction, data):
+            pass
+
+        def start_collectors(self, binary, name):
+            pass
+
+        def finish(self, returncode):
+            fake_msb["trace_returncode"] = returncode
+
+    trace = FakeTrace()
+    created: dict = {}
+
+    def create_trace(**kwargs):
+        created.update(kwargs)
+        return trace
+
+    monkeypatch.setattr(cli_module.TraceSession, "create", create_trace)
+    result = runner.invoke(
+        app,
+        [
+            "exec",
+            "--workspace",
+            str(tmp_path),
+            "--acp",
+            "--trace",
+            "--trace-dir",
+            "diagnostics",
+            "--",
+            "pi-acp",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert created["root"] == tmp_path / "diagnostics"
+    assert created["config"].enabled is True
+    assert fake_msb["acp_kwargs"]["observer"] == trace.record_stream
+    assert callable(fake_msb["acp_kwargs"]["on_started"])
+    assert fake_msb["trace_returncode"] == 0
 
 
 def test_exec_passes_env_and_overrides(tmp_path, fake_msb):

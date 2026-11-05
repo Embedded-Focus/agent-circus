@@ -26,6 +26,12 @@ def test_parse_config_returns_defaults_for_empty_dict():
     assert config.network.mode == "public,private"
     assert config.agent.command == ("pi",)
     assert config.agent.workdir == "/workspace"
+    assert config.tracing.enabled is False
+    assert config.tracing.directory == ".agent-circus/traces"
+    assert config.tracing.sample_interval == pytest.approx(1.0)
+    assert config.tracing.repetition_threshold == 64
+    assert config.tracing.capture_payloads is False
+    assert config.tracing.max_payload_bytes == 100 * 1024 * 1024
     assert config.mounts == {".": "/workspace"}
     assert config.env == {}
     assert config.env_passthrough == ()
@@ -42,6 +48,14 @@ def test_parse_config_interprets_supported_keys():
                 "sandbox": {"memory": "8G", "cpus": 4},
                 "network": {"mode": "none"},
                 "agent": {"command": ["opencode", "acp"], "workdir": "/w"},
+                "tracing": {
+                    "enabled": True,
+                    "directory": "diagnostics",
+                    "sample_interval": 0.5,
+                    "repetition_threshold": 20,
+                    "capture_payloads": True,
+                    "max_payload_bytes": 1234,
+                },
                 "mounts": {".": "/workspace", "/data": "/data:ro"},
                 "env": {"FOO": "bar"},
             },
@@ -57,6 +71,12 @@ def test_parse_config_interprets_supported_keys():
     assert config.network.mode == "none"
     assert config.agent.command == ("opencode", "acp")
     assert config.agent.workdir == "/w"
+    assert config.tracing.enabled is True
+    assert config.tracing.directory == "diagnostics"
+    assert config.tracing.sample_interval == pytest.approx(0.5)
+    assert config.tracing.repetition_threshold == 20
+    assert config.tracing.capture_payloads is True
+    assert config.tracing.max_payload_bytes == 1234
     assert config.mounts == {".": "/workspace", "/data": "/data:ro"}
     assert config.env == {"FOO": "bar"}
     assert config.env_passthrough == ("OPENAI_API_KEY", "ANTHROPIC_API_KEY")
@@ -81,6 +101,19 @@ def test_parse_config_warns_on_unsupported_keys(caplog):
         ({"msb": {"sandbox": {"memory": ""}}}, "msb.sandbox.memory"),
         ({"msb": {"sandbox": {"cpus": "four"}}}, "msb.sandbox.cpus"),
         ({"msb": {"agent": {"command": []}}}, "msb.agent.command"),
+        ({"msb": {"tracing": []}}, "msb.tracing must be a table"),
+        (
+            {"msb": {"tracing": {"sample_interval": 0}}},
+            "msb.tracing.sample_interval",
+        ),
+        (
+            {"msb": {"tracing": {"repetition_threshold": 1}}},
+            "msb.tracing.repetition_threshold",
+        ),
+        (
+            {"msb": {"tracing": {"max_payload_bytes": 0}}},
+            "msb.tracing.max_payload_bytes",
+        ),
         ({"msb": {"mounts": {"a": 1}}}, "msb.mounts.a must be a string"),
         ({"env_passthrough": "KEY"}, "env_passthrough must be a list"),
         ({"env_passthrough": [1]}, "env_passthrough must be a list"),

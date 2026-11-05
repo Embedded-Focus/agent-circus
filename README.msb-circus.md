@@ -340,6 +340,166 @@ errors (see [ACP Sessions](#acp-sessions)). Logs then go to the log file
 only; when no log file is configured, `/tmp/msb-circus-acp.log` is
 used.
 
+## Execution Traces
+
+An execution trace records resource use and ACP traffic metadata for one
+agent session. The trace does not change the ACP byte stream. For terminal
+sessions, it also does not intercept the terminal input or output.
+
+Use `--trace` to enable a trace for one session:
+
+``` shell
+msb-circus exec --trace -- pi
+msb-circus exec --trace --acp -- pi-acp
+```
+
+By default, msb-circus writes each trace to a new directory under
+`.agent-circus/traces/`. The `latest` file contains the ID of the newest
+trace. The project `.gitignore` excludes the `.agent-circus` directory.
+msb-circus does not delete old traces. Remove old trace directories when you
+no longer need them.
+
+Use this configuration to enable traces for all `exec` commands:
+
+``` toml
+[msb.tracing]
+enabled = true
+directory = ".agent-circus/traces"
+sample_interval = 1.0
+repetition_threshold = 64
+capture_payloads = false
+max_payload_bytes = 104857600
+```
+
+The `sample_interval` value sets the time in seconds between resource
+samples. The `repetition_threshold` value sets the number of equal bytes that
+creates an event. Relative values for `directory` use the project workspace
+as their base.
+
+Command-line options take priority over the configuration:
+
+``` shell
+msb-circus exec --trace --trace-sample-interval 0.5 -- pi
+msb-circus exec --no-trace -- pi
+msb-circus exec --trace --trace-dir /tmp/msb-traces -- pi
+```
+
+### Trace Files
+
+Each trace directory contains files for one execution. The trace directory
+uses mode `0700`. Trace files use mode `0600` because some files can contain
+project or session data.
+
+The main files are:
+
+| File | Contents |
+| --- | --- |
+| `manifest.json` | Trace version, start time, sandbox resources, executable name, and environment variable names. |
+| `summary.json` | Exit status, duration, maximum VM use, stream counts, and repetition event count. |
+| `events.jsonl` | Trace lifecycle events, collector errors, and repeated-byte events. |
+| `vm-metrics.jsonl` | VM CPU, memory, disk, and network samples from `msb metrics`. |
+| `processes.jsonl` | Guest process CPU, memory, I/O, thread, and file descriptor samples from `/proc`. |
+| `acp-transport.jsonl` | ACP chunk direction, size, hash, newline count, and longest equal-byte run. |
+| `msb-system.jsonl` | Microsandbox lifecycle, runtime, and kernel log entries. |
+| `msb-circus.log` | Log messages from msb-circus during the execution. |
+| `collector-errors.log` | Error output from trace collector processes. |
+
+The process trace does not save command arguments or environment values. The
+manifest saves only the executable name. These limits prevent common prompts
+and API keys from entering the normal trace files.
+
+`acp-transport.jsonl` contains data only for ACP sessions. A terminal trace
+still contains VM metrics and guest process samples. Microsandbox records only
+the first primary exec session in its execution log, so this trace does not
+use that log as a copy of the agent stream.
+
+### Raw ACP Payloads
+
+Use `--trace-payloads` when chunk metadata is not sufficient. This option also
+enables tracing. It saves the exact ACP input, output, and error streams under
+the `payloads/` directory.
+
+``` shell
+msb-circus exec --acp --trace-payloads -- pi-acp
+```
+
+Raw payloads can contain prompts, source code, tool results, and credentials.
+Do not share these files without inspection. The `max_payload_bytes` value
+limits each stream, and metadata collection continues after this limit.
+
+### Evaluate a Trace
+
+Read `summary.json` first. It shows whether the agent exited normally and
+whether the repetition detector found an incident. It also shows the maximum
+VM CPU and memory values that were available.
+
+``` shell
+trace_id=$(cat .agent-circus/traces/latest)
+trace_dir=".agent-circus/traces/$trace_id"
+jq . "$trace_dir/summary.json"
+```
+
+Read all repeated-byte events with this command:
+
+``` shell
+jq 'select(.event == "repetition_detected")' "$trace_dir/events.jsonl"
+```
+
+Byte `33` is the ASCII value for `!`. If an event contains byte `33`, use its
+time and sequence values to find the related ACP chunk:
+
+``` shell
+jq 'select(.longest_repeated_byte.count >= 64)' \
+  "$trace_dir/acp-transport.jsonl"
+```
+
+Use the VM metrics to compare CPU and memory at the incident time:
+
+``` shell
+jq '{timestamp, cpu_percent, memory_bytes, memory_limit_bytes, net_rx_bytes, net_tx_bytes}' \
+  "$trace_dir/vm-metrics.jsonl"
+```
+
+Use the process samples to find the processes that gained the most CPU ticks
+during the trace. One CPU tick is a kernel accounting unit. The sample file
+records the kernel tick rate. The process tick values are cumulative.
+
+``` shell
+jq -s '
+  [.[].processes[]]
+  | group_by(.pid)
+  | map(
+      select(length > 1)
+      | {
+          pid: .[0].pid,
+          name: .[0].name,
+          cpu_ticks: (
+            (.[-1].user_ticks + .[-1].system_ticks)
+            - (.[0].user_ticks + .[0].system_ticks)
+          ),
+          max_resident_pages: (map(.resident_pages) | max)
+        }
+    )
+  | sort_by(.cpu_ticks)
+  | reverse
+  | .[:10]
+' "$trace_dir/processes.jsonl"
+```
+
+If raw payload capture was enabled, search the agent output for a long run of
+exclamation marks:
+
+``` shell
+rg -a -n '!{64}' "$trace_dir/payloads/agent-to-client.bin"
+```
+
+If the raw ACP output contains the run, the agent harness sent it to the ACP
+client. If the VM CPU also rises, use `processes.jsonl` to identify the busy
+guest process. If only VM CPU rises, inspect `msb-system.jsonl` and
+`collector-errors.log` for a runtime or collector failure.
+
+## Configuration Reference
+
 The `[[additional_dirs]]` array mounts extra host directories into the
 sandbox under `/workspaces/<name>`, next to the project at `/workspace`.
 The fields match agent-circus: `path` is required, `readonly` defaults to
