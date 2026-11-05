@@ -45,6 +45,54 @@ def build_write_trust_args(name: str, dirs: Sequence[str]) -> list[str]:
     return build_exec_args(name, ["sh", "-c", script], tty=None)
 
 
+#: Node.js script merging Claude Code folder trust into the guest state file.
+#: ``__DIRS__`` is replaced with a JSON array (a valid JS literal). The file
+#: is resolved like Claude Code does (``$CLAUDE_CONFIG_DIR`` or ``$HOME``),
+#: created when missing, and replaced atomically; unparsable content aborts
+#: without touching the file.
+_CLAUDE_TRUST_SCRIPT = """\
+const fs = require("fs"), os = require("os"), path = require("path");
+const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+const file = path.join(process.env.CLAUDE_CONFIG_DIR || os.homedir(), ".claude.json");
+let state = {};
+try { state = JSON.parse(fs.readFileSync(file, "utf8")); }
+catch (e) { if (e.code !== "ENOENT") throw e; }
+if (!isObj(state)) throw new Error(file + " does not contain a JSON object");
+const projects = isObj(state.projects) ? state.projects : {};
+for (const dir of __DIRS__) {
+  const entry = isObj(projects[dir]) ? projects[dir] : {};
+  entry.hasTrustDialogAccepted = true;
+  projects[dir] = entry;
+}
+state.projects = projects;
+const tmp = file + ".msb-circus.tmp";
+fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + "\\n", { mode: 0o600 });
+fs.renameSync(tmp, file);
+"""
+
+
+def build_write_claude_trust_args(name: str, dirs: Sequence[str]) -> list[str]:
+    """Build argv for an idempotent ``msb exec`` pre-trusting dirs for Claude Code.
+
+    The generated Node.js script sets ``projects[<dir>].hasTrustDialogAccepted``
+    in the guest's ``~/.claude.json`` (``$CLAUDE_CONFIG_DIR/.claude.json`` when
+    set), keeping all other keys and creating the file when it is missing.
+    Directories are embedded via :func:`json.dumps`, so arbitrary paths arrive
+    intact. Node.js is available in the guest because Claude Code needs it.
+
+    :param name: Sandbox name.
+    :param dirs: Guest directories to trust (non-empty).
+    :returns: Argv list for :class:`msb_circus.msb.MsbInvoker`.
+    :raises ValueError: If *dirs* is empty.
+    """
+    if not dirs:
+        raise ValueError("at least one directory is required")
+    script = _CLAUDE_TRUST_SCRIPT.replace(
+        "__DIRS__", json.dumps(list(dict.fromkeys(dirs)))
+    )
+    return build_exec_args(name, ["node", "-e", script], tty=None)
+
+
 def build_repair_codex_daemon_args(name: str) -> list[str]:
     """Build argv for an ``msb exec`` repairing the codex daemon install.
 

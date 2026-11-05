@@ -29,6 +29,7 @@ from .exceptions import ConfigurationError, MsbCircusError, MsbCommandError
 from .exec_ import (
     build_exec_args,
     build_repair_codex_daemon_args,
+    build_write_claude_trust_args,
     build_write_trust_args,
     run_acp_stream,
 )
@@ -879,8 +880,8 @@ def _fail_on_occupied_ports(config: MsbConfig) -> None:
     raise typer.Exit(code=1)
 
 
-def _pi_trust_dirs(config: MsbConfig) -> list[str]:
-    """Return the guest directories to pre-trust for pi and pi-acp.
+def _trusted_guest_dirs(config: MsbConfig) -> list[str]:
+    """Return the guest directories to pre-trust for the agent harnesses.
 
     The exec workdir plus every ``additional_dirs`` guest target, in first-
     occurrence order and without duplicates.
@@ -909,7 +910,7 @@ def _ensure_pi_trust(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
     """
     try:
         result = invoker.run(
-            build_write_trust_args(name, _pi_trust_dirs(config)), check=False
+            build_write_trust_args(name, _trusted_guest_dirs(config)), check=False
         )
         if result.returncode == 0:
             return
@@ -922,6 +923,41 @@ def _ensure_pi_trust(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
         logger.warning(
             "Could not pre-trust the work directories for pi in %s; pi may ask "
             "to trust the directory on first start (%s)",
+            name,
+            e,
+        )
+
+
+def _ensure_claude_trust(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
+    """Pre-trust the mounted work directories for Claude Code.
+
+    Merges ``projects[<dir>].hasTrustDialogAccepted`` into the guest's
+    ``~/.claude.json`` so Claude Code skips its folder-trust dialog. Runs
+    after :func:`_ensure_agent_config_copies` because the host copy
+    overwrites the guest file; merging in the guest also covers hosts
+    without a ``~/.claude.json``. Failures are non-fatal: Claude Code then
+    asks to trust the folder, as before.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param config: Resolved msb-circus configuration.
+    :param name: Sandbox name.
+    """
+    try:
+        result = invoker.run(
+            build_write_claude_trust_args(name, _trusted_guest_dirs(config)),
+            check=False,
+        )
+        if result.returncode == 0:
+            return
+        raise MsbCommandError(
+            (result.stderr or result.stdout or "").strip(),
+            returncode=result.returncode,
+            stderr=result.stderr,
+        )
+    except MsbCommandError as e:
+        logger.warning(
+            "Could not pre-trust the work directories for Claude Code in %s; "
+            "Claude Code may ask to trust the folder (%s)",
             name,
             e,
         )
@@ -1096,6 +1132,7 @@ def _ensure_sandbox_running(
         logger.info("Sandbox %s is already running; reusing it.", name)
         _ensure_pi_trust(invoker, config, name)
         _ensure_agent_config_copies(invoker, name)
+        _ensure_claude_trust(invoker, config, name)
         _repair_codex_daemon(invoker, name)
         _warn_on_agent_config_mount_drift(invoker, name)
         _warn_on_port_drift(invoker, config, name)
@@ -1110,6 +1147,7 @@ def _ensure_sandbox_running(
         invoker.run(build_start_args(name))
         _ensure_pi_trust(invoker, config, name)
         _ensure_agent_config_copies(invoker, name)
+        _ensure_claude_trust(invoker, config, name)
         _repair_codex_daemon(invoker, name)
         _warn_on_agent_config_mount_drift(invoker, name)
         _warn_on_port_drift(invoker, config, name)
@@ -1137,6 +1175,7 @@ def _ensure_sandbox_running(
         )
         _ensure_pi_trust(invoker, config, name)
         _ensure_agent_config_copies(invoker, name)
+        _ensure_claude_trust(invoker, config, name)
         _repair_codex_daemon(invoker, name)
 
     _check_dockerd(invoker, config, name)

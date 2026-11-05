@@ -1,12 +1,14 @@
 """Tests for agent harness config handling in msb-circus.
 
 Covers the host config-dir bind mounts (claude-code, codex), the one-way
-config file copies (pi, opencode), and the corresponding mount-drift
-warning.
+config file copies (claude-code, pi, opencode), the Claude Code folder
+trust merge, and the corresponding mount-drift warning.
 """
 
 import json
 import logging
+import shutil
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar, cast
@@ -17,11 +19,13 @@ from typer.testing import CliRunner
 import msb_circus.cli as cli_module
 from msb_circus.cli import (
     _ensure_agent_config_copies,
+    _ensure_claude_trust,
     _warn_on_agent_config_mount_drift,
     app,
 )
-from msb_circus.config import resolve_agent_config_mounts
+from msb_circus.config import AdditionalDir, MsbConfig, resolve_agent_config_mounts
 from msb_circus.exceptions import MsbCommandError
+from msb_circus.exec_ import build_write_claude_trust_args
 from msb_circus.msb import MsbInvoker
 from msb_circus.sandbox import build_copy_args
 
@@ -208,3 +212,105 @@ def test_up_boots_with_agent_config_dir_mounts(isolated_home, fake_msb):
     specs = [tuple(v.split(":", 1)) for v in volumes]
     assert (str(workspace), "/workspace") in specs
     assert (str(isolated_home / ".codex"), "/root/.codex") in specs
+
+
+def _run_claude_trust_script(
+    home: Path, dirs: list[str]
+) -> subprocess.CompletedProcess[str]:
+    """Run the generated trust script with Node.js against a fake ``$HOME``."""
+    args = build_write_claude_trust_args("agents-demo", dirs)
+    assert args[:6] == ["exec", "agents-demo", "--", "node", "-e", args[5]]
+    env = {"HOME": str(home), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+    return subprocess.run(
+        ["node", "-e", args[5]], env=env, capture_output=True, text=True, check=False
+    )
+
+
+needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+
+
+@needs_node
+def test_claude_trust_script_creates_missing_state_file(tmp_path):
+    result = _run_claude_trust_script(tmp_path, ["/workspace", "/workspaces/lib"])
+
+    assert result.returncode == 0, result.stderr
+    state_file = tmp_path / ".claude.json"
+    assert json.loads(state_file.read_text()) == {
+        "projects": {
+            "/workspace": {"hasTrustDialogAccepted": True},
+            "/workspaces/lib": {"hasTrustDialogAccepted": True},
+        }
+    }
+    assert state_file.stat().st_mode & 0o777 == 0o600
+
+
+@needs_node
+def test_claude_trust_script_preserves_existing_state(tmp_path):
+    (tmp_path / ".claude.json").write_text(
+        json.dumps(
+            {
+                "hasCompletedOnboarding": True,
+                "projects": {
+                    "/host/repo": {},
+                    "/workspace": {"allowedTools": ["Bash"]},
+                },
+            }
+        )
+    )
+
+    result = _run_claude_trust_script(tmp_path, ["/workspace", "/tmp/a'b\"c $HOME"])
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads((tmp_path / ".claude.json").read_text()) == {
+        "hasCompletedOnboarding": True,
+        "projects": {
+            "/host/repo": {},
+            "/workspace": {"allowedTools": ["Bash"], "hasTrustDialogAccepted": True},
+            "/tmp/a'b\"c $HOME": {"hasTrustDialogAccepted": True},
+        },
+    }
+
+
+@needs_node
+def test_claude_trust_script_leaves_invalid_state_untouched(tmp_path):
+    (tmp_path / ".claude.json").write_text("not json")
+
+    result = _run_claude_trust_script(tmp_path, ["/workspace"])
+
+    assert result.returncode != 0
+    assert (tmp_path / ".claude.json").read_text() == "not json"
+
+
+def test_build_write_claude_trust_args_rejects_empty_dirs():
+    with pytest.raises(ValueError, match="at least one directory"):
+        build_write_claude_trust_args("agents-demo", [])
+
+
+def _config_with_additional_dir() -> MsbConfig:
+    return MsbConfig(additional_dirs=(AdditionalDir(path="/host/lib", name="lib"),))
+
+
+def test_ensure_claude_trust_trusts_workdir_and_additional_dirs():
+    invoker = RecordingInvoker()
+
+    _ensure_claude_trust(
+        cast(MsbInvoker, invoker), _config_with_additional_dir(), "agents-demo"
+    )
+
+    assert invoker.calls == [
+        build_write_claude_trust_args("agents-demo", ["/workspace", "/workspaces/lib"])
+    ]
+
+
+def test_ensure_claude_trust_warns_on_failure(caplog):
+    class FailingInvoker:
+        def run(self, args, **kwargs):
+            return SimpleNamespace(returncode=1, stdout="", stderr="node: not found")
+
+    with caplog.at_level(logging.WARNING):
+        _ensure_claude_trust(
+            cast(MsbInvoker, FailingInvoker()), MsbConfig(), "agents-demo"
+        )
+
+    assert "Could not pre-trust" in caplog.text
+    assert "node: not found" in caplog.text
