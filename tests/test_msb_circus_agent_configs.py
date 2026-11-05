@@ -81,6 +81,8 @@ def test_resolve_agent_config_mounts_includes_existing_dirs_only(isolated_home, 
 
 
 def test_ensure_agent_config_copies_copies_existing_files(isolated_home):
+    claude_json = isolated_home / ".claude.json"
+    claude_json.write_text("{}")
     settings = isolated_home / ".pi" / "agent" / "settings.json"
     settings.parent.mkdir(parents=True)
     settings.write_text("{}")
@@ -93,6 +95,7 @@ def test_ensure_agent_config_copies_copies_existing_files(isolated_home):
 
     destinations = [call[3] for call in invoker.calls if call[0] == "copy"]
     assert destinations == [
+        "agents-demo:/root/.claude.json",
         "agents-demo:/root/.pi/agent/settings.json",
         "agents-demo:/root/.config/opencode/opencode.json",
     ]

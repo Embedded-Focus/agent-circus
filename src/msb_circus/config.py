@@ -61,6 +61,11 @@ AGENT_CONFIG_DIR_MOUNTS: dict[str, tuple[str, str]] = {
 #: Unlike :data:`AGENT_CONFIG_DIR_MOUNTS` these copies do not round-trip:
 #: guest-side edits are lost on the next refresh.
 AGENT_CONFIG_FILE_COPIES: tuple[tuple[str, str, str], ...] = (
+    (
+        "claude-code",
+        ".claude.json",
+        "/root/.claude.json",
+    ),
     ("pi", ".pi/agent/settings.json", "/root/.pi/agent/settings.json"),
     ("pi", ".pi/agent/models.json", "/root/.pi/agent/models.json"),
     (
