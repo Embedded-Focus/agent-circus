@@ -133,8 +133,14 @@ class ClaudeCodeConfigHandler:
                 and isinstance(merged[key], dict)
                 and isinstance(value, dict)
             ):
-                # Dict-level merge (e.g. mcpServers): additions overwrite conflicts.
-                merged[key] = {**merged[key], **value}
+                if key == "projects":
+                    # Per-project merge keeps the agent's own state (history,
+                    # allowed tools, ...) next to added flags such as trust.
+                    merged[key] = _deep_merge_dicts(merged[key], value)
+                else:
+                    # Dict-level merge (e.g. mcpServers): additions overwrite
+                    # conflicts.
+                    merged[key] = {**merged[key], **value}
             else:
                 merged[key] = value
         return merged

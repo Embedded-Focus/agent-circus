@@ -881,12 +881,39 @@ def build_additional_dirs_override(additional_dirs: list[dict]) -> str:
     """
     volumes = []
     for entry in additional_dirs:
-        host_path = entry["path"]
-        name = entry.get("name") or Path(host_path).name
         mode = "ro" if entry.get("readonly", False) else "cached"
-        volumes.append(f"{host_path}:/workspaces/{name}:{mode}")
+        volumes.append(f"{entry['path']}:{additional_dir_container_path(entry)}:{mode}")
     services = {svc: {"volumes": volumes} for svc in AVAILABLE_SERVICES}
     return json.dumps({"services": services})
+
+
+def additional_dir_container_path(entry: dict) -> str:
+    """Return the container mount path of an ``additional_dirs`` entry.
+
+    :param entry: Additional directory entry from ``config.toml``.
+    :returns: ``/workspaces/<name>``, where *name* defaults to the basename
+        of the host path.
+    """
+    name = entry.get("name") or Path(entry["path"]).name
+    return f"/workspaces/{name}"
+
+
+def build_claude_trust_additions(additional_dirs: list[dict]) -> dict[str, Any]:
+    """Build Claude Code config additions that pre-trust the work directories.
+
+    Marks ``/workspace`` and every ``additional_dirs`` container path as
+    trusted (``projects[<dir>].hasTrustDialogAccepted``) so Claude Code does
+    not show its folder-trust dialog inside the container.
+
+    :param additional_dirs: List of directory entries from ``config.toml``.
+    :returns: Additions for the Claude Code ``.claude.json``.
+    """
+    dirs = ["/workspace"] + [
+        additional_dir_container_path(entry) for entry in additional_dirs
+    ]
+    return {
+        "projects": {d: {"hasTrustDialogAccepted": True} for d in dict.fromkeys(dirs)}
+    }
 
 
 def _data_store_mount_path(entry: dict) -> str:

@@ -35,6 +35,7 @@ from .config import (
     build_agent_config_mounts_override,
     build_ca_certs_override,
     build_claude_mem_override,
+    build_claude_trust_additions,
     build_data_store_override,
     build_env_dockerfile_lines,
     build_env_passthrough_override,
@@ -386,6 +387,9 @@ def build_compose_context(
     claude_mem_config = config.get("claude_mem")
     companion_services = tuple(get_companion_services(config))
     agent_config_additions = build_agent_config_additions(config)
+    agent_config_additions.setdefault("claude-code", {}).update(
+        build_claude_trust_additions(additional_dirs)
+    )
     claude_mem_enabled = bool(
         claude_mem_config and claude_mem_config.get("enabled", False)
     )
