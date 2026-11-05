@@ -2,7 +2,12 @@
 
 import json
 
-from agent_circus.config import AVAILABLE_SERVICES, build_additional_dirs_override
+from agent_circus.config import (
+    AVAILABLE_SERVICES,
+    additional_dir_container_path,
+    build_additional_dirs_override,
+    build_claude_trust_additions,
+)
 
 
 def test_build_additional_dirs_override_readonly() -> None:
@@ -64,3 +69,31 @@ def test_build_additional_dirs_override_empty() -> None:
     parsed = json.loads(result)
     for svc in AVAILABLE_SERVICES:
         assert parsed["services"][svc]["volumes"] == []
+
+
+def test_additional_dir_container_path_defaults_to_basename() -> None:
+    assert additional_dir_container_path({"path": "/a/b/myrepo"}) == (
+        "/workspaces/myrepo"
+    )
+
+
+def test_additional_dir_container_path_uses_custom_name() -> None:
+    entry = {"path": "/a/b/myrepo", "name": "lib"}
+    assert additional_dir_container_path(entry) == "/workspaces/lib"
+
+
+def test_build_claude_trust_additions_trusts_workspace_and_additional_dirs() -> None:
+    dirs = [{"path": "/home/user/shared-libs"}, {"path": "/x/repo", "name": "lib"}]
+    assert build_claude_trust_additions(dirs) == {
+        "projects": {
+            "/workspace": {"hasTrustDialogAccepted": True},
+            "/workspaces/shared-libs": {"hasTrustDialogAccepted": True},
+            "/workspaces/lib": {"hasTrustDialogAccepted": True},
+        }
+    }
+
+
+def test_build_claude_trust_additions_without_additional_dirs() -> None:
+    assert build_claude_trust_additions([]) == {
+        "projects": {"/workspace": {"hasTrustDialogAccepted": True}}
+    }

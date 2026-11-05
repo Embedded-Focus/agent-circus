@@ -582,3 +582,35 @@ def test_context_uses_automatic_writable_codex_store_for_mcp(
         codex_config = tomllib.load(f)
     assert codex_config["sandbox_mode"] == "workspace-write"
     assert codex_config["mcp_servers"]["github"] == {"command": "github-mcp-server"}
+
+
+def test_context_pre_trusts_work_dirs_in_claude_config_store(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    store_dir = get_agent_config_store_dir(workspace, "claude-code")
+    store_dir.mkdir(parents=True, exist_ok=True)
+    (store_dir / ".claude.json").write_text(
+        json.dumps({"projects": {"/workspace": {"allowedTools": ["Bash"]}}})
+    )
+    config = {"additional_dirs": [{"path": str(tmp_path / "lib")}]}
+
+    with (
+        patch("agent_circus.context.load_config", return_value=config),
+        patch("agent_circus.context.resolve_config", return_value=config_dir),
+        # Seeding copies the real host config dirs; the store is prepared above.
+        patch("agent_circus.context._seed_data_stores"),
+        build_compose_context(workspace) as ctx,
+    ):
+        assert ctx.data_store_seeder is not None
+        ctx.data_store_seeder()
+
+    claude_config = json.loads((store_dir / ".claude.json").read_text())
+    assert claude_config["projects"] == {
+        "/workspace": {"allowedTools": ["Bash"], "hasTrustDialogAccepted": True},
+        "/workspaces/lib": {"hasTrustDialogAccepted": True},
+    }

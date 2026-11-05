@@ -133,6 +133,22 @@ class TestClaudeCodeMerge:
         result = claude_handler.merge({}, additions)
         assert result == additions
 
+    def test_merge_projects_keeps_existing_project_state(
+        self, claude_handler: ClaudeCodeConfigHandler
+    ) -> None:
+        base = {
+            "projects": {
+                "/workspace": {"allowedTools": ["Bash"]},
+                "/other": {"hasTrustDialogAccepted": False},
+            }
+        }
+        additions = {"projects": {"/workspace": {"hasTrustDialogAccepted": True}}}
+        result = claude_handler.merge(base, additions)
+        assert result["projects"] == {
+            "/workspace": {"allowedTools": ["Bash"], "hasTrustDialogAccepted": True},
+            "/other": {"hasTrustDialogAccepted": False},
+        }
+
 
 class TestClaudeCodeWrite:
     def test_write_creates_file(
