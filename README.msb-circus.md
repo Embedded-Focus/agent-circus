@@ -155,8 +155,14 @@ Your workspace files come from the host and stay on the host, so `rm` and
 `destroy` do not touch them. To reclaim the space of cached images, run
 `msb image prune`.
 
-`ps --all` lists every sandbox that msb knows about, not only the sandbox
-of this workspace. `ps --running` lists only running sandboxes.
+`ps` prints a `docker compose ps`-style table (`NAME`, `ID`, `CREATED`,
+`STATUS`) with relative creation ages. `ps --all` lists every sandbox
+that msb knows about, not only the sandbox of this workspace.
+`ps --running` lists only running sandboxes.
+
+For scripts, `ps --format json` prints a JSON array with `name`, `id`,
+`status`, `created_at` and `updated_at` per sandbox, and `ps --quiet`
+prints sandbox names only. Both stay silent when no sandbox matches.
 
 ## Running Agents
 

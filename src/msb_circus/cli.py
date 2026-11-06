@@ -8,7 +8,6 @@ import subprocess
 import tempfile
 import time
 from dataclasses import replace
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -43,6 +42,7 @@ from .images import (
     bundled_dockerfile_path,
 )
 from .msb import MsbInvoker, check_version, probe_version, resolve_msb_binary
+from .ps import format_sandbox_json, format_sandbox_table
 from .sandbox import (
     SandboxInfo,
     build_copy_args,
@@ -189,21 +189,6 @@ def _list_sandboxes(invoker: MsbInvoker, *, running_only: bool) -> list[SandboxI
     return parse_sandbox_list_output(result.stdout)
 
 
-def _format_sandbox_row(sandbox: SandboxInfo) -> str:
-    """Format one sandbox entry for display.
-
-    :param sandbox: Entry to format.
-    :returns: Human-readable single-line summary.
-    """
-    parts = [sandbox.name, sandbox.status or "unknown"]
-    if sandbox.id:
-        parts.append(sandbox.id[:12])
-    if sandbox.created_at is not None:
-        created = datetime.fromtimestamp(sandbox.created_at, tz=UTC)
-        parts.append(created.strftime("%Y-%m-%d %H:%M UTC"))
-    return "  ".join(parts)
-
-
 @app.command(name="ps")
 def ps(
     workspace: Annotated[
@@ -232,12 +217,42 @@ def ps(
             help="Only list running sandboxes (default: all states).",
         ),
     ] = False,
+    format_: Annotated[
+        str,
+        typer.Option(
+            "--format",
+            help="Output format: table (docker compose ps style) or json.",
+        ),
+    ] = "table",
+    quiet: Annotated[
+        bool,
+        typer.Option(
+            "--quiet",
+            "-q",
+            help="Only print sandbox names, one per line.",
+        ),
+    ] = False,
 ) -> None:
     """Show sandbox status for this workspace (or all sandboxes).
 
     By default only this workspace's sandbox (``agents-<project>``) is
     shown, in any state. ``--all`` lists every sandbox msb knows about.
+
+    The table output mirrors ``docker compose ps`` (and therefore
+    ``agent-circus ps``). For scripts use ``--format json`` or
+    ``--quiet``; both stay silent when no sandbox matches.
+
+    Examples:
+        msb-circus ps                       # Table for this workspace
+        msb-circus ps --all                 # Every sandbox msb knows
+        msb-circus ps --running             # Only running sandboxes
+        msb-circus ps --format json         # Machine-readable output
+        msb-circus ps --quiet | xargs msb-circus rm -f
     """
+    if format_ not in ("table", "json"):
+        print(f"Error: unsupported --format {format_!r} (expected table or json)")
+        raise typer.Exit(code=1)
+
     config = load_config(workspace)
     binary = resolve_msb_binary(config.binary)
     check_version(binary)
@@ -253,15 +268,24 @@ def ps(
     else:
         name = sandbox_name_for_workspace(workspace)
         selected = [s for s in sandboxes if s.name == name]
-        if not selected:
-            print(f"No sandbox {name!r} for this workspace yet.")
-            return
+
+    # Machine-readable formats stay parseable: no prose on stdout.
+    if quiet:
+        for sandbox in selected:
+            print(sandbox.name)
+        return
+    if format_ == "json":
+        print(format_sandbox_json(selected))
+        return
 
     if not selected:
-        print("No sandboxes found.")
+        if show_all:
+            print("No sandboxes found.")
+        else:
+            name = sandbox_name_for_workspace(workspace)
+            print(f"No sandbox {name!r} for this workspace yet.")
         return
-    for sandbox in selected:
-        print(_format_sandbox_row(sandbox))
+    print(format_sandbox_table(selected))
 
 
 def _resolve_invoker(workspace: Path) -> tuple[MsbConfig, MsbInvoker]:

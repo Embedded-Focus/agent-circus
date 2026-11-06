@@ -1,6 +1,7 @@
 """Tests for the msb-circus ps command and sandbox list parsing."""
 
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,7 +12,8 @@ import msb_circus.cli as cli_module
 from msb_circus.cli import app
 from msb_circus.config import sandbox_name_for_workspace
 from msb_circus.exceptions import ConfigurationError
-from msb_circus.sandbox import parse_sandbox_list_output
+from msb_circus.ps import format_created, human_duration
+from msb_circus.sandbox import SandboxInfo, parse_sandbox_list_output
 
 runner = CliRunner()
 
@@ -98,15 +100,12 @@ def test_ps_reports_workspace_sandbox(tmp_path, fake_msb):
     )
     result = runner.invoke(app, ["ps", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
+    # docker compose ps-style table with a header row.
+    assert result.output.startswith("NAME")
     assert name in result.output
     assert "Running" in result.output
+    assert "deadbeef" in result.output
     assert "agents-other-project" not in result.output
-
-
-def test_ps_reports_missing_workspace_sandbox(tmp_path, fake_msb):
-    result = runner.invoke(app, ["ps", "--workspace", str(tmp_path)])
-    assert result.exit_code == 0
-    assert "No sandbox" in result.output
 
 
 def test_ps_all_flag_lists_every_sandbox(tmp_path, fake_msb):
@@ -128,6 +127,121 @@ def test_ps_running_filter_passes_flag(tmp_path, fake_msb):
     )
     assert result.exit_code == 0
     assert fake_msb["args"][:2] == ["list", "--running"]
+
+
+def test_ps_json_format_is_parseable(tmp_path, fake_msb):
+    fake_msb["stdout"] = json.dumps(
+        [
+            {
+                "name": "agents-demo",
+                "status": "Running",
+                "id": "deadbeef",
+                "created_at": 1730000000,
+                "updated_at": 1730000100,
+            }
+        ]
+    )
+    result = runner.invoke(
+        app, ["ps", "--workspace", str(tmp_path), "--all", "--format", "json"]
+    )
+    assert result.exit_code == 0
+    entries = json.loads(result.output)
+    assert entries == [
+        {
+            "name": "agents-demo",
+            "id": "deadbeef",
+            "status": "Running",
+            "created_at": 1730000000,
+            "updated_at": 1730000100,
+        }
+    ]
+
+
+def test_ps_json_format_is_silent_without_sandbox(tmp_path, fake_msb):
+    result = runner.invoke(
+        app, ["ps", "--workspace", str(tmp_path), "--format", "json"]
+    )
+    assert result.exit_code == 0
+    assert json.loads(result.output) == []
+
+
+def test_ps_json_format_rejects_unknown_format(tmp_path, fake_msb):
+    result = runner.invoke(
+        app, ["ps", "--workspace", str(tmp_path), "--format", "yaml"]
+    )
+    assert result.exit_code == 1
+    assert "yaml" in result.output
+
+
+def test_ps_quiet_prints_names_only(tmp_path, fake_msb):
+    fake_msb["stdout"] = json.dumps(
+        [
+            {"name": "agents-demo", "status": "Running"},
+            {"name": "scratch", "status": "Stopped"},
+        ]
+    )
+    result = runner.invoke(
+        app, ["ps", "--workspace", str(tmp_path), "--all", "--quiet"]
+    )
+    assert result.exit_code == 0
+    assert result.output.splitlines() == ["agents-demo", "scratch"]
+
+
+def test_ps_quiet_is_silent_without_sandbox(tmp_path, fake_msb):
+    result = runner.invoke(app, ["ps", "--workspace", str(tmp_path), "--quiet"])
+    assert result.exit_code == 0
+    assert result.output == ""
+
+
+def test_ps_missing_workspace_sandbox_reports_name(tmp_path, fake_msb):
+    result = runner.invoke(app, ["ps", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "No sandbox" in result.output
+
+
+def test_human_duration_wording_matches_docker():
+    assert human_duration(0) == "0 seconds"
+    assert human_duration(1) == "1 second"
+    assert human_duration(42) == "42 seconds"
+    assert human_duration(60) == "About a minute"
+    assert human_duration(120) == "2 minutes"
+    assert human_duration(3600) == "About an hour"
+    assert human_duration(7200) == "2 hours"
+    assert human_duration(24 * 3600) == "24 hours"  # docker switches to days at 48h
+    assert human_duration(3 * 86400) == "3 days"
+    assert human_duration(20 * 86400) == "2 weeks"
+    assert human_duration(70 * 86400) == "2 months"
+    assert human_duration(800 * 86400) == "2 years"
+
+
+def test_format_created_uses_relative_age_or_placeholder():
+    now = time.time()
+    assert format_created(None, now=now) == "-"
+    assert format_created(now - 120, now=now) == "2 minutes ago"
+
+
+def test_format_sandbox_table_is_column_aligned():
+    from msb_circus.ps import format_sandbox_table
+
+    sandboxes = [
+        SandboxInfo(name="a", status="Running"),
+        SandboxInfo(name="much-longer-name", id="deadbeefdeadbeef", created_at=100),
+    ]
+    table = format_sandbox_table(sandboxes, now=160)
+    lines = table.splitlines()
+    assert lines[0].split() == ["NAME", "ID", "CREATED", "STATUS"]
+    # Columns align across rows and the ID is truncated like docker ps does.
+    assert lines[2].startswith("much-longer-name  deadbeefdead")
+    assert lines[2].split() == [
+        "much-longer-name",
+        "deadbeefdead",
+        "About",
+        "a",
+        "minute",
+        "ago",
+        "-",
+    ]
+    assert lines[1].split() == ["a", "-", "-", "Running"]
 
 
 def test_ps_fails_on_msb_error(tmp_path, monkeypatch):
