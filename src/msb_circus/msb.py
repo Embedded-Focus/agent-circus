@@ -158,9 +158,9 @@ def check_version(binary: Path, expected: str | None = None) -> str | None:
     """Probe the msb version and warn on drift from the expected version.
 
     The bundled wheel binary always matches its distribution version, so
-    the drift check is skipped for it; it remains active for binaries
-    resolved from ``PATH`` or configuration. Never raises; a missing
-    version is only logged.
+    the drift check is skipped silently for it; it remains active for
+    binaries resolved from ``PATH`` or configuration. Never raises; a
+    missing version is only logged.
 
     :param binary: Path to the ``msb`` binary.
     :param expected: Version to compare against; defaults to
@@ -172,12 +172,8 @@ def check_version(binary: Path, expected: str | None = None) -> str | None:
         logger.warning("Could not determine the msb version of %s", binary)
         return None
     if is_bundled_msb(binary):
-        logger.debug(
-            "msb at %s is bundled with the microsandbox wheel (%s); "
-            "skipping drift check",
-            binary,
-            version,
-        )
+        # The bundled binary matches its wheel by construction; there is
+        # nothing worth logging on every invocation.
         return version
     if expected is None:
         expected = expected_msb_version()

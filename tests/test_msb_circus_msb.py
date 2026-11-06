@@ -76,10 +76,13 @@ def test_check_version_skips_drift_check_for_bundled_binary(
     fake_bundled.write_text("#!/bin/sh\necho 'msb 9.9.9'\n")
     fake_bundled.chmod(0o755)
     monkeypatch.setattr(msb_module, "_bundled_msb_path", lambda: fake_bundled)
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.DEBUG):
         version = check_version(fake_bundled, expected="0.7.11")
     assert version == "9.9.9"
     assert not any("differs" in record.getMessage() for record in caplog.records)
+    # The skip is silent: no per-invocation noise for the (correct)
+    # bundled-binary path, even at DEBUG level.
+    assert not caplog.records
 
 
 def test_check_version_passes_when_versions_match(tmp_path, caplog):
