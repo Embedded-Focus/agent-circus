@@ -1,7 +1,7 @@
 ---
 x-common-build-args: &common-build-args
   TZ: ${TZ:-Europe/Vienna}
-  NPM_VERSION: 12.2.1
+  NPM_VERSION: 12.2.2
 
 x-common-build: &common-build
   context: .
@@ -30,13 +30,13 @@ services:
       target: claude-code
       args:
         <<: *common-build-args
-        CLAUDE_CODE_VERSION: 2.1.316
+        CLAUDE_CODE_VERSION: 2.1.318
         # https://github.com/agentclientprotocol/claude-agent-acp
-        CLAUDE_AGENT_ACP_VERSION: 0.100.0
+        CLAUDE_AGENT_ACP_VERSION: 0.101.0
         # https://github.com/oven-sh/bun
         BUN_VERSION: 1.4.4
         # https://github.com/thedotmack/claude-mem
-        CLAUDE_MEM_VERSION: 15.8.3
+        CLAUDE_MEM_VERSION: 15.10.0
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
     - ${HOME}/.cache:/home/node/.cache
