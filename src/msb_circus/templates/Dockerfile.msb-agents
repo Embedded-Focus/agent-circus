@@ -17,9 +17,9 @@ COPY --from=ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e
 # dockerd 27.x embeds containerd, so the containerd binary itself is not
 # needed (upstream excludes it from dind too). The dind helper script and the
 # alpine-oriented entrypoint are removed again right below.
-COPY --from=docker.io/library/docker:29.9.3-dind@sha256:4495bd03abbe729dae065ecc187801a19820fd19159948f01d68a57a8d281bd0 \
+COPY --from=docker.io/library/docker:29.9.3-dind@sha256:08a98015fce594af7c382883bea080ea206de74402a95da9dc52b6428c8cd121 \
     /usr/local/bin/ /usr/local/bin/
-COPY --from=docker.io/library/docker:29.9.3-dind@sha256:4495bd03abbe729dae065ecc187801a19820fd19159948f01d68a57a8d281bd0 \
+COPY --from=docker.io/library/docker:29.9.3-dind@sha256:08a98015fce594af7c382883bea080ea206de74402a95da9dc52b6428c8cd121 \
     /usr/local/libexec/docker/cli-plugins/ /usr/local/libexec/docker/cli-plugins/
 
 # Runtime dependencies for dockerd (mirrors the upstream dind image's dep
@@ -138,9 +138,9 @@ ENV NODE_OPTIONS=--max-old-space-size=4096
 RUN npm install --global \
         --allow-scripts=@opencode/cli,@anthropic-ai/claude-code \
         @opencode/cli@2.2.5 \
-        @anthropic-ai/claude-code@2.1.318 \
+        @anthropic-ai/claude-code@2.1.319 \
         @agentclientprotocol/claude-agent-acp@0.101.0 \
-        @openai/codex@0.166.0 \
+        @openai/codex@0.167.0 \
         @agentclientprotocol/codex-acp@2.5.0 \
         @earendil-works/pi-coding-agent@1.5.0 pi-acp@0.0.34
 
