@@ -500,6 +500,9 @@ def test_context_merges_mcp_into_codex_config_data_store(
     host_codex = tmp_path / "host-codex"
     host_codex.mkdir()
     (host_codex / "config.toml").write_text('sandbox_mode = "workspace-write"\n')
+    # Isolate from the invoking user's home: automatic agent stores are
+    # seeded from ~/.claude & co. when they exist on the host.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     config = {
         "mcp_servers": [

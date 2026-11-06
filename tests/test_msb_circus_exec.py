@@ -538,7 +538,10 @@ def test_exec_acp_routes_logs_to_given_file_only(tmp_path, fake_msb):
     assert _stderr_stream_handlers() == []
 
 
-def test_exec_acp_without_log_file_uses_default_file(tmp_path, fake_msb):
+def test_exec_acp_without_log_file_uses_default_file(tmp_path, fake_msb, monkeypatch):
+    # The CLI callback resolves [logging] defaults from the working
+    # directory; isolate the test from any config around the repository.
+    monkeypatch.chdir(tmp_path)
     result = runner.invoke(
         app, ["exec", "--acp", "--workspace", str(tmp_path), "--", "pi-acp"]
     )
