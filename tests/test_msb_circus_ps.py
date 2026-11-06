@@ -53,6 +53,39 @@ def test_parse_paginated_envelope():
     assert [s.name for s in sandboxes] == ["agents-x"]
 
 
+def test_parse_rfc3339_created_at():
+    """Current msb emits created_at as an RFC 3339 string, not epoch."""
+    output = json.dumps(
+        [
+            {
+                "name": "agents-demo",
+                "status": "Running",
+                "created_at": "2026-11-06T23:41:00+00:00",
+            }
+        ]
+    )
+    sandboxes = parse_sandbox_list_output(output)
+    assert sandboxes[0].created_at == pytest.approx(1794008460.0)
+
+
+def test_parse_rfc3339_created_at_with_z_suffix_and_naive():
+    output = json.dumps(
+        [
+            {"name": "a", "created_at": "2026-11-06T23:41:00Z"},
+            {"name": "b", "created_at": "2026-11-06T23:41:00"},
+        ]
+    )
+    sandboxes = parse_sandbox_list_output(output)
+    assert sandboxes[0].created_at == sandboxes[1].created_at
+    assert sandboxes[0].created_at == pytest.approx(1794008460.0)
+
+
+def test_parse_unparseable_timestamp_yields_none():
+    output = json.dumps([{"name": "a", "created_at": "yesterday"}])
+    sandboxes = parse_sandbox_list_output(output)
+    assert sandboxes[0].created_at is None
+
+
 @pytest.mark.parametrize(
     "output",
     [

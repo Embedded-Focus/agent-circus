@@ -11,6 +11,7 @@ import json
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from .config import DEFAULT_MEMORY, PortForward
@@ -466,12 +467,43 @@ class SandboxInfo:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
+def parse_timestamp(value: Any) -> float | None:
+    """Convert an msb timestamp field to epoch seconds.
+
+    msb serializes timestamps in JSON output as RFC 3339 strings (e.g.
+    ``"2026-11-06T23:41:00+00:00"``); older releases used epoch numbers.
+    Both are accepted.
+
+    :param value: Raw value of a timestamp field.
+    :returns: Epoch seconds, or ``None`` when the value is missing or of
+        an unexpected type/format.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.timestamp()
+    return None
+
+
 def parse_sandbox_list_output(output: str) -> list[SandboxInfo]:
     """Parse ``msb list --format json`` output.
 
     Accepts a top-level JSON array of entries, or an object with a
     ``sandboxes`` array (in case msb changes to a paginated envelope).
     The status is read from ``status`` or ``state``, whichever is present.
+    Timestamps may be RFC 3339 strings (current msb) or epoch numbers
+    (older releases).
+
+    Note: current msb releases do not report ``id`` or ``updated_at`` in
+    list output, so those fields stay ``None``.
 
     :param output: Raw stdout of the list command.
     :returns: Parsed sandbox entries.
@@ -509,16 +541,8 @@ def parse_sandbox_list_output(output: str) -> list[SandboxInfo]:
                 name=name,
                 status=status if isinstance(status, str) else None,
                 id=entry.get("id") if isinstance(entry.get("id"), str) else None,
-                created_at=(
-                    entry["created_at"]
-                    if isinstance(entry.get("created_at"), int | float)
-                    else None
-                ),
-                updated_at=(
-                    entry["updated_at"]
-                    if isinstance(entry.get("updated_at"), int | float)
-                    else None
-                ),
+                created_at=parse_timestamp(entry.get("created_at")),
+                updated_at=parse_timestamp(entry.get("updated_at")),
                 raw=entry,
             )
         )
