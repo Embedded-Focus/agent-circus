@@ -85,7 +85,7 @@ from .state import (
     get_startup_hook_path,
     get_state_dir,
 )
-from .templates import template_dir_context
+from .templates import IGNORED_TEMPLATE_NAMES, template_dir_context
 
 logger = logging.getLogger(__name__)
 
@@ -612,7 +612,13 @@ def build_compose_context(
         # touch the installed package files.
         with template_dir_context() as src_dir, tempfile.TemporaryDirectory() as _tmp:
             build_context = Path(_tmp)
-            shutil.copytree(src_dir, build_context, symlinks=True, dirs_exist_ok=True)
+            shutil.copytree(
+                src_dir,
+                build_context,
+                symlinks=True,
+                dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns(*IGNORED_TEMPLATE_NAMES),
+            )
             if selection(storage_dir(workspace))["active"] is not None:
                 apply_snapshot(build_context, current(workspace))
             _copy_project_hooks(workspace, build_context)
