@@ -59,11 +59,12 @@ def test_parse_config_rejects_non_bool_worktree_mirror():
         parse_config({"git": {"worktree_mirror": "yes"}})
 
 
-def test_parse_config_warns_on_unsupported_git_subkeys(caplog):
-    with caplog.at_level(logging.WARNING):
+def test_parse_config_logs_unsupported_git_subkeys_at_debug(caplog):
+    with caplog.at_level(logging.DEBUG):
         parse_config({"git": {"worktree_mirror": True, "config_path": "~/.gitconfig"}})
     messages = [record.getMessage() for record in caplog.records]
     assert any("git.config_path" in message for message in messages)
+    assert all(record.levelno == logging.DEBUG for record in caplog.records)
 
 
 def test_effective_mounts_adds_worktree_mirror(tmp_path):

@@ -84,12 +84,15 @@ def test_parse_config_interprets_supported_keys():
     assert config.logging_file == "/tmp/msbc.log"
 
 
-def test_parse_config_warns_on_unsupported_keys(caplog):
-    with caplog.at_level(logging.WARNING):
+def test_parse_config_logs_unsupported_keys_at_debug(caplog):
+    # Unsupported keys are shared agent-circus config; expecting them is
+    # normal, so they only surface at debug level.
+    with caplog.at_level(logging.DEBUG):
         parse_config({"services": ["pi"], "runtime": {"engine": "docker"}})
     messages = [record.getMessage() for record in caplog.records]
     assert any("services" in message for message in messages)
     assert any("runtime" in message for message in messages)
+    assert all(record.levelno == logging.DEBUG for record in caplog.records)
 
 
 @pytest.mark.parametrize(

@@ -308,13 +308,16 @@ def read_config_layers(
 
 
 def warn_unsupported_keys(config: dict[str, Any]) -> None:
-    """Log a warning for every unsupported top-level config key.
+    """Log a debug message for every unsupported top-level config key.
+
+    Agent-circus and msb-circus share a config file, so unsupported keys
+    are expected and not worth a warning on every invocation.
 
     :param config: Merged raw configuration dictionary.
     """
     for key in config:
         if key not in SUPPORTED_TOP_LEVEL_KEYS:
-            logger.warning("Unsupported config key %r for msb-circus — ignoring", key)
+            logger.debug("Unsupported config key %r for msb-circus — ignoring", key)
 
 
 def sanitize_project_name(name: str) -> str:
@@ -741,7 +744,7 @@ def _parse_git(raw: Any) -> bool:
         raise ConfigurationError("git.worktree_mirror must be a boolean")
     for key in raw:
         if key != "worktree_mirror":
-            logger.warning(
+            logger.debug(
                 "Unsupported config key 'git.%s' for msb-circus — ignoring", key
             )
     return worktree_mirror

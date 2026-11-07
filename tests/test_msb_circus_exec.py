@@ -588,6 +588,8 @@ def test_exec_acp_status_messages_go_to_log_file(tmp_path, fake_msb):
 def test_exec_acp_config_warnings_go_to_log_file(tmp_path, fake_msb):
     # Reproduces the reported failure mode: unsupported config keys must
     # not reach stderr in ACP mode (acp.el treats stderr as API errors).
+    # They are logged at debug level, so request --log-level debug to
+    # observe the message in the log file.
     config_dir = tmp_path / ".agent-circus"
     config_dir.mkdir()
     (config_dir / "config.toml").write_bytes(b'runtime = "podman"\n')
@@ -597,6 +599,8 @@ def test_exec_acp_config_warnings_go_to_log_file(tmp_path, fake_msb):
         [
             "--log-file",
             str(log_file),
+            "--log-level",
+            "debug",
             "exec",
             "--acp",
             "--workspace",
