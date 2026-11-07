@@ -278,13 +278,8 @@ def ps(
         print(format_sandbox_json(selected))
         return
 
-    if not selected:
-        if show_all:
-            print("No sandboxes found.")
-        else:
-            name = sandbox_name_for_workspace(workspace)
-            print(f"No sandbox {name!r} for this workspace yet.")
-        return
+    # Mirror docker compose ps: an empty selection still prints the
+    # header row.
     print(format_sandbox_table(selected))
 
 

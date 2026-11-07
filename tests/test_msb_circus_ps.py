@@ -226,10 +226,18 @@ def test_ps_quiet_is_silent_without_sandbox(tmp_path, fake_msb):
     assert result.output == ""
 
 
-def test_ps_missing_workspace_sandbox_reports_name(tmp_path, fake_msb):
+def test_ps_empty_workspace_shows_header_only(tmp_path, fake_msb):
+    """Empty selection mirrors docker compose ps: header row, no rows."""
     result = runner.invoke(app, ["ps", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
-    assert "No sandbox" in result.output
+    assert result.output.startswith("NAME")
+    assert result.output.strip() == "NAME  ID  CREATED  STATUS"
+
+
+def test_ps_all_empty_shows_header_only(tmp_path, fake_msb):
+    result = runner.invoke(app, ["ps", "--workspace", str(tmp_path), "--all"])
+    assert result.exit_code == 0
+    assert result.output.strip() == "NAME  ID  CREATED  STATUS"
 
 
 def test_human_duration_wording_matches_docker():
