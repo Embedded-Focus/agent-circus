@@ -154,9 +154,15 @@ def docker_enabled(config: MsbConfig) -> bool:
 
 @dataclass(frozen=True)
 class NetworkConfig:
-    """Network profile settings (``[msb.network]``)."""
+    """Network profile settings (``[msb.network]``).
+
+    :ivar mode: Network profile passed as ``--net``.
+    :ivar trust_host_cas: Ship the host's trusted CAs into the guest
+        (``--trust-host-cas``); applied at sandbox creation only.
+    """
 
     mode: str = DEFAULT_NETWORK_MODE
+    trust_host_cas: bool = False
 
 
 @dataclass(frozen=True)
@@ -370,11 +376,20 @@ def warn_unsupported_keys(config: dict[str, Any]) -> None:
     """Log a debug message for every unsupported top-level config key.
 
     Agent-circus and msb-circus share a config file, so unsupported keys
-    are expected and not worth a warning on every invocation.
+    are expected and not worth a warning on every invocation. The
+    ``ca_certs`` key is logged at INFO level instead, because users may
+    expect it to work here as it does in agent-circus.
 
     :param config: Merged raw configuration dictionary.
     """
     for key in config:
+        if key == "ca_certs":
+            logger.info(
+                "msb-circus does not support [ca_certs]; ignoring it. Add the "
+                "certificates to the host CA store and set "
+                "msb.network.trust_host_cas = true instead."
+            )
+            continue
         if key not in SUPPORTED_TOP_LEVEL_KEYS:
             logger.debug("Unsupported config key %r for msb-circus — ignoring", key)
 
@@ -630,7 +645,10 @@ def _parse_network(raw: Any) -> NetworkConfig:
     mode = raw.get("mode", DEFAULT_NETWORK_MODE)
     if not isinstance(mode, str) or not mode:
         raise ConfigurationError("msb.network.mode must be a non-empty string")
-    return NetworkConfig(mode=mode)
+    trust_host_cas = raw.get("trust_host_cas", False)
+    if not isinstance(trust_host_cas, bool):
+        raise ConfigurationError("msb.network.trust_host_cas must be a boolean")
+    return NetworkConfig(mode=mode, trust_host_cas=trust_host_cas)
 
 
 def _parse_tracing(raw: Any) -> TracingConfig:

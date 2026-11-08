@@ -129,6 +129,29 @@ def test_parse_config_rejects_malformed_values(raw, message):
         parse_config(raw)
 
 
+def test_parse_config_trust_host_cas_defaults_to_false():
+    assert parse_config({}).network.trust_host_cas is False
+
+
+def test_parse_config_reads_trust_host_cas():
+    config = parse_config({"msb": {"network": {"trust_host_cas": True}}})
+    assert config.network.trust_host_cas is True
+    assert config.network.mode == "public,private"
+
+
+def test_parse_config_rejects_non_bool_trust_host_cas():
+    with pytest.raises(ConfigurationError, match="trust_host_cas"):
+        parse_config({"msb": {"network": {"trust_host_cas": "yes"}}})
+
+
+def test_parse_config_logs_info_for_ca_certs(caplog):
+    with caplog.at_level(logging.INFO, logger="msb_circus.config"):
+        parse_config({"ca_certs": {"patterns": ["x.crt"]}})
+    records = [r for r in caplog.records if "trust_host_cas" in r.getMessage()]
+    assert len(records) == 1
+    assert records[0].levelno == logging.INFO
+
+
 def test_load_config_merges_user_global_and_project_layers(tmp_path, monkeypatch):
     user_dir = tmp_path / "userconfig"
     user_dir.mkdir()

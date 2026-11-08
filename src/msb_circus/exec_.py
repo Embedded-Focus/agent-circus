@@ -30,6 +30,9 @@ HOSTS_BLOCK_END = "# END msb-circus hosts"
 #: Guest path of the hosts file the managed block is written into.
 GUEST_HOSTS_FILE = "/etc/hosts"
 
+HOST_CAS_GUEST_PATH = "/.msb/tls/host-cas.pem"
+"""Bundle that msb writes into the guest for ``--trust-host-cas``."""
+
 
 def _hosts_script(path: str) -> str:
     """Build the POSIX sh script replacing the managed hosts block.
@@ -191,6 +194,20 @@ def build_prepare_ssh_dir_args(name: str) -> list[str]:
     :returns: Argv list for :class:`msb_circus.msb.MsbInvoker`.
     """
     script = f"mkdir -p {SSH_GUEST_DIR} && chmod 700 {SSH_GUEST_DIR}"
+    return build_exec_args(name, ["sh", "-c", script], tty=None)
+
+
+def build_host_cas_probe_args(name: str) -> list[str]:
+    """Build argv reporting whether msb shipped the host CA bundle.
+
+    The script prints ``present`` when the bundle exists and is not
+    empty, otherwise ``absent``. Printing a word (instead of relying on
+    the exit code) separates the answer from msb exec failures.
+
+    :param name: Sandbox name.
+    :returns: Argv list for :class:`msb_circus.msb.MsbInvoker`.
+    """
+    script = f"if [ -s {HOST_CAS_GUEST_PATH} ]; then echo present; else echo absent; fi"
     return build_exec_args(name, ["sh", "-c", script], tty=None)
 
 

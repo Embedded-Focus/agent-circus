@@ -30,6 +30,7 @@ from .envs import parse_env_assignments, resolve_passthrough
 from .exceptions import ConfigurationError, MsbCircusError, MsbCommandError
 from .exec_ import (
     build_exec_args,
+    build_host_cas_probe_args,
     build_prepare_ssh_dir_args,
     build_repair_codex_daemon_args,
     build_ssh_agent_probe_args,
@@ -896,6 +897,46 @@ def _warn_on_mount_drift(
     )
 
 
+def _warn_on_trust_host_cas_drift(
+    invoker: MsbInvoker, config: MsbConfig, name: str
+) -> None:
+    """Warn when ``trust_host_cas`` differs from the sandbox's setting.
+
+    msb applies ``--trust-host-cas`` at sandbox creation only, and
+    ``msb inspect`` does not report it. The guest bundle
+    ``/.msb/tls/host-cas.pem`` exists exactly when the flag was set.
+    Failures here are non-fatal (probes, never raises).
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param config: Resolved msb-circus configuration.
+    :param name: Sandbox name to probe.
+    """
+    try:
+        result = invoker.run(build_host_cas_probe_args(name), check=False)
+    except MsbCommandError as e:
+        logger.debug("Host CA drift check for %s failed: %s", name, e)
+        return
+    answer = (result.stdout or "").strip()
+    if answer not in ("present", "absent"):
+        logger.debug(
+            "Host CA drift check for %s gave no answer (rc=%s)",
+            name,
+            result.returncode,
+        )
+        return
+    if (answer == "present") == config.network.trust_host_cas:
+        return
+    state = "enabled" if config.network.trust_host_cas else "disabled"
+    logger.warning(
+        "msb.network.trust_host_cas is %s in the configuration, but sandbox "
+        "%s was created with the opposite setting. msb applies it at "
+        "sandbox creation only. Remove and re-create the sandbox to apply: "
+        "msb-circus rm -f && msb-circus up.",
+        state,
+        name,
+    )
+
+
 def _fail_on_occupied_ports(config: MsbConfig) -> None:
     """Hard-fail when a configured host port is already bound on the host.
 
@@ -1354,6 +1395,7 @@ def _ensure_sandbox_running(
         _warn_on_port_drift(invoker, config, name)
         _warn_on_disk_drift(invoker, config, name)
         _warn_on_mount_drift(invoker, config, name, workspace)
+        _warn_on_trust_host_cas_drift(invoker, config, name)
         _check_dockerd(invoker, config, name)
         return
 
@@ -1372,6 +1414,7 @@ def _ensure_sandbox_running(
         _warn_on_port_drift(invoker, config, name)
         _warn_on_disk_drift(invoker, config, name)
         _warn_on_mount_drift(invoker, config, name, workspace)
+        _warn_on_trust_host_cas_drift(invoker, config, name)
     else:
         logger.info("Booting sandbox %s from %s...", name, image_tag)
         _fail_on_occupied_ports(config)
@@ -1389,6 +1432,7 @@ def _ensure_sandbox_running(
                 workdir=config.agent.workdir,
                 docker_disk=config.sandbox.docker_disk,
                 root_disk=config.sandbox.root_disk,
+                trust_host_cas=config.network.trust_host_cas,
                 env={**config.env, **(ssh_sandbox_env() if link else {})},
                 vsock=[(str(link), SSH_AGENT_VSOCK_PORT)] if link else None,
             )
@@ -1457,6 +1501,7 @@ def start(
     _check_ssh_agent(invoker, config, name)
     _warn_on_disk_drift(invoker, config, name)
     _warn_on_mount_drift(invoker, config, name, workspace)
+    _warn_on_trust_host_cas_drift(invoker, config, name)
     if docker_enabled(config):
         ready, last_error = _probe_dockerd(invoker, name)
         if ready:

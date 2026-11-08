@@ -12,6 +12,7 @@
 [Secrets](#secrets) ·
 [Networking](#networking) ·
 [Host Entries](#host-entries) ·
+[CA Certificates](#ca-certificates) ·
 [Troubleshooting](#troubleshooting)
 
 ## Overview
@@ -546,6 +547,8 @@ memory = "4G"
 
 [msb.network]
 mode = "public,private"                # default; unrestricted network access
+# trust_host_cas = false              # trust the host's CAs; see
+                                       # "CA Certificates"
 
 [[port_forwards]]                       # publish a guest port on the host
 guest_port = 8000                       # or container_port (agent-circus style)
@@ -848,6 +851,49 @@ do not get these entries.
 If you remove the `[hosts]` table, the last block stays in the sandbox
 until you re-create it. To empty the block without re-creating, set
 `patterns = []` and run `msb-circus up` once.
+
+## CA Certificates
+
+Company networks often use a private certificate authority (CA). A TLS
+inspection proxy or an internal server, such as an artifact store, uses
+such a CA. Programs in the sandbox do not trust this CA by default, so
+HTTPS requests to these servers fail.
+
+Set `trust_host_cas = true` under `[msb.network]`:
+
+``` toml
+[msb.network]
+trust_host_cas = true
+```
+
+msb-circus then creates the sandbox with `--trust-host-cas`. msb copies
+every CA that the host trusts into the sandbox and adds it to the system
+store of the sandbox.
+
+The certificates must be in the CA store of the host. msb-circus does
+not select or copy single certificates. The `[ca_certs]` table of
+agent-circus is not supported; msb-circus logs a message and ignores it.
+On Debian or Ubuntu hosts, put the certificate files into
+`/usr/local/share/ca-certificates/` and run `sudo update-ca-certificates`
+on the host.
+
+Security note: every CA that the host trusts is also trusted in every
+sandbox with this option. A CA that someone plants on the host is
+trusted in the sandbox as well. The option is off by default.
+
+The option applies only when the sandbox is created. After you change
+it, or after you add or remove a CA on the host, re-create the sandbox:
+
+``` shell
+msb-circus rm -f && msb-circus up
+```
+
+msb-circus warns when the sandbox and the configuration disagree about
+the option.
+
+curl, git, and the Docker engine in the sandbox use the system store.
+Containers that an agent starts with the Docker engine inside the
+sandbox do not get these certificates.
 
 ## Troubleshooting
 

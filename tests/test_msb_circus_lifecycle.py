@@ -71,6 +71,12 @@ class FakeInvoker:
             if self.behavior.get("trust_fail"):
                 return SimpleNamespace(returncode=1, stdout="", stderr="denied")
             return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if args[0] == "exec" and any("host-cas.pem" in a for a in args):
+            return SimpleNamespace(
+                returncode=0,
+                stdout=self.behavior.get("host_cas_stdout", ""),
+                stderr="",
+            )
         if args[0] == "load" and self.behavior.get("load_fail"):
             raise MsbCommandError("msb load failed", returncode=1)
         return SimpleNamespace(returncode=0, stdout="[]", stderr="")
@@ -177,6 +183,74 @@ def test_up_starts_stopped_sandbox(tmp_path, fake_msb):
     assert result.exit_code == 0
     assert ["start", name] in fake_msb["calls"]
     assert not [c for c in fake_msb["calls"] if c[0] == "run"]
+
+
+def test_up_passes_trust_host_cas_when_configured(tmp_path, fake_msb):
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b"[msb.network]\ntrust_host_cas = true\n")
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    assert len(run_calls) == 1
+    assert "--trust-host-cas" in run_calls[0]
+
+
+def test_up_warns_on_trust_host_cas_drift_when_enabled_but_absent(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b"[msb.network]\ntrust_host_cas = true\n")
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["host_cas_stdout"] = "absent\n"
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "trust_host_cas" in result.output
+    assert "re-create" in result.output
+    assert not [c for c in fake_msb["calls"] if c[0] == "run"]
+
+
+def test_up_warns_on_trust_host_cas_drift_when_disabled_but_present(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["host_cas_stdout"] = "present\n"
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "trust_host_cas" in result.output
+    assert "re-create" in result.output
+
+
+def test_up_does_not_warn_when_trust_host_cas_matches(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b"[msb.network]\ntrust_host_cas = true\n")
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["host_cas_stdout"] = "present\n"
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "trust_host_cas" not in result.output
+
+
+def test_up_ignores_trust_host_cas_probe_without_answer(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b"[msb.network]\ntrust_host_cas = true\n")
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "trust_host_cas" not in result.output
+
+
+def test_start_warns_on_trust_host_cas_drift(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    fake_msb["host_cas_stdout"] = "present\n"
+    result = runner.invoke(app, ["start", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert ["start", name] in fake_msb["calls"]
+    assert "trust_host_cas" in result.output
+    assert "re-create" in result.output
 
 
 def test_up_publishes_configured_port_forwards(tmp_path, fake_msb):

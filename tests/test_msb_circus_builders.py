@@ -231,6 +231,18 @@ def test_build_run_args_without_vsock_has_no_vsock_flag():
     assert "--vsock" not in args
 
 
+def test_build_run_args_adds_trust_host_cas_when_enabled():
+    args = build_run_args(name="agents-x", image="img:1", trust_host_cas=True)
+    assert "--trust-host-cas" in args
+    assert args.count("--trust-host-cas") == 1
+    assert args.index("--trust-host-cas") < args.index("--detach")
+
+
+def test_build_run_args_without_trust_host_cas_has_no_flag():
+    args = build_run_args(name="agents-x", image="img:1")
+    assert "--trust-host-cas" not in args
+
+
 def test_build_ssh_agent_probe_args_sets_guest_socket():
     from msb_circus.exec_ import build_ssh_agent_probe_args
 
@@ -239,6 +251,17 @@ def test_build_ssh_agent_probe_args_sets_guest_socket():
     assert "--tty" not in args and "--no-tty" not in args
     assert args[args.index("--env") + 1] == "SSH_AUTH_SOCK=/run/ssh-agent.sock"
     assert args[-3:] == ["--", "ssh-add", "-l"]
+
+
+def test_build_host_cas_probe_args_checks_guest_bundle():
+    from msb_circus.exec_ import build_host_cas_probe_args
+
+    args = build_host_cas_probe_args("agents-x")
+    assert args[0] == "exec"
+    assert "--tty" not in args and "--no-tty" not in args
+    assert args[-4:] == ["--", "sh", "-c", args[-1]]
+    assert "/.msb/tls/host-cas.pem" in args[-1]
+    assert "present" in args[-1] and "absent" in args[-1]
 
 
 def test_build_prepare_ssh_dir_args_creates_private_guest_dir():

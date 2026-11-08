@@ -39,6 +39,7 @@ def build_run_args(
     workdir: str | None = None,
     docker_disk: str | None = None,
     root_disk: str | None = None,
+    trust_host_cas: bool = False,
     detach: bool = True,
     vsock: list[tuple[str, int]] | None = None,
 ) -> list[str]:
@@ -65,6 +66,8 @@ def build_run_args(
         disk: dockerd then has no usable storage backend.
     :param root_disk: Optional root disk spec sent as ``--root-disk``
         verbatim (e.g. ``"flat:32G"``); ``None`` keeps the msb default.
+    :param trust_host_cas: Send ``--trust-host-cas`` so msb ships the
+        host's trusted CAs into the guest.
     :param detach: Whether to boot detached (default True).
     :param vsock: Optional host Unix socket routes as ``(absolute host
         path, guest port)`` pairs, sent as ``--vsock``.
@@ -84,6 +87,8 @@ def build_run_args(
         ]
     if net:
         args += ["--net", net]
+    if trust_host_cas:
+        args.append("--trust-host-cas")
     for forward in port_forwards or ():
         token = f"{forward.host}:{forward.host_port}:{forward.guest_port}"
         if forward.protocol == "udp":
