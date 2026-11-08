@@ -65,6 +65,14 @@ RUN uv python pin 3.14 --global
 # from the session environment
 ENV DOCKER_HOST=unix:///var/run/docker.sock
 
+# Point TLS clients with their own CA lists at the system bundle, so CAs
+# that msb adds (--trust-host-cas, TLS interception) are trusted:
+# NODE_EXTRA_CA_CERTS for Node, REQUESTS_CA_BUNDLE for Python requests,
+# SSL_CERT_FILE for OpenSSL-based clients, Python's ssl module, and uv.
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt \
+    REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+
 # Create the docker group so dockerd can chown the socket to it; silences
 # the "group docker not found" warning on first boot.
 RUN addgroup --system docker || true

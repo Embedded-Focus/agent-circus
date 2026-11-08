@@ -891,7 +891,9 @@ msb-circus rm -f && msb-circus up
 msb-circus warns when the sandbox and the configuration disagree about
 the option.
 
-curl, git, and the Docker engine in the sandbox use the system store.
+curl, git, the Docker engine, Node-based agents, Python (`requests`,
+`ssl`) and uv use the system store. Codex is not verified yet. Changes
+to the image need `msb-circus build` and a re-created sandbox.
 Containers that an agent starts with the Docker engine inside the
 sandbox do not get these certificates.
 

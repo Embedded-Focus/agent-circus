@@ -159,6 +159,15 @@ def test_build_image_inspect_args():
     assert build_image_inspect_args("img:1") == ["image", "inspect", "img:1"]
 
 
+def test_bundled_dockerfile_points_tls_clients_at_system_bundle():
+    """Node and Python requests keep their own CA lists; point them at the
+    system bundle so CAs that msb adds to the guest are trusted."""
+    content = bundled_dockerfile_path().read_text()
+    assert "NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt" in content
+    assert "REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt" in content
+    assert "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt" in content
+
+
 def test_dockerfile_installs_ssh_bridge_packages():
     """Guard against the image, constants, and entrypoint drifting apart."""
     content = bundled_dockerfile_path().read_text()
