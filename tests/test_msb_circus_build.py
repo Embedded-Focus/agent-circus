@@ -164,5 +164,5 @@ def test_dockerfile_installs_ssh_bridge_packages():
     content = bundled_dockerfile_path().read_text()
     assert "openssh-client" in content
     assert "socat" in content
-    assert "MSB_CIRCUS_SSH_AGENT_VSOCK_PORT" in content
+    assert "CIRCUS_SSH_AGENT_VSOCK_PORT" in content
     assert "VSOCK-CONNECT:2:" in content

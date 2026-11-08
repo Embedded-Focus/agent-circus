@@ -151,4 +151,4 @@ def test_ssh_file_copies_omits_unset_entries():
 def test_ssh_sandbox_env_sets_guest_socket_and_port():
     env = ssh_sandbox_env()
     assert env["SSH_AUTH_SOCK"] == "/run/ssh-agent.sock"
-    assert env["MSB_CIRCUS_SSH_AGENT_VSOCK_PORT"] == "22022"
+    assert env["CIRCUS_SSH_AGENT_VSOCK_PORT"] == "22022"

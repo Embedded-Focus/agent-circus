@@ -89,7 +89,7 @@ RUN addgroup --system docker || true
 # /var/lib/docker:kind=disk) or a flat root (--root-disk flat:...); see
 # plan-msb-disks.md.
 #
-# SSH agent bridge: when MSB_CIRCUS_SSH_AGENT_VSOCK_PORT is set (msb-circus
+# SSH agent bridge: when CIRCUS_SSH_AGENT_VSOCK_PORT is set (msb-circus
 # passes it together with a matching --vsock route at sandbox creation), a
 # background socat relays a guest Unix socket to the host SSH agent over
 # virtio-vsock (CID 2). Guest processes then talk to the host agent via
@@ -127,9 +127,9 @@ RUN printf '%s\n' \
         '    echo "Enable docker with docker_disk = \"10G\" (or root_disk = \"flat:32G\") under [msb.sandbox] in" >&2' \
         '    echo ".agent-circus/config.toml, then recreate the sandbox (msb-circus rm && msb-circus up)." >&2' \
         'fi' \
-        'if [ -n "${MSB_CIRCUS_SSH_AGENT_VSOCK_PORT:-}" ] && command -v socat >/dev/null 2>&1; then' \
+        'if [ -n "${CIRCUS_SSH_AGENT_VSOCK_PORT:-}" ] && command -v socat >/dev/null 2>&1; then' \
         '    rm -f /run/ssh-agent.sock' \
-        '    socat UNIX-LISTEN:/run/ssh-agent.sock,fork,mode=600 "VSOCK-CONNECT:2:${MSB_CIRCUS_SSH_AGENT_VSOCK_PORT}" >/tmp/ssh-agent-bridge.log 2>&1 &' \
+        '    socat UNIX-LISTEN:/run/ssh-agent.sock,fork,mode=600 "VSOCK-CONNECT:2:${CIRCUS_SSH_AGENT_VSOCK_PORT}" >/tmp/ssh-agent-bridge.log 2>&1 &' \
         'fi' \
         'exec "$@"' \
         > /usr/local/bin/docker-entrypoint.sh \

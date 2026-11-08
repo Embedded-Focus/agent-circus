@@ -2,6 +2,7 @@
 
 import json
 import socket
+from itertools import pairwise
 from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar
@@ -616,8 +617,11 @@ def test_up_with_ssh_boots_with_vsock_route_and_env(tmp_path, fake_msb, ssh_envi
     assert args[args.index("--vsock") + 1] == f"{link}:22022"
     assert args[args.index("--env") + 1] == "SSH_AUTH_SOCK=/run/ssh-agent.sock"
     assert args[args.index("--env", args.index("--env") + 1) + 1] == (
-        "MSB_CIRCUS_SSH_AGENT_VSOCK_PORT=22022"
+        "CIRCUS_SSH_AGENT_VSOCK_PORT=22022"
     )
+    # msb rejects --env values with the reserved MSB_ prefix.
+    env_values = [v for k, v in pairwise(args) if k == "--env"]
+    assert not any(v.startswith("MSB_") for v in env_values)
 
 
 def test_up_with_ssh_fails_without_agent(tmp_path, fake_msb, monkeypatch):
@@ -636,7 +640,7 @@ def test_up_without_ssh_has_no_vsock_route(tmp_path, fake_msb, ssh_environ):
     assert len(run_calls) == 1
     args = run_calls[0]
     assert "--vsock" not in args
-    assert "MSB_CIRCUS_SSH_AGENT_VSOCK_PORT" not in args
+    assert "CIRCUS_SSH_AGENT_VSOCK_PORT" not in args
 
 
 def test_up_with_ssh_warns_when_agent_unreachable(tmp_path, fake_msb, ssh_environ):

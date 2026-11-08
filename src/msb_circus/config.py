@@ -56,7 +56,9 @@ SSH_AGENT_VSOCK_PORT = 22022
 #: Guest path of the bridged SSH agent socket.
 SSH_AGENT_GUEST_SOCKET = "/run/ssh-agent.sock"
 #: Sandbox env var telling the image entrypoint to start the bridge.
-SSH_AGENT_PORT_ENV_VAR = "MSB_CIRCUS_SSH_AGENT_VSOCK_PORT"
+#: Not prefixed with ``MSB_``: msb reserves that prefix for its own env
+#: vars and rejects ``--env`` values using it.
+SSH_AGENT_PORT_ENV_VAR = "CIRCUS_SSH_AGENT_VSOCK_PORT"
 #: Guest directory for copied SSH config files (the guest runs as root).
 SSH_GUEST_DIR = "/root/.ssh"
 
