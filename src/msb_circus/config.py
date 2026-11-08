@@ -249,6 +249,23 @@ class SshConfig:
 
 
 @dataclass(frozen=True)
+class GitConfig:
+    """Git settings (``[git]``, agent-circus compatible).
+
+    :ivar worktree_mirror: Mount the workspace a second time at its
+        host absolute path.
+    :ivar config_path: Explicit absolute host path of the gitconfig to
+        forward, or ``None`` to search the default locations.
+    :ivar signing_key_path: Absolute host path of an SSH public key used
+        for commit signing, or ``None``.
+    """
+
+    worktree_mirror: bool = False
+    config_path: str | None = None
+    signing_key_path: str | None = None
+
+
+@dataclass(frozen=True)
 class HostsConfig:
     """Host entry forwarding settings (``[hosts]``, agent-circus compatible).
 
@@ -291,6 +308,7 @@ class MsbConfig:
     :ivar git_worktree_mirror: Mount the workspace a second time at its
         exact host absolute path (``[git] worktree_mirror``) so Git's
         recorded paths stay valid across the sandbox boundary.
+    :ivar git: Git settings; ``None`` when the ``[git]`` table is absent.
     :ivar ssh: SSH agent forwarding settings; ``None`` disables forwarding.
     :ivar hosts: Host entry forwarding; ``None`` disables it.
     :ivar logging_level: Log level for msb-circus's own logging.
@@ -309,6 +327,7 @@ class MsbConfig:
     env: dict[str, str] = field(default_factory=dict)
     env_passthrough: tuple[str, ...] = ()
     git_worktree_mirror: bool = False
+    git: GitConfig | None = None
     ssh: SshConfig | None = None
     hosts: HostsConfig | None = None
     logging_level: str = "INFO"
@@ -800,31 +819,48 @@ def _parse_agent(raw: Any) -> AgentConfig:
     return AgentConfig(command=tuple(command), workdir=workdir)
 
 
-def _parse_git(raw: Any) -> bool:
+def _parse_git(raw: Any) -> GitConfig | None:
     """Parse the ``[git]`` table.
 
-    Only ``worktree_mirror`` is interpreted. The remaining agent-circus
-    git keys (``config_path``, ``signing_key_path``, ...) describe
-    Docker-specific mounts and have no msb-circus meaning; they warn and
-    are ignored.
+    All three keys are interpreted (``worktree_mirror``, ``config_path``,
+    ``signing_key_path``); unknown keys are logged at debug level and
+    ignored. File existence is checked later and never raises here.
 
     :param raw: Raw table value or ``None``.
-    :returns: The ``worktree_mirror`` flag.
-    :raises ConfigurationError: If the table is malformed.
+    :returns: Parsed settings, or ``None`` when the table is absent.
+    :raises ConfigurationError: If the table or a path is malformed.
     """
     if raw is None:
-        return False
+        return None
     if not isinstance(raw, dict):
         raise ConfigurationError("git must be a table")
     worktree_mirror = raw.get("worktree_mirror", False)
     if not isinstance(worktree_mirror, bool):
         raise ConfigurationError("git.worktree_mirror must be a boolean")
+
+    paths: dict[str, str | None] = {}
+    for key in ("config_path", "signing_key_path"):
+        value = raw.get(key)
+        if value is None:
+            paths[key] = None
+            continue
+        if not isinstance(value, str) or not value:
+            raise ConfigurationError(f"git.{key} must be a non-empty string")
+        expanded = os.path.expanduser(value)
+        if not os.path.isabs(expanded):
+            raise ConfigurationError(f"git.{key} must be an absolute path")
+        paths[key] = expanded
+
     for key in raw:
-        if key != "worktree_mirror":
+        if key not in ("worktree_mirror", "config_path", "signing_key_path"):
             logger.debug(
                 "Unsupported config key 'git.%s' for msb-circus — ignoring", key
             )
-    return worktree_mirror
+    return GitConfig(
+        worktree_mirror=worktree_mirror,
+        config_path=paths["config_path"],
+        signing_key_path=paths["signing_key_path"],
+    )
 
 
 def _parse_ssh(raw: Any) -> SshConfig | None:
@@ -985,6 +1021,7 @@ def parse_config(config: dict[str, Any]) -> MsbConfig:
     if binary is not None and not isinstance(binary, str):
         raise ConfigurationError("msb.binary must be a string")
     level, log_file = _parse_logging(config.get("logging"))
+    git = _parse_git(config.get("git"))
     return MsbConfig(
         binary=binary,
         image=_parse_image(msb_raw.get("image")),
@@ -999,7 +1036,8 @@ def parse_config(config: dict[str, Any]) -> MsbConfig:
         port_forwards=_parse_port_forwards(config.get("port_forwards")),
         env=_parse_string_dict(msb_raw.get("env"), "msb.env"),
         env_passthrough=_parse_env_passthrough(config.get("env_passthrough")),
-        git_worktree_mirror=_parse_git(config.get("git")),
+        git_worktree_mirror=git.worktree_mirror if git is not None else False,
+        git=git,
         ssh=_parse_ssh(config.get("ssh")),
         hosts=_parse_hosts(config.get("hosts")),
         logging_level=level,

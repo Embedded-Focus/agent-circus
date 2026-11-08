@@ -10,6 +10,7 @@ import threading
 from collections.abc import Callable, Sequence
 
 from .config import SSH_AGENT_GUEST_SOCKET, SSH_GUEST_DIR
+from .gitconfig import GIT_GUEST_GLOBAL_CONFIG, GIT_GUEST_MANAGED_CONFIG
 
 ACP_FLAGS: tuple[str, ...] = ("--stream", "--quiet")
 INTERACTIVE_FLAGS: tuple[str, ...] = ("--tty",)
@@ -224,6 +225,59 @@ def build_ssh_agent_probe_args(name: str) -> list[str]:
         name,
         ["ssh-add", "-l"],
         env={"SSH_AUTH_SOCK": SSH_AGENT_GUEST_SOCKET},
+        tty=None,
+    )
+
+
+def _gitconfig_script() -> str:
+    """Return the guest script writing the managed git config.
+
+    Arguments: ``$1`` managed file content, ``$2`` managed file path,
+    ``$3`` global gitconfig path. Creates the parent directory of ``$2``,
+    writes ``$1`` there atomically, and inserts the include block at the
+    top of ``$3`` unless its include line already exists.
+
+    :returns: Script text; run it as ``sh -c SCRIPT sh CONTENT MANAGED GLOBAL``.
+    """
+    return (
+        "set -e\n"
+        "managed=$2\n"
+        "global=$3\n"
+        'mkdir -p "$(dirname "$managed")" "$(dirname "$global")"\n'
+        'printf "%s" "$1" > "$managed.tmp"\n'
+        'mv "$managed.tmp" "$managed"\n'
+        'line=$(printf "\tpath = %s" "$managed")\n'
+        'if [ -f "$global" ] && grep -qxF "$line" "$global"; then exit 0; fi\n'
+        'tmp="$global.msb-circus.tmp"\n'
+        "{\n"
+        '  printf "%s\\n" "# msb-circus: include the managed git config (do not edit this block)"\n'
+        '  printf "%s\\n" "[include]"\n'
+        '  printf "%s\\n" "$line"\n'
+        '  if [ -f "$global" ]; then cat "$global"; fi\n'
+        '} > "$tmp"\n'
+        'mv "$tmp" "$global"\n'
+    )
+
+
+def build_write_gitconfig_args(name: str, content: str) -> list[str]:
+    """Build argv writing the managed git config and its include block.
+
+    :param name: Sandbox name.
+    :param content: Managed file text from
+        :func:`msb_circus.gitconfig.render_managed_gitconfig`.
+    :returns: Argv list for :class:`msb_circus.msb.MsbInvoker`.
+    """
+    return build_exec_args(
+        name,
+        [
+            "sh",
+            "-c",
+            _gitconfig_script(),
+            "sh",
+            content,
+            GIT_GUEST_MANAGED_CONFIG,
+            GIT_GUEST_GLOBAL_CONFIG,
+        ],
         tty=None,
     )
 

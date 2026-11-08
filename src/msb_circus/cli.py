@@ -35,9 +35,17 @@ from .exec_ import (
     build_repair_codex_daemon_args,
     build_ssh_agent_probe_args,
     build_write_claude_trust_args,
+    build_write_gitconfig_args,
     build_write_hosts_args,
     build_write_trust_args,
     run_acp_stream,
+)
+from .gitconfig import (
+    GIT_GUEST_HOST_CONFIG,
+    GIT_GUEST_SIGNING_KEY,
+    check_ssh_public_key,
+    render_managed_gitconfig,
+    resolve_host_gitconfig,
 )
 from .hostports import find_occupied_ports
 from .hosts import (
@@ -1264,6 +1272,98 @@ def _ensure_ssh_files(invoker: MsbInvoker, config: MsbConfig, name: str) -> None
             )
 
 
+def _ensure_git_config(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
+    """Forward the host git config and signing key into the guest.
+
+    Writes a managed gitconfig under ``/root/.config/msb-circus/git``
+    (include of the host gitconfig copy plus ``user.signingkey``) and
+    inserts one managed include block at the top of the guest's
+    ``/root/.gitconfig``; all other content there is kept, and agents'
+    own ``git config --global`` settings win over host settings. The
+    refresh runs on every boot, start, and reuse; guest edits of the
+    managed file are overwritten.
+
+    Best-effort and never raises: missing or invalid host files produce
+    log messages and are skipped; failed copies keep the guest's
+    previous copies.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param config: Resolved msb-circus configuration.
+    :param name: Sandbox name.
+    """
+    if config.git is None:
+        return
+    host_config, level, message = resolve_host_gitconfig(config.git)
+    if message is not None and level is not None:
+        logger.log(level, message)
+    reason = None
+    if config.git.signing_key_path is not None:
+        key_path = Path(config.git.signing_key_path)
+        reason = check_ssh_public_key(key_path)
+        if reason is not None:
+            logger.warning(
+                "git.signing_key_path %s: %s; the sandbox gets no signing key",
+                config.git.signing_key_path,
+                reason,
+            )
+        if config.ssh is None:
+            logger.warning(
+                "git.signing_key_path is set but [ssh] is not configured; "
+                "commit signing in the sandbox needs the forwarded SSH agent"
+            )
+    if host_config is None and config.git.signing_key_path is None:
+        return
+    include_signing_key = reason is None and config.git.signing_key_path is not None
+    if host_config is None and not include_signing_key:
+        return
+    content = render_managed_gitconfig(
+        include_host_config=host_config is not None,
+        include_signing_key=include_signing_key,
+    )
+    try:
+        result = invoker.run(build_write_gitconfig_args(name, content), check=False)
+        if result.returncode != 0:
+            raise MsbCommandError(
+                (result.stderr or result.stdout or "").strip(),
+                returncode=result.returncode,
+                stderr=result.stderr,
+            )
+    except MsbCommandError as e:
+        logger.warning(
+            "Could not write the git config in sandbox %s; host git config "
+            "is not forwarded (%s)",
+            name,
+            e,
+        )
+        return
+    if host_config is not None:
+        try:
+            invoker.run(build_copy_args(name, str(host_config), GIT_GUEST_HOST_CONFIG))
+        except MsbCommandError as e:
+            logger.warning(
+                "Could not copy %s into sandbox %s; the guest keeps its "
+                "previous copy (%s)",
+                host_config,
+                name,
+                e,
+            )
+    if reason is None and config.git.signing_key_path is not None:
+        try:
+            invoker.run(
+                build_copy_args(
+                    name, config.git.signing_key_path, GIT_GUEST_SIGNING_KEY
+                )
+            )
+        except MsbCommandError as e:
+            logger.warning(
+                "Could not copy %s into sandbox %s; the guest keeps its "
+                "previous copy (%s)",
+                config.git.signing_key_path,
+                name,
+                e,
+            )
+
+
 def _check_ssh_agent(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
     """Probe the forwarded SSH agent inside the guest; warn on problems.
 
@@ -1390,6 +1490,7 @@ def _ensure_sandbox_running(
         _ensure_claude_trust(invoker, config, name)
         _repair_codex_daemon(invoker, name)
         _ensure_ssh_files(invoker, config, name)
+        _ensure_git_config(invoker, config, name)
         _check_ssh_agent(invoker, config, name)
         _warn_on_agent_config_mount_drift(invoker, name)
         _warn_on_port_drift(invoker, config, name)
@@ -1409,6 +1510,7 @@ def _ensure_sandbox_running(
         _ensure_claude_trust(invoker, config, name)
         _repair_codex_daemon(invoker, name)
         _ensure_ssh_files(invoker, config, name)
+        _ensure_git_config(invoker, config, name)
         _check_ssh_agent(invoker, config, name)
         _warn_on_agent_config_mount_drift(invoker, name)
         _warn_on_port_drift(invoker, config, name)
@@ -1443,6 +1545,7 @@ def _ensure_sandbox_running(
         _ensure_claude_trust(invoker, config, name)
         _repair_codex_daemon(invoker, name)
         _ensure_ssh_files(invoker, config, name)
+        _ensure_git_config(invoker, config, name)
         _check_ssh_agent(invoker, config, name)
 
     _check_dockerd(invoker, config, name)
@@ -1498,6 +1601,7 @@ def start(
     invoker.run(build_start_args(name))
     _ensure_host_entries(invoker, config, name)
     _ensure_ssh_files(invoker, config, name)
+    _ensure_git_config(invoker, config, name)
     _check_ssh_agent(invoker, config, name)
     _warn_on_disk_drift(invoker, config, name)
     _warn_on_mount_drift(invoker, config, name, workspace)

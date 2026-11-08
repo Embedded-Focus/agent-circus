@@ -186,6 +186,7 @@ flowchart TB
     subgraph features["Feature helpers"]
         ssh["ssh_agent.py<br/>stable agent link, sandbox env,<br/>ssh file copies"]
         hosts["hosts.py<br/>parse, select, validate,<br/>render host lines"]
+        gitc["gitconfig.py<br/>resolve host gitconfig,<br/>check public keys, render<br/>managed gitconfig"]
         hostports["hostports.py<br/>host port availability"]
         tracing["tracing.py<br/>TraceSession: resource samples,<br/>ACP transport events, payloads"]
     end
@@ -195,7 +196,7 @@ flowchart TB
 
     cli --> config & envs
     cli --> sandbox & execb & images & ps
-    cli --> ssh & hosts & hostports & tracing
+    cli --> ssh & hosts & hostports & tracing & gitc
     cli --> msb
     images --> tpl
     sandbox --> config
@@ -236,6 +237,7 @@ sequenceDiagram
     CLI->>Guest: msb exec: Claude Code folder trust
     CLI->>Guest: msb exec: codex daemon symlink repair
     CLI->>Guest: msb copy: ~/.ssh/config, known_hosts ([ssh])
+    CLI->>Guest: msb exec + msb copy: managed git config, host gitconfig, signing key ([git])
     CLI->>Guest: msb exec: ssh-add -l probe ([ssh], warn only)
     CLI->>MSB: msb inspect: drift warnings (config mounts, ports, disks, worktree mirror)
     CLI->>Guest: msb exec: docker info until ready (if docker enabled)

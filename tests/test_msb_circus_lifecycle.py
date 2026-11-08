@@ -14,6 +14,12 @@ import msb_circus.cli as cli_module
 from msb_circus.cli import app
 from msb_circus.config import sandbox_name_for_workspace
 from msb_circus.exceptions import MsbCommandError
+from msb_circus.gitconfig import (
+    GIT_GUEST_DIR,
+    GIT_GUEST_HOST_CONFIG,
+    GIT_GUEST_MANAGED_CONFIG,
+    GIT_GUEST_SIGNING_KEY,
+)
 from msb_circus.ssh_agent import agent_link_path
 
 runner = CliRunner()
@@ -75,6 +81,13 @@ class FakeInvoker:
             return SimpleNamespace(
                 returncode=0,
                 stdout=self.behavior.get("host_cas_stdout", ""),
+                stderr="",
+            )
+        if args[0] == "exec" and any(GIT_GUEST_MANAGED_CONFIG in a for a in args):
+            # managed git config write: exit code scripted via gitconfig_rc
+            return SimpleNamespace(
+                returncode=self.behavior.get("gitconfig_rc", 0),
+                stdout="",
                 stderr="",
             )
         if args[0] == "load" and self.behavior.get("load_fail"):
@@ -251,6 +264,161 @@ def test_start_warns_on_trust_host_cas_drift(tmp_path, fake_msb):
     assert ["start", name] in fake_msb["calls"]
     assert "trust_host_cas" in result.output
     assert "re-create" in result.output
+
+
+def _enable_git(tmp_path: Path, extra: str = "") -> str:
+    """Write a config with a [git] table; return the fake host HOME path."""
+    home = tmp_path / "git-home"
+    home.mkdir(exist_ok=True)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir(exist_ok=True)
+    (config_dir / "config.toml").write_bytes(f"[git]\n{extra}".encode())
+    return str(home)
+
+
+def test_up_forwards_git_config_when_git_table_present(tmp_path, fake_msb, monkeypatch):
+    home = _enable_git(tmp_path)
+    monkeypatch.setenv("HOME", home)
+    host_gitconfig = Path(home) / ".gitconfig"
+    host_gitconfig.write_text("[user]\n\temail = host@example.com\n")
+    name = sandbox_name_for_workspace(tmp_path)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    writes = [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "exec" and any(GIT_GUEST_DIR in a for a in c)
+    ]
+    assert writes, "expected the managed gitconfig exec"
+    copies = [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "copy" and c[3] == f"{name}:{GIT_GUEST_HOST_CONFIG}"
+    ]
+    assert copies == [
+        ["copy", "-q", str(host_gitconfig), f"{name}:{GIT_GUEST_HOST_CONFIG}"]
+    ]
+
+
+def test_up_skips_git_forwarding_without_git_table(tmp_path, fake_msb, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert not [c for c in fake_msb["calls"] if any(GIT_GUEST_DIR in a for a in c)]
+
+
+def test_up_warns_when_explicit_git_config_missing(tmp_path, fake_msb, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    _enable_git(tmp_path, 'config_path = "/nonexistent/gitconfig"\n')
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "not found on the host" in result.output
+    name = sandbox_name_for_workspace(tmp_path)
+    assert not [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "copy" and c[-1] == f"{name}:{GIT_GUEST_HOST_CONFIG}"
+    ]
+
+
+def test_up_copies_valid_signing_key(tmp_path, fake_msb, monkeypatch, ssh_environ):
+    home = _enable_git(
+        tmp_path,
+        'signing_key_path = "~/.ssh/id_ed25519.pub"\n[ssh]\n',
+    )
+    monkeypatch.setenv("HOME", home)
+    key = Path(home) / ".ssh" / "id_ed25519.pub"
+    key.parent.mkdir()
+    key.write_text("ssh-ed25519 AAAAExample user@host\n")
+    name = sandbox_name_for_workspace(tmp_path)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    copies = [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "copy" and c[3] == f"{name}:{GIT_GUEST_SIGNING_KEY}"
+    ]
+    assert copies == [["copy", "-q", str(key), f"{name}:{GIT_GUEST_SIGNING_KEY}"]]
+
+
+def test_up_refuses_private_signing_key(tmp_path, fake_msb, monkeypatch, ssh_environ):
+    home = _enable_git(
+        tmp_path,
+        'signing_key_path = "~/.ssh/id_ed25519"\n[ssh]\n',
+    )
+    monkeypatch.setenv("HOME", home)
+    (Path(home) / ".gitconfig").write_text("[user]\n\temail = host@example.com\n")
+    key = Path(home) / ".ssh" / "id_ed25519"
+    key.parent.mkdir()
+    key.write_text("-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END-----\n")
+    name = sandbox_name_for_workspace(tmp_path)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "signing key" in result.output
+    assert not [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "copy" and c[3] == f"{name}:{GIT_GUEST_SIGNING_KEY}"
+    ]
+    writes = [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "exec" and any(GIT_GUEST_DIR in a for a in c)
+    ]
+    assert writes
+    assert "signingkey" not in writes[0][-4]
+
+
+def test_up_warns_when_signing_key_without_ssh(tmp_path, fake_msb, monkeypatch):
+    home = _enable_git(tmp_path, 'signing_key_path = "~/.ssh/id_ed25519.pub"\n')
+    monkeypatch.setenv("HOME", home)
+    key = Path(home) / ".ssh" / "id_ed25519.pub"
+    key.parent.mkdir()
+    key.write_text("ssh-ed25519 AAAAExample user@host\n")
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "[ssh] is not configured" in result.output
+
+
+def test_up_continues_when_gitconfig_script_fails(tmp_path, fake_msb, monkeypatch):
+    home = _enable_git(tmp_path)
+    monkeypatch.setenv("HOME", home)
+    (Path(home) / ".gitconfig").write_text("[user]\n\temail = host@example.com\n")
+    fake_msb["gitconfig_rc"] = 1
+    name = sandbox_name_for_workspace(tmp_path)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "Could not write the git config" in result.output
+    assert not [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "copy" and c[-1] == f"{name}:{GIT_GUEST_HOST_CONFIG}"
+    ]
+
+
+def test_start_refreshes_git_config(tmp_path, fake_msb, monkeypatch):
+    home = _enable_git(tmp_path)
+    monkeypatch.setenv("HOME", home)
+    host_gitconfig = Path(home) / ".gitconfig"
+    host_gitconfig.write_text("[user]\n\temail = host@example.com\n")
+    name = sandbox_name_for_workspace(tmp_path)
+    result = runner.invoke(app, ["start", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert ["start", name] in fake_msb["calls"]
+    writes = [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "exec" and any(GIT_GUEST_DIR in a for a in c)
+    ]
+    assert len(writes) == 1
+    copies = [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "copy" and c[3] == f"{name}:{GIT_GUEST_HOST_CONFIG}"
+    ]
+    assert copies == [
+        ["copy", "-q", str(host_gitconfig), f"{name}:{GIT_GUEST_HOST_CONFIG}"]
+    ]
 
 
 def test_up_publishes_configured_port_forwards(tmp_path, fake_msb):

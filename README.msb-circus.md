@@ -569,6 +569,13 @@ workdir = "/workspace"
                                        # "Host Entries"
 patterns = []                          # globs or re:-prefixed regexes
 # file = "/etc/hosts"                  # hosts file to read
+
+[git]                                  # forward the host git config; see
+                                       # "Git Configuration"
+# config_path = "~/.gitconfig"         # default: ~/.gitconfig, then
+                                       # $XDG_CONFIG_HOME/git/config
+# signing_key_path = "~/.ssh/id_ed25519.pub"  # SSH public key
+# worktree_mirror = false              # see "Git Worktrees"
 ```
 
 All fields are optional. The values above are the defaults.
@@ -750,9 +757,60 @@ commands — use `/home/user/myrepo` rather than `/workspace` to ensure
 Git's recorded paths remain consistent with the host.
 ```
 
-The remaining agent-circus `[git]` keys (`config_path`,
-`signing_key_path`, ...) describe Docker-specific mounts and are not
-supported; msb-circus warns about them and ignores them.
+The remaining agent-circus `[git]` keys are supported as well; see
+"Git Configuration".
+
+## Git Configuration
+
+The `[git]` table forwards the git configuration of your host into the
+sandbox. Agents in the sandbox then use your git identity, and they can
+sign commits with your SSH key. Any `[git]` table turns forwarding on,
+even when it only sets `worktree_mirror`:
+
+``` toml
+[git]
+config_path = "~/.gitconfig"                # optional, default search
+signing_key_path = "~/.ssh/id_ed25519.pub"  # optional, SSH public key
+worktree_mirror = true                      # optional; see "Git Worktrees"
+```
+
+With no `config_path`, msb-circus uses the first file that exists:
+`~/.gitconfig`, then `$XDG_CONFIG_HOME/git/config` (default
+`~/.config/git/config`). Only the first file is copied.
+
+msb-circus writes three files into the sandbox, below
+`/root/.config/msb-circus/git/`: the copy of the host gitconfig, the
+copy of the signing key, and a managed gitconfig that includes the host
+copy and sets `user.signingkey`. The top of `/root/.gitconfig` in the
+sandbox gets one managed include block that points at the managed
+file. Everything else in `/root/.gitconfig` stays as it is. Your own
+`git config --global` changes in the sandbox stay and win over host
+settings, because git uses the last value it reads.
+
+The files are refreshed at every `up`, `start`, and `exec`. The copy is
+one-way: guest-side edits of the copies are overwritten. If you remove
+the `[git]` table, the last files stay in the sandbox until you
+re-create it.
+
+To sign commits in the sandbox, set `gpg.format = ssh` in the host git
+config, point `signing_key_path` at your **public** key, and configure
+the `[ssh]` table so the SSH agent is forwarded. git then signs with
+`ssh-keygen` and the private key stays in your host agent. msb-circus
+refuses files that do not look like one OpenSSH public key, and it never
+copies a file that contains a private key.
+
+Missing or invalid files never stop a command. msb-circus logs a warning
+(or an INFO message when no default gitconfig exists) and forwards the
+parts it can.
+
+Limitations:
+
+- Host paths inside the host gitconfig do not exist in the sandbox.
+  This affects `includeIf` targets, `core.excludesFile`,
+  `gpg.ssh.allowedSignersFile`, and credential helpers. Signing works,
+  but `git log --show-signature` may not verify signatures.
+- The host gitconfig may contain secrets, for example tokens in remote
+  URLs. They are copied into the sandbox, like in agent-circus.
 
 ## SSH Agent Forwarding
 
