@@ -697,3 +697,64 @@ def test_exec_acp_survives_stdin_consuming_probes(tmp_path):
     assert payload.strip() in received
     proc.stdin.close()
     proc.wait(timeout=30)
+
+
+def test_exec_with_ssh_overrides_passthrough_auth_sock(tmp_path, fake_msb, monkeypatch):
+    """A host SSH_AUTH_SOCK matched by env_passthrough must not leak into the guest."""
+    import socket as _socket
+    import tempfile as _tempfile
+
+    sock_dir = _tempfile.mkdtemp(prefix="msbc-sock-")
+    sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    sock.bind(f"{sock_dir}/agent.sock")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", _tempfile.mkdtemp(prefix="msbc-rt-"))
+    monkeypatch.setenv("SSH_AUTH_SOCK", f"{sock_dir}/agent.sock")
+    try:
+        config_dir = tmp_path / ".agent-circus"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_bytes(
+            b'[ssh]\nenv_passthrough = ["SSH_*"]\n'
+        )
+        result = runner.invoke(app, ["exec", "--workspace", str(tmp_path), "--", "pi"])
+        assert result.exit_code == 0
+        argv = fake_msb["interactive_argv"]
+        envs = [argv[i + 1] for i, a in enumerate(argv) if a == "--env"]
+        assert "SSH_AUTH_SOCK=/run/ssh-agent.sock" in envs
+    finally:
+        sock.close()
+
+
+def test_exec_with_ssh_explicit_env_assignment_wins(tmp_path, fake_msb, monkeypatch):
+    import socket as _socket
+    import tempfile as _tempfile
+
+    sock_dir = _tempfile.mkdtemp(prefix="msbc-sock-")
+    sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    sock.bind(f"{sock_dir}/agent.sock")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", _tempfile.mkdtemp(prefix="msbc-rt-"))
+    monkeypatch.setenv("SSH_AUTH_SOCK", f"{sock_dir}/agent.sock")
+    try:
+        config_dir = tmp_path / ".agent-circus"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_bytes(
+            b'[ssh]\nenv_passthrough = ["SSH_*"]\n'
+        )
+        result = runner.invoke(
+            app,
+            [
+                "exec",
+                "--workspace",
+                str(tmp_path),
+                "-e",
+                "SSH_AUTH_SOCK=/custom.sock",
+                "--",
+                "pi",
+            ],
+        )
+        assert result.exit_code == 0
+        argv = fake_msb["interactive_argv"]
+        envs = [argv[i + 1] for i, a in enumerate(argv) if a == "--env"]
+        assert "SSH_AUTH_SOCK=/custom.sock" in envs
+        assert "SSH_AUTH_SOCK=/run/ssh-agent.sock" not in envs
+    finally:
+        sock.close()

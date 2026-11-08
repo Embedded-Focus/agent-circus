@@ -555,6 +555,11 @@ guest_port = 8000                       # or container_port (agent-circus style)
 [msb.agent]
 command = ["pi"]                       # default exec target
 workdir = "/workspace"
+
+[ssh]                                  # forward the host SSH agent; see
+                                       # "SSH Agent Forwarding"
+# config_path = "~/.ssh/config"        # copied to /root/.ssh/config
+# known_hosts_path = "~/.ssh/known_hosts"  # copied to /root/.ssh/known_hosts
 ```
 
 All fields are optional. The values above are the defaults.
@@ -740,6 +745,65 @@ The remaining agent-circus `[git]` keys (`config_path`,
 `signing_key_path`, ...) describe Docker-specific mounts and are not
 supported; msb-circus warns about them and ignores them.
 
+## SSH Agent Forwarding
+
+An SSH agent is a small program on your host that holds your private SSH
+keys and signs requests for them. With agent forwarding, the `ssh` and
+`git` commands inside the sandbox use this agent. Git over SSH then works
+without a private key in the sandbox, and no private key material ever
+enters the guest.
+
+Add an `[ssh]` table to `.agent-circus/config.toml` to turn the forwarding
+on. An empty table is enough:
+
+``` toml
+[ssh]
+```
+
+The host needs a running SSH agent. Make sure that `SSH_AUTH_SOCK` is set
+and that `ssh-add -l` on the host lists your keys. When `SSH_AUTH_SOCK` is
+not set, `up` and `start` fail with an error before msb runs.
+
+You can copy an SSH client configuration and a `known_hosts` file into the
+sandbox:
+
+``` toml
+[ssh]
+config_path = "~/.ssh/config"
+known_hosts_path = "~/.ssh/known_hosts"
+```
+
+msb-circus copies these files to `/root/.ssh` after every `up` and
+`start`. The copy is one-way. Files that you edit inside the sandbox are
+overwritten at the next refresh.
+
+A host `~/.ssh/config` with macOS-only options such as `UseKeychain`
+makes `ssh` inside the sandbox fail. Add this line at the top of the file:
+
+``` ssh-config
+IgnoreUnknown UseKeychain
+```
+
+`IdentityFile` entries that point at host paths produce warnings only.
+The keys come from the agent, not from files in the sandbox.
+
+Two setup steps apply:
+
+1. Rebuild the image once with `msb-circus build`. The image then contains
+   `openssh-client` and `socat`.
+2. Re-create the sandbox when you add or remove the `[ssh]` table:
+   `msb-circus rm -f && msb-circus up`. The connection route between the
+   sandbox and the host agent is fixed at sandbox creation.
+
+After every boot and start, msb-circus refreshes the route target and runs
+`ssh-add -l` inside the sandbox. The check warns when it cannot reach the
+agent, for example after you restarted the agent on the host. Run
+`msb-circus up` again in that case, so msb-circus refreshes the route.
+
+Warning: every process in the sandbox can ask the host agent to sign. Run
+`ssh-add -c` on the host to confirm each use, or run a dedicated agent
+with only the keys that the sandbox needs.
+
 ## Troubleshooting
 
 If the sandbox boots but the Docker engine stays unreachable, read the guest
@@ -772,6 +836,11 @@ the sandbox. See the Docker and Disks section.
 If a forwarded port answers with `Empty reply from server`, see the
 Port Forwarding section under Networking: the server inside the sandbox is
 bound to `127.0.0.1` in the guest and must be restarted on `0.0.0.0`.
+
+If `ssh-add -l` inside the sandbox reports that it cannot connect to the
+agent, see the SSH Agent Forwarding section. Common causes are a missing
+`[ssh]` table at sandbox creation, a stopped host agent, or a sandbox
+created before the image rebuild.
 
 If a mounted directory is empty inside the sandbox, make sure that the host
 path in the configuration contains files. msb-circus fails the boot when a

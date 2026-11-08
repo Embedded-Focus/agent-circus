@@ -17,6 +17,8 @@ from . import __version__
 from .config import (
     ADDITIONAL_DIRS_GUEST_BASE,
     AGENT_CONFIG_FILE_COPIES,
+    SSH_AGENT_GUEST_SOCKET,
+    SSH_AGENT_VSOCK_PORT,
     MsbConfig,
     docker_enabled,
     effective_mounts,
@@ -28,7 +30,9 @@ from .envs import parse_env_assignments, resolve_passthrough
 from .exceptions import ConfigurationError, MsbCircusError, MsbCommandError
 from .exec_ import (
     build_exec_args,
+    build_prepare_ssh_dir_args,
     build_repair_codex_daemon_args,
+    build_ssh_agent_probe_args,
     build_write_claude_trust_args,
     build_write_trust_args,
     run_acp_stream,
@@ -59,6 +63,11 @@ from .sandbox import (
     parse_root_disk_spec,
     parse_sandbox_list_output,
     parse_size_mib,
+)
+from .ssh_agent import (
+    refresh_agent_link,
+    ssh_file_copies,
+    ssh_sandbox_env,
 )
 from .tracing import TraceSession
 from .utils import setup_logging
@@ -1083,6 +1092,121 @@ def _warn_on_agent_config_mount_drift(invoker: MsbInvoker, name: str) -> None:
     )
 
 
+def _prepare_ssh_agent(config: MsbConfig) -> Path | None:
+    """Refresh the host agent link when SSH forwarding is configured.
+
+    :param config: Resolved msb-circus configuration.
+    :returns: The link path, or ``None`` when ``[ssh]`` is not configured.
+    :raises typer.Exit: If the host agent is unusable (fatal, printed to
+        stderr like other configuration errors).
+    """
+    if config.ssh is None:
+        return None
+    try:
+        return refresh_agent_link()
+    except ConfigurationError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+
+def _ensure_ssh_files(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
+    """Copy the configured SSH config/known_hosts into the guest (one-way).
+
+    Like :data:`AGENT_CONFIG_FILE_COPIES`: host edits are picked up after
+    every boot/start/reuse, guest-side edits are lost on the next refresh.
+    Best-effort: missing host files warn and are skipped; failed copies
+    warn and keep the previous guest copy. Never blocks the boot.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param config: Resolved msb-circus configuration.
+    :param name: Sandbox name.
+    """
+    if config.ssh is None:
+        return
+    copies = ssh_file_copies(config.ssh)
+    if not copies:
+        return
+    try:
+        result = invoker.run(build_prepare_ssh_dir_args(name), check=False)
+        if result.returncode != 0:
+            raise MsbCommandError(
+                (result.stderr or result.stdout or "").strip(),
+                returncode=result.returncode,
+                stderr=result.stderr,
+            )
+    except MsbCommandError as e:
+        logger.warning(
+            "Could not prepare the SSH directory in sandbox %s; SSH config "
+            "files are not copied (%s)",
+            name,
+            e,
+        )
+        return
+    for host, guest in copies:
+        if not Path(host).is_file():
+            logger.warning(
+                "SSH file %s not found on the host; skipping its sandbox copy",
+                host,
+            )
+            continue
+        try:
+            invoker.run(build_copy_args(name, host, guest))
+            invoker.run(build_exec_args(name, ["chmod", "600", guest], tty=None))
+        except MsbCommandError as e:
+            logger.warning(
+                "Could not copy the SSH file %s into sandbox %s; the guest "
+                "keeps its previous copy (%s)",
+                host,
+                name,
+                e,
+            )
+
+
+def _check_ssh_agent(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
+    """Probe the forwarded SSH agent inside the guest; warn on problems.
+
+    The probe is ``ssh-add -l``: exit code 0 lists keys, 1 means the agent
+    has no identities, and 2 means it cannot connect (missing route or
+    bridge). Never raises.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param config: Resolved msb-circus configuration.
+    :param name: Sandbox name.
+    """
+    if config.ssh is None:
+        return
+    try:
+        result = invoker.run(build_ssh_agent_probe_args(name), check=False)
+    except MsbCommandError as e:
+        logger.debug("SSH agent probe in %s failed: %s", name, e)
+        return
+    if result.returncode == 0:
+        logger.debug("SSH agent reachable in %s", name)
+    elif result.returncode == 1:
+        logger.warning(
+            "The forwarded SSH agent in %s has no keys; add one on the host "
+            "with: ssh-add",
+            name,
+        )
+    elif result.returncode == 2:
+        logger.warning(
+            "Cannot reach the forwarded SSH agent in sandbox %s. If [ssh] "
+            "was added after the sandbox was created, re-create it to "
+            "apply: msb-circus rm -f && msb-circus up. Otherwise check the "
+            "host agent (ssh-add -l) and the guest bridge log "
+            "/tmp/ssh-agent-bridge.log.",
+            name,
+        )
+    else:
+        logger.debug(
+            "ssh-add probe in %s exited with %s: %s (if the image predates "
+            "openssh-client, rebuild the image with msb-circus build)",
+            name,
+            result.returncode,
+            (result.stderr or result.stdout or "").strip(),
+        )
+
+
 def _ensure_sandbox_running(
     invoker: MsbInvoker,
     config: MsbConfig,
@@ -1113,6 +1237,8 @@ def _ensure_sandbox_running(
     except ConfigurationError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
+
+    link = _prepare_ssh_agent(config)
 
     for entry in config.additional_dirs:
         if os.path.isdir(entry.path):
@@ -1155,6 +1281,8 @@ def _ensure_sandbox_running(
         _ensure_agent_config_copies(invoker, name)
         _ensure_claude_trust(invoker, config, name)
         _repair_codex_daemon(invoker, name)
+        _ensure_ssh_files(invoker, config, name)
+        _check_ssh_agent(invoker, config, name)
         _warn_on_agent_config_mount_drift(invoker, name)
         _warn_on_port_drift(invoker, config, name)
         _warn_on_disk_drift(invoker, config, name)
@@ -1170,6 +1298,8 @@ def _ensure_sandbox_running(
         _ensure_agent_config_copies(invoker, name)
         _ensure_claude_trust(invoker, config, name)
         _repair_codex_daemon(invoker, name)
+        _ensure_ssh_files(invoker, config, name)
+        _check_ssh_agent(invoker, config, name)
         _warn_on_agent_config_mount_drift(invoker, name)
         _warn_on_port_drift(invoker, config, name)
         _warn_on_disk_drift(invoker, config, name)
@@ -1188,16 +1318,19 @@ def _ensure_sandbox_running(
                 ),
                 net=config.network.mode,
                 port_forwards=config.port_forwards,
-                env=config.env,
                 workdir=config.agent.workdir,
                 docker_disk=config.sandbox.docker_disk,
                 root_disk=config.sandbox.root_disk,
+                env={**config.env, **(ssh_sandbox_env() if link else {})},
+                vsock=[(str(link), SSH_AGENT_VSOCK_PORT)] if link else None,
             )
         )
         _ensure_pi_trust(invoker, config, name)
         _ensure_agent_config_copies(invoker, name)
         _ensure_claude_trust(invoker, config, name)
         _repair_codex_daemon(invoker, name)
+        _ensure_ssh_files(invoker, config, name)
+        _check_ssh_agent(invoker, config, name)
 
     _check_dockerd(invoker, config, name)
 
@@ -1248,7 +1381,10 @@ def start(
         running = set()
     if name not in running:
         _fail_on_occupied_ports(config)
+    _prepare_ssh_agent(config)
     invoker.run(build_start_args(name))
+    _ensure_ssh_files(invoker, config, name)
+    _check_ssh_agent(invoker, config, name)
     _warn_on_disk_drift(invoker, config, name)
     _warn_on_mount_drift(invoker, config, name, workspace)
     if docker_enabled(config):
@@ -1406,6 +1542,7 @@ def exec_(
     try:
         env_map = {
             **resolve_passthrough(config.env_passthrough),
+            **({"SSH_AUTH_SOCK": SSH_AGENT_GUEST_SOCKET} if config.ssh else {}),
             **parse_env_assignments(env or []),
         }
     except ConfigurationError as e:

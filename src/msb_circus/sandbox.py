@@ -40,6 +40,7 @@ def build_run_args(
     docker_disk: str | None = None,
     root_disk: str | None = None,
     detach: bool = True,
+    vsock: list[tuple[str, int]] | None = None,
 ) -> list[str]:
     """Build argv for ``msb run`` (first-time sandbox boot).
 
@@ -65,6 +66,8 @@ def build_run_args(
     :param root_disk: Optional root disk spec sent as ``--root-disk``
         verbatim (e.g. ``"flat:32G"``); ``None`` keeps the msb default.
     :param detach: Whether to boot detached (default True).
+    :param vsock: Optional host Unix socket routes as ``(absolute host
+        path, guest port)`` pairs, sent as ``--vsock``.
     :returns: Argv list for :class:`msb_circus.msb.MsbInvoker`.
     """
     args = ["run", "--name", name, "--memory", memory]
@@ -86,6 +89,8 @@ def build_run_args(
         if forward.protocol == "udp":
             token += "/udp"
         args += ["--port", token]
+    for host_socket, port in vsock or []:
+        args += ["--vsock", f"{host_socket}:{port}"]
     for key, value in (env or {}).items():
         args += ["--env", f"{key}={value}"]
     if workdir:

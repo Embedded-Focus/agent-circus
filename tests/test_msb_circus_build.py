@@ -157,3 +157,12 @@ def test_bundled_dockerfile_template_exists():
 
 def test_build_image_inspect_args():
     assert build_image_inspect_args("img:1") == ["image", "inspect", "img:1"]
+
+
+def test_dockerfile_installs_ssh_bridge_packages():
+    """Guard against the image, constants, and entrypoint drifting apart."""
+    content = bundled_dockerfile_path().read_text()
+    assert "openssh-client" in content
+    assert "socat" in content
+    assert "MSB_CIRCUS_SSH_AGENT_VSOCK_PORT" in content
+    assert "VSOCK-CONNECT:2:" in content

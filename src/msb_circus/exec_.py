@@ -9,6 +9,8 @@ import sys
 import threading
 from collections.abc import Callable, Sequence
 
+from .config import SSH_AGENT_GUEST_SOCKET, SSH_GUEST_DIR
+
 ACP_FLAGS: tuple[str, ...] = ("--stream", "--quiet")
 INTERACTIVE_FLAGS: tuple[str, ...] = ("--tty",)
 
@@ -127,6 +129,33 @@ def build_repair_codex_daemon_args(name: str) -> list[str]:
         'if [ -L "$s" ] && [ ! -e "$s" ]; then rm -f "$s"; fi'
     )
     return build_exec_args(name, ["sh", "-c", script], tty=None)
+
+
+def build_prepare_ssh_dir_args(name: str) -> list[str]:
+    """Build argv creating the guest SSH directory with private permissions.
+
+    :param name: Sandbox name.
+    :returns: Argv list for :class:`msb_circus.msb.MsbInvoker`.
+    """
+    script = f"mkdir -p {SSH_GUEST_DIR} && chmod 700 {SSH_GUEST_DIR}"
+    return build_exec_args(name, ["sh", "-c", script], tty=None)
+
+
+def build_ssh_agent_probe_args(name: str) -> list[str]:
+    """Build argv listing the forwarded agent's keys inside the guest.
+
+    ``ssh-add -l`` exits 0 when keys are listed, 1 when the agent has no
+    identities, and 2 when it cannot connect to the agent.
+
+    :param name: Sandbox name.
+    :returns: Argv list for :class:`msb_circus.msb.MsbInvoker`.
+    """
+    return build_exec_args(
+        name,
+        ["ssh-add", "-l"],
+        env={"SSH_AUTH_SOCK": SSH_AGENT_GUEST_SOCKET},
+        tty=None,
+    )
 
 
 def build_exec_args(

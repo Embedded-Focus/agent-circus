@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from msb_circus.config import (
+    SshConfig,
     effective_mounts,
     get_user_config_path,
     load_config,
@@ -264,3 +265,47 @@ def test_effective_mounts_rejects_guest_target_collision(tmp_path):
     )
     with pytest.raises(ConfigurationError, match="conflicts with the existing mount"):
         effective_mounts(config, tmp_path)
+
+
+def test_parse_ssh_absent_disables_forwarding():
+    assert parse_config({}).ssh is None
+
+
+def test_parse_ssh_empty_table_enables_forwarding():
+    config = parse_config({"ssh": {}})
+    assert config.ssh == SshConfig()
+
+
+def test_parse_ssh_expands_home_in_paths(monkeypatch):
+    monkeypatch.setenv("HOME", "/home/tester")
+    config = parse_config(
+        {
+            "ssh": {
+                "config_path": "~/.ssh/config",
+                "known_hosts_path": "~/.ssh/known_hosts",
+            }
+        }
+    )
+    assert config.ssh is not None
+    assert config.ssh.config_path == "/home/tester/.ssh/config"
+    assert config.ssh.known_hosts_path == "/home/tester/.ssh/known_hosts"
+
+
+def test_parse_ssh_rejects_relative_path():
+    with pytest.raises(ConfigurationError, match="must be an absolute path"):
+        parse_config({"ssh": {"config_path": "relative/config"}})
+
+
+def test_parse_ssh_rejects_non_string_path():
+    with pytest.raises(ConfigurationError, match="must be a non-empty string"):
+        parse_config({"ssh": {"known_hosts_path": 42}})
+
+
+def test_parse_ssh_rejects_non_table():
+    with pytest.raises(ConfigurationError, match="ssh must be a table"):
+        parse_config({"ssh": "yes"})
+
+
+def test_parse_ssh_ignores_unknown_keys():
+    config = parse_config({"ssh": {"unknown_key": 1}})
+    assert config.ssh == SshConfig()

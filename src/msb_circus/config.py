@@ -28,7 +28,15 @@ USER_CONFIG_DIR_ENV_VAR = "XDG_CONFIG_HOME"
 
 #: Top-level config keys interpreted by msb-circus; everything else warns.
 SUPPORTED_TOP_LEVEL_KEYS: frozenset[str] = frozenset(
-    {"msb", "logging", "env_passthrough", "additional_dirs", "port_forwards", "git"}
+    {
+        "msb",
+        "logging",
+        "env_passthrough",
+        "additional_dirs",
+        "port_forwards",
+        "git",
+        "ssh",
+    }
 )
 
 DEFAULT_IMAGE_TAG = "docker.io/library/msb-agents:26"
@@ -41,6 +49,15 @@ DEFAULT_PORT_HOST = "127.0.0.1"
 DEFAULT_SANDBOX_NAME_PREFIX = "agents"
 DEFAULT_MOUNTS: dict[str, str] = {".": "/workspace"}
 ADDITIONAL_DIRS_GUEST_BASE = "/workspaces"
+
+#: vsock port the host SSH agent is exposed on (guest connects to CID 2).
+SSH_AGENT_VSOCK_PORT = 22022
+#: Guest path of the bridged SSH agent socket.
+SSH_AGENT_GUEST_SOCKET = "/run/ssh-agent.sock"
+#: Sandbox env var telling the image entrypoint to start the bridge.
+SSH_AGENT_PORT_ENV_VAR = "MSB_CIRCUS_SSH_AGENT_VSOCK_PORT"
+#: Guest directory for copied SSH config files (the guest runs as root).
+SSH_GUEST_DIR = "/root/.ssh"
 
 #: Read-write bind mounts of host agent harness config directories into the
 #: guest, mirroring agent-circus's ``DEFAULT_AGENT_CONFIG_MOUNTS``. Values
@@ -206,6 +223,20 @@ class AdditionalDir:
 
 
 @dataclass(frozen=True)
+class SshConfig:
+    """SSH agent forwarding settings (``[ssh]``, agent-circus compatible).
+
+    :ivar config_path: Absolute host path of an SSH config file copied
+        to ``/root/.ssh/config``, or ``None``.
+    :ivar known_hosts_path: Absolute host path of a known_hosts file
+        copied to ``/root/.ssh/known_hosts``, or ``None``.
+    """
+
+    config_path: str | None = None
+    known_hosts_path: str | None = None
+
+
+@dataclass(frozen=True)
 class MsbConfig:
     """Resolved msb-circus configuration.
 
@@ -230,6 +261,7 @@ class MsbConfig:
     :ivar git_worktree_mirror: Mount the workspace a second time at its
         exact host absolute path (``[git] worktree_mirror``) so Git's
         recorded paths stay valid across the sandbox boundary.
+    :ivar ssh: SSH agent forwarding settings; ``None`` disables forwarding.
     :ivar logging_level: Log level for msb-circus's own logging.
     :ivar logging_file: Optional log file path.
     """
@@ -246,6 +278,7 @@ class MsbConfig:
     env: dict[str, str] = field(default_factory=dict)
     env_passthrough: tuple[str, ...] = ()
     git_worktree_mirror: bool = False
+    ssh: SshConfig | None = None
     logging_level: str = "INFO"
     logging_file: str | None = None
 
@@ -750,6 +783,46 @@ def _parse_git(raw: Any) -> bool:
     return worktree_mirror
 
 
+def _parse_ssh(raw: Any) -> SshConfig | None:
+    """Parse the ``[ssh]`` table.
+
+    The table's presence enables SSH agent forwarding, even when empty.
+    ``config_path`` and ``known_hosts_path`` are optional; ``~`` is
+    expanded. Other keys are logged at debug level and ignored.
+
+    :param raw: Raw table value or ``None``.
+    :returns: Parsed settings, or ``None`` when the table is absent.
+    :raises ConfigurationError: If the table or a path is malformed.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ConfigurationError("ssh must be a table")
+
+    paths: dict[str, str | None] = {}
+    for key in ("config_path", "known_hosts_path"):
+        value = raw.get(key)
+        if value is None:
+            paths[key] = None
+            continue
+        if not isinstance(value, str) or not value:
+            raise ConfigurationError(f"ssh.{key} must be a non-empty string")
+        expanded = os.path.expanduser(value)
+        if not os.path.isabs(expanded):
+            raise ConfigurationError(f"ssh.{key} must be an absolute path")
+        paths[key] = expanded
+
+    for key in raw:
+        if key not in ("config_path", "known_hosts_path"):
+            logger.debug(
+                "Unsupported config key 'ssh.%s' for msb-circus — ignoring", key
+            )
+    return SshConfig(
+        config_path=paths["config_path"],
+        known_hosts_path=paths["known_hosts_path"],
+    )
+
+
 def _parse_string_dict(raw: Any, label: str) -> dict[str, str]:
     """Parse a ``KEY = "value"`` table into a plain string dict.
 
@@ -837,6 +910,7 @@ def parse_config(config: dict[str, Any]) -> MsbConfig:
         env=_parse_string_dict(msb_raw.get("env"), "msb.env"),
         env_passthrough=_parse_env_passthrough(config.get("env_passthrough")),
         git_worktree_mirror=_parse_git(config.get("git")),
+        ssh=_parse_ssh(config.get("ssh")),
         logging_level=level,
         logging_file=log_file,
     )

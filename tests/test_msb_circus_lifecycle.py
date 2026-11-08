@@ -13,6 +13,7 @@ import msb_circus.cli as cli_module
 from msb_circus.cli import app
 from msb_circus.config import sandbox_name_for_workspace
 from msb_circus.exceptions import MsbCommandError
+from msb_circus.ssh_agent import agent_link_path
 
 runner = CliRunner()
 
@@ -52,6 +53,11 @@ class FakeInvoker:
                     returncode=1, stdout="", stderr="permission denied"
                 )
             return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if args[0] == "exec" and "ssh-add" in args:
+            # SSH agent probe: exit code scripted via ssh_add_rc
+            return SimpleNamespace(
+                returncode=self.behavior.get("ssh_add_rc", 0), stdout="", stderr=""
+            )
         if args[0] == "exec" and "trust.json" in args[-1]:
             if self.behavior.get("trust_fail"):
                 return SimpleNamespace(returncode=1, stdout="", stderr="denied")
@@ -570,3 +576,106 @@ def test_up_survives_pi_trust_write_failure(tmp_path, fake_msb):
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
     assert "pre-trust" in result.output
+
+
+def _enable_ssh(tmp_path: Path, extra: str = "") -> None:
+    """Write a config that opts into SSH agent forwarding."""
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir(exist_ok=True)
+    (config_dir / "config.toml").write_bytes(f"[ssh]\n{extra}".encode())
+
+
+@pytest.fixture
+def ssh_environ(monkeypatch):
+    """Provide a real host agent socket and short runtime dir; return the socket."""
+    import os as _os
+    import tempfile as _tempfile
+
+    sock_dir = _tempfile.mkdtemp(prefix="msbc-sock-")
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.bind(_os.path.join(sock_dir, "agent.sock"))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", _tempfile.mkdtemp(prefix="msbc-rt-"))
+    monkeypatch.setenv("SSH_AUTH_SOCK", _os.path.join(sock_dir, "agent.sock"))
+    yield sock
+    sock.close()
+
+
+def test_up_with_ssh_boots_with_vsock_route_and_env(tmp_path, fake_msb, ssh_environ):
+    _enable_ssh(tmp_path)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    assert len(run_calls) == 1
+    args = run_calls[0]
+    link = agent_link_path()
+    assert args[args.index("--vsock") + 1] == f"{link}:22022"
+    assert args[args.index("--env") + 1] == "SSH_AUTH_SOCK=/run/ssh-agent.sock"
+    assert args[args.index("--env", args.index("--env") + 1) + 1] == (
+        "MSB_CIRCUS_SSH_AGENT_VSOCK_PORT=22022"
+    )
+
+
+def test_up_with_ssh_fails_without_agent(tmp_path, fake_msb, monkeypatch):
+    _enable_ssh(tmp_path)
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "SSH_AUTH_SOCK" in result.output
+    assert not [c for c in fake_msb.get("calls", []) if c[0] == "run"]
+
+
+def test_up_without_ssh_has_no_vsock_route(tmp_path, fake_msb, ssh_environ):
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    assert len(run_calls) == 1
+    args = run_calls[0]
+    assert "--vsock" not in args
+    assert "MSB_CIRCUS_SSH_AGENT_VSOCK_PORT" not in args
+
+
+def test_up_with_ssh_warns_when_agent_unreachable(tmp_path, fake_msb, ssh_environ):
+    _enable_ssh(tmp_path)
+    fake_msb["ssh_add_rc"] = 2
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "Cannot reach the forwarded SSH agent" in result.output
+    assert "re-create it" in result.output
+
+
+def test_up_with_ssh_warns_when_agent_has_no_keys(tmp_path, fake_msb, ssh_environ):
+    _enable_ssh(tmp_path)
+    fake_msb["ssh_add_rc"] = 1
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "has no keys" in result.output
+
+
+def test_up_with_ssh_copies_config_files(tmp_path, fake_msb, ssh_environ):
+    ssh_dir = tmp_path / "host-ssh"
+    ssh_dir.mkdir()
+    config_file = ssh_dir / "config"
+    config_file.write_text("Host github.com\n")
+    _enable_ssh(tmp_path, extra=f'config_path = "{config_file}"\n')
+    name = sandbox_name_for_workspace(tmp_path)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    copy_calls = [
+        c for c in fake_msb["calls"] if c[0] == "copy" and "/root/.ssh/" in c[-1]
+    ]
+    assert [f"{name}:/root/.ssh/config"] == [c[-1] for c in copy_calls]
+    chmod_calls = [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "exec" and c[-3:] == ["chmod", "600", "/root/.ssh/config"]
+    ]
+    assert chmod_calls
+
+
+def test_up_with_ssh_skips_missing_config_file(tmp_path, fake_msb, ssh_environ):
+    _enable_ssh(tmp_path, extra=f'config_path = "{tmp_path}/missing"')
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert not [
+        c for c in fake_msb["calls"] if c[0] == "copy" and "/root/.ssh/" in c[-1]
+    ]

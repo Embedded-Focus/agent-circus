@@ -214,3 +214,38 @@ def test_resolve_passthrough_mixed_literals_and_patterns():
 
 def test_redact_env_hides_values():
     assert redact_env({"KEY": "secret"}) == {"KEY": "<redacted>"}
+
+
+def test_build_run_args_emits_vsock_routes():
+    args = build_run_args(
+        name="agents-x",
+        image="img:1",
+        vsock=[("/x/ssh-agent.sock", 22022)],
+    )
+    assert args[args.index("--vsock") + 1] == "/x/ssh-agent.sock:22022"
+    assert args.count("--vsock") == 1
+
+
+def test_build_run_args_without_vsock_has_no_vsock_flag():
+    args = build_run_args(name="agents-x", image="img:1")
+    assert "--vsock" not in args
+
+
+def test_build_ssh_agent_probe_args_sets_guest_socket():
+    from msb_circus.exec_ import build_ssh_agent_probe_args
+
+    args = build_ssh_agent_probe_args("agents-x")
+    assert args[0] == "exec"
+    assert "--tty" not in args and "--no-tty" not in args
+    assert args[args.index("--env") + 1] == "SSH_AUTH_SOCK=/run/ssh-agent.sock"
+    assert args[-3:] == ["--", "ssh-add", "-l"]
+
+
+def test_build_prepare_ssh_dir_args_creates_private_guest_dir():
+    from msb_circus.exec_ import build_prepare_ssh_dir_args
+
+    args = build_prepare_ssh_dir_args("agents-x")
+    assert args[0] == "exec"
+    assert args[3:5] == ["sh", "-c"]
+    assert "mkdir -p /root/.ssh" in args[5]
+    assert "chmod 700 /root/.ssh" in args[5]

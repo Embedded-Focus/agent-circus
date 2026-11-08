@@ -29,6 +29,8 @@ COPY --from=docker.io/library/docker:29.9.3-dind@sha256:08a98015fce594af7c382883
 # is needed by codex, whose pid-managed app server shells out to `ps` at
 # startup. bubblewrap is codex's Linux sandboxing backend (codex falls back
 # to its bundled copy, but the distro package is the supported path).
+# openssh-client provides git-over-SSH inside the guest; socat provides the
+# guest end of the SSH agent bridge (see plan-msb-ssh-agent-forwarding.md).
 # This is the only apt layer (apt has no digest pinning); everything
 # else is hash-referenced.
 RUN apt-get update \
@@ -38,8 +40,10 @@ RUN apt-get update \
         git \
         iptables \
         jq \
+        openssh-client \
         pigz \
         procps \
+        socat \
         uidmap \
         xz-utils \
     && rm -rf /var/lib/apt/lists/* \
@@ -84,6 +88,12 @@ RUN addgroup --system docker || true
 # enabled by msb-circus via a mount-owned disk (--mount-owned
 # /var/lib/docker:kind=disk) or a flat root (--root-disk flat:...); see
 # plan-msb-disks.md.
+#
+# SSH agent bridge: when MSB_CIRCUS_SSH_AGENT_VSOCK_PORT is set (msb-circus
+# passes it together with a matching --vsock route at sandbox creation), a
+# background socat relays a guest Unix socket to the host SSH agent over
+# virtio-vsock (CID 2). Guest processes then talk to the host agent via
+# SSH_AUTH_SOCK=/run/ssh-agent.sock; see plan-msb-ssh-agent-forwarding.md.
 RUN printf '%s\n' \
         '#!/bin/sh' \
         'set -e' \
@@ -116,6 +126,10 @@ RUN printf '%s\n' \
         '    echo "docker is not usable in this sandbox: the docker data root is on overlayfs." >&2' \
         '    echo "Enable docker with docker_disk = \"10G\" (or root_disk = \"flat:32G\") under [msb.sandbox] in" >&2' \
         '    echo ".agent-circus/config.toml, then recreate the sandbox (msb-circus rm && msb-circus up)." >&2' \
+        'fi' \
+        'if [ -n "${MSB_CIRCUS_SSH_AGENT_VSOCK_PORT:-}" ] && command -v socat >/dev/null 2>&1; then' \
+        '    rm -f /run/ssh-agent.sock' \
+        '    socat UNIX-LISTEN:/run/ssh-agent.sock,fork,mode=600 "VSOCK-CONNECT:2:${MSB_CIRCUS_SSH_AGENT_VSOCK_PORT}" >/tmp/ssh-agent-bridge.log 2>&1 &' \
         'fi' \
         'exec "$@"' \
         > /usr/local/bin/docker-entrypoint.sh \
