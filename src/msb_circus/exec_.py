@@ -22,6 +22,59 @@ logger = logging.getLogger(__name__)
 #: line, so a delimiter collision is impossible.
 _TRUST_HEREDOC_DELIMITER = "MSB_CIRCUS_EOF"
 
+#: First marker line of the msb-circus managed block in the guest hosts file.
+HOSTS_BLOCK_BEGIN = "# BEGIN msb-circus hosts (managed, do not edit)"
+#: Last marker line of the msb-circus managed block in the guest hosts file.
+HOSTS_BLOCK_END = "# END msb-circus hosts"
+
+#: Guest path of the hosts file the managed block is written into.
+GUEST_HOSTS_FILE = "/etc/hosts"
+
+
+def _hosts_script(path: str) -> str:
+    """Build the POSIX sh script replacing the managed hosts block.
+
+    Removes an existing managed block (the lines between the marker
+    lines) and appends the new block passed as ``$1`` between the
+    markers; an empty ``$1`` only removes the block. Lines outside the
+    markers are preserved. The file is rewritten in place
+    (``cat > <path>``) so its inode, owner, and mode stay unchanged.
+
+    :param path: Guest hosts file path.
+    :returns: Script text; run it as ``sh -c SCRIPT sh "$BLOCK"``.
+    """
+    return (
+        "set -e\n"
+        f'begin="{HOSTS_BLOCK_BEGIN}"\n'
+        f'end="{HOSTS_BLOCK_END}"\n'
+        "tmp=$(mktemp)\n"
+        'awk -v b="$begin" -v e="$end" '
+        f"'$0==b{{skip=1;next}} $0==e{{skip=0;next}} !skip' {path} > \"$tmp\"\n"
+        'if [ -n "$1" ]; then\n'
+        '  { printf "%s\\n" "$begin"; printf "%s\\n" "$1"; printf "%s\\n" "$end"; } >> "$tmp"\n'
+        "fi\n"
+        f'cat "$tmp" > {path}\n'
+        'rm -f "$tmp"\n'
+    )
+
+
+def build_write_hosts_args(name: str, block: str) -> list[str]:
+    """Build argv replacing the msb-circus block in the guest ``/etc/hosts``.
+
+    Removes an existing managed block and appends *block* between the
+    marker lines; an empty *block* only removes the managed block. Lines
+    outside the markers are preserved. The file is rewritten in place
+    (``cat > /etc/hosts``) so its inode, owner and mode stay unchanged.
+
+    :param name: Sandbox name.
+    :param block: Rendered host lines from
+        :func:`msb_circus.hosts.render_host_block`.
+    :returns: Argv list for :class:`msb_circus.msb.MsbInvoker`.
+    """
+    return build_exec_args(
+        name, ["sh", "-c", _hosts_script(GUEST_HOSTS_FILE), "sh", block], tty=None
+    )
+
 
 def build_write_trust_args(name: str, dirs: Sequence[str]) -> list[str]:
     """Build argv for an idempotent ``msb exec`` writing the pi trust file.

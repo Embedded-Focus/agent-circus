@@ -58,6 +58,11 @@ class FakeInvoker:
             return SimpleNamespace(
                 returncode=self.behavior.get("ssh_add_rc", 0), stdout="", stderr=""
             )
+        if args[0] == "exec" and any("BEGIN msb-circus hosts" in a for a in args):
+            # hosts block write: exit code scripted via hosts_rc
+            return SimpleNamespace(
+                returncode=self.behavior.get("hosts_rc", 0), stdout="", stderr=""
+            )
         if args[0] == "exec" and "trust.json" in args[-1]:
             if self.behavior.get("trust_fail"):
                 return SimpleNamespace(returncode=1, stdout="", stderr="denied")
@@ -679,3 +684,67 @@ def test_up_with_ssh_skips_missing_config_file(tmp_path, fake_msb, ssh_environ):
     assert not [
         c for c in fake_msb["calls"] if c[0] == "copy" and "/root/.ssh/" in c[-1]
     ]
+
+
+def _enable_hosts(tmp_path: Path, hosts_text: str = "") -> Path:
+    """Write a hosts file and a config forwarding selected entries from it.
+
+    :returns: The hosts file path.
+    """
+    hosts_file = tmp_path / "test-hosts"
+    hosts_file.write_text(hosts_text)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir(exist_ok=True)
+    (config_dir / "config.toml").write_bytes(
+        f'[hosts]\npatterns = ["*.test.local"]\nfile = "{hosts_file}"\n'.encode()
+    )
+    return hosts_file
+
+
+HOSTS_TEXT = (
+    "127.0.0.1 localhost\n"
+    "10.1.2.3 myserver.test.local alias.test.local\n"
+    "10.1.2.4 other.corp.internal\n"
+)
+
+
+def test_up_with_hosts_writes_matching_entries(tmp_path, fake_msb):
+    _enable_hosts(tmp_path, HOSTS_TEXT)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    execs = [c for c in fake_msb["calls"] if c[0] == "exec"]
+    writes = [c for c in execs if "BEGIN msb-circus hosts" in c[-3]]
+    assert len(writes) == 1
+    assert "10.1.2.3 myserver.test.local alias.test.local" in writes[0][-1]
+    assert "10.1.2.4 other.corp.internal" not in writes[0][-1]
+
+
+def test_up_without_hosts_does_not_touch_etc_hosts(tmp_path, fake_msb):
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert not [
+        c for c in fake_msb["calls"] if any("BEGIN msb-circus hosts" in a for a in c)
+    ]
+
+
+def test_up_with_hosts_warns_on_write_failure(tmp_path, fake_msb):
+    _enable_hosts(tmp_path, HOSTS_TEXT)
+    fake_msb["hosts_rc"] = 1
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "Could not update /etc/hosts" in result.output
+
+
+def test_start_refreshes_host_entries(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    _enable_hosts(tmp_path, HOSTS_TEXT)
+    result = runner.invoke(app, ["start", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    writes = [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "exec" and "BEGIN msb-circus hosts" in c[-3]
+    ]
+    assert ["start", name] in fake_msb["calls"]
+    assert len(writes) == 1
+    assert "10.1.2.3 myserver.test.local" in writes[0][-1]

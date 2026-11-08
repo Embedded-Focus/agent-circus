@@ -36,6 +36,7 @@ SUPPORTED_TOP_LEVEL_KEYS: frozenset[str] = frozenset(
         "port_forwards",
         "git",
         "ssh",
+        "hosts",
     }
 )
 
@@ -58,6 +59,9 @@ SSH_AGENT_GUEST_SOCKET = "/run/ssh-agent.sock"
 SSH_AGENT_PORT_ENV_VAR = "MSB_CIRCUS_SSH_AGENT_VSOCK_PORT"
 #: Guest directory for copied SSH config files (the guest runs as root).
 SSH_GUEST_DIR = "/root/.ssh"
+
+#: Host file that ``[hosts]`` entries are read from.
+DEFAULT_HOSTS_FILE = "/etc/hosts"
 
 #: Read-write bind mounts of host agent harness config directories into the
 #: guest, mirroring agent-circus's ``DEFAULT_AGENT_CONFIG_MOUNTS``. Values
@@ -237,6 +241,24 @@ class SshConfig:
 
 
 @dataclass(frozen=True)
+class HostsConfig:
+    """Host entry forwarding settings (``[hosts]``, agent-circus compatible).
+
+    Selected lines of the host's hosts file are written into the guest's
+    ``/etc/hosts`` after every boot, start, and reuse, so matching names
+    resolve inside the sandbox without a DNS change.
+
+    :ivar patterns: fnmatch globs or ``re:``-prefixed regexes matched
+        case-insensitively against host names. When any name of a hosts
+        line matches, all names of that line are forwarded.
+    :ivar file: Host path of the hosts file to read.
+    """
+
+    patterns: tuple[str, ...] = ()
+    file: str = DEFAULT_HOSTS_FILE
+
+
+@dataclass(frozen=True)
 class MsbConfig:
     """Resolved msb-circus configuration.
 
@@ -262,6 +284,7 @@ class MsbConfig:
         exact host absolute path (``[git] worktree_mirror``) so Git's
         recorded paths stay valid across the sandbox boundary.
     :ivar ssh: SSH agent forwarding settings; ``None`` disables forwarding.
+    :ivar hosts: Host entry forwarding; ``None`` disables it.
     :ivar logging_level: Log level for msb-circus's own logging.
     :ivar logging_file: Optional log file path.
     """
@@ -279,6 +302,7 @@ class MsbConfig:
     env_passthrough: tuple[str, ...] = ()
     git_worktree_mirror: bool = False
     ssh: SshConfig | None = None
+    hosts: HostsConfig | None = None
     logging_level: str = "INFO"
     logging_file: str | None = None
 
@@ -823,6 +847,52 @@ def _parse_ssh(raw: Any) -> SshConfig | None:
     )
 
 
+def _parse_hosts(raw: Any) -> HostsConfig | None:
+    """Parse the ``[hosts]`` table.
+
+    ``patterns`` is a list of non-empty strings; ``re:``-prefixed entries
+    must compile as regexes. ``file`` defaults to :data:`DEFAULT_HOSTS_FILE`
+    and must be an absolute host path (``~`` is expanded). Unknown keys are
+    logged at debug level and ignored.
+
+    :param raw: Raw table value or ``None``.
+    :returns: Parsed settings, or ``None`` when the table is absent.
+    :raises ConfigurationError: If the table or a field is malformed.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ConfigurationError("hosts must be a table")
+
+    patterns = raw.get("patterns", [])
+    if not isinstance(patterns, list) or not all(
+        isinstance(p, str) and p for p in patterns
+    ):
+        raise ConfigurationError("hosts.patterns must be a list of non-empty strings")
+    for p in patterns:
+        if p.startswith("re:"):
+            try:
+                re.compile(p[3:], re.IGNORECASE)
+            except re.error as e:
+                raise ConfigurationError(
+                    f"hosts.patterns entry {p!r} is not a valid regular expression: {e}"
+                ) from e
+
+    file = raw.get("file", DEFAULT_HOSTS_FILE)
+    if not isinstance(file, str) or not file:
+        raise ConfigurationError("hosts.file must be a non-empty string")
+    file = os.path.expanduser(file)
+    if not os.path.isabs(file):
+        raise ConfigurationError("hosts.file must be an absolute path")
+
+    for key in raw:
+        if key not in ("patterns", "file"):
+            logger.debug(
+                "Unsupported config key 'hosts.%s' for msb-circus — ignoring", key
+            )
+    return HostsConfig(patterns=tuple(patterns), file=file)
+
+
 def _parse_string_dict(raw: Any, label: str) -> dict[str, str]:
     """Parse a ``KEY = "value"`` table into a plain string dict.
 
@@ -911,6 +981,7 @@ def parse_config(config: dict[str, Any]) -> MsbConfig:
         env_passthrough=_parse_env_passthrough(config.get("env_passthrough")),
         git_worktree_mirror=_parse_git(config.get("git")),
         ssh=_parse_ssh(config.get("ssh")),
+        hosts=_parse_hosts(config.get("hosts")),
         logging_level=level,
         logging_file=log_file,
     )

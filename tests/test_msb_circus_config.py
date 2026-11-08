@@ -309,3 +309,38 @@ def test_parse_ssh_rejects_non_table():
 def test_parse_ssh_ignores_unknown_keys():
     config = parse_config({"ssh": {"unknown_key": 1}})
     assert config.ssh == SshConfig()
+
+
+def test_parse_hosts_absent_disables_forwarding():
+    assert parse_config({}).hosts is None
+
+
+def test_parse_hosts_defaults_file_to_etc_hosts():
+    config = parse_config({"hosts": {"patterns": ["*.corp"]}})
+    assert config.hosts is not None
+    assert config.hosts.patterns == ("*.corp",)
+    assert config.hosts.file == "/etc/hosts"
+
+
+def test_parse_hosts_rejects_non_list_patterns():
+    with pytest.raises(ConfigurationError, match="must be a list of non-empty strings"):
+        parse_config({"hosts": {"patterns": "*.corp"}})
+
+
+def test_parse_hosts_rejects_invalid_regex():
+    with pytest.raises(ConfigurationError, match="not a valid regular expression"):
+        parse_config({"hosts": {"patterns": ["re:([unclosed"]}})
+
+
+def test_parse_hosts_rejects_relative_file():
+    with pytest.raises(
+        ConfigurationError, match=r"hosts\.file must be an absolute path"
+    ):
+        parse_config({"hosts": {"file": "relative/hosts"}})
+
+
+def test_parse_hosts_expands_home_in_file(monkeypatch):
+    monkeypatch.setenv("HOME", "/home/tester")
+    config = parse_config({"hosts": {"file": "~/.hosts"}})
+    assert config.hosts is not None
+    assert config.hosts.file == "/home/tester/.hosts"

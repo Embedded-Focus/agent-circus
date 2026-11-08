@@ -11,6 +11,7 @@
 [Configuration](#configuration) ·
 [Secrets](#secrets) ·
 [Networking](#networking) ·
+[Host Entries](#host-entries) ·
 [Troubleshooting](#troubleshooting)
 
 ## Overview
@@ -560,6 +561,11 @@ workdir = "/workspace"
                                        # "SSH Agent Forwarding"
 # config_path = "~/.ssh/config"        # copied to /root/.ssh/config
 # known_hosts_path = "~/.ssh/known_hosts"  # copied to /root/.ssh/known_hosts
+
+[hosts]                                # forward host hosts-file entries; see
+                                       # "Host Entries"
+patterns = []                          # globs or re:-prefixed regexes
+# file = "/etc/hosts"                  # hosts file to read
 ```
 
 All fields are optional. The values above are the defaults.
@@ -804,6 +810,45 @@ Warning: every process in the sandbox can ask the host agent to sign. Run
 `ssh-add -c` on the host to confirm each use, or run a dedicated agent
 with only the keys that the sandbox needs.
 
+## Host Entries
+
+The hosts file of your host (`/etc/hosts` by default) maps names to IP
+addresses. This is where a company VPN or a local test server adds its
+names. The sandbox does not see these names, because it has its own hosts
+file and its own resolver.
+
+The `[hosts]` table forwards selected entries from the host hosts file
+into the sandbox. The table uses the same pattern syntax as agent-circus:
+
+``` toml
+[hosts]
+patterns = ["*.corp.internal", "myserver", "re:\\.vpn\\.example\\.com$"]
+# file = "/etc/hosts"   # optional, defaults to /etc/hosts
+```
+
+A pattern matches a name in the hosts file. A pattern without `re:` is a
+glob, where `*` matches any text. A pattern with `re:` is a regular
+expression. Matching ignores upper and lower case. When one name of a
+line matches, all names of that line are forwarded.
+
+msb-circus writes the matching entries into a managed block in
+`/etc/hosts` inside the sandbox. Everything outside this block stays as
+it is. The block is refreshed at every `up`, `start`, and `exec`, so a
+change on the host applies without re-creating the sandbox. Names resolve
+through the guest resolver and never reach the DNS rules of msb.
+
+Entries that point at a loopback address (`127.0.0.0/8` or `::1`) resolve
+to the sandbox itself, not to your host. msb-circus warns about them.
+Use `host.microsandbox.internal` (with the `host` network profile) to
+reach services on your host instead.
+
+Containers that an agent starts with the Docker engine inside the sandbox
+do not get these entries.
+
+If you remove the `[hosts]` table, the last block stays in the sandbox
+until you re-create it. To empty the block without re-creating, set
+`patterns = []` and run `msb-circus up` once.
+
 ## Troubleshooting
 
 If the sandbox boots but the Docker engine stays unreachable, read the guest
@@ -841,6 +886,11 @@ If `ssh-add -l` inside the sandbox reports that it cannot connect to the
 agent, see the SSH Agent Forwarding section. Common causes are a missing
 `[ssh]` table at sandbox creation, a stopped host agent, or a sandbox
 created before the image rebuild.
+
+If a name from your host hosts file does not resolve inside the sandbox,
+see the Host Entries section. Check that the `[hosts]` table is present,
+that the pattern matches the name, and that `msb-circus up` ran after the
+last change to the host file.
 
 If a mounted directory is empty inside the sandbox, make sure that the host
 path in the configuration contains files. msb-circus fails the boot when a

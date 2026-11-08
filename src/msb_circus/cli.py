@@ -34,10 +34,18 @@ from .exec_ import (
     build_repair_codex_daemon_args,
     build_ssh_agent_probe_args,
     build_write_claude_trust_args,
+    build_write_hosts_args,
     build_write_trust_args,
     run_acp_stream,
 )
 from .hostports import find_occupied_ports
+from .hosts import (
+    loopback_names,
+    read_hosts_file,
+    render_host_block,
+    select_host_lines,
+    validate_host_lines,
+)
 from .images import (
     build_image_inspect_args,
     build_load_args,
@@ -1092,6 +1100,55 @@ def _warn_on_agent_config_mount_drift(invoker: MsbInvoker, name: str) -> None:
     )
 
 
+def _ensure_host_entries(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
+    """Write the selected host entries into the guest ``/etc/hosts``.
+
+    Re-reads the host hosts file on every call so changes apply without
+    re-creating the sandbox. Best-effort: failures warn and never block
+    the boot.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param config: Resolved msb-circus configuration.
+    :param name: Sandbox name.
+    """
+    if config.hosts is None:
+        return
+    lines = validate_host_lines(
+        select_host_lines(read_hosts_file(config.hosts.file), config.hosts.patterns)
+    )
+    if config.hosts.patterns and not lines:
+        logger.info(
+            "No host entries in %s match the [hosts] patterns", config.hosts.file
+        )
+    loop = loopback_names(lines)
+    if loop:
+        logger.warning(
+            "Host entries resolve to loopback inside the sandbox, not to the "
+            "host: %s. Use host.microsandbox.internal (with the 'host' network "
+            "profile) to reach host services.",
+            ", ".join(loop),
+        )
+    try:
+        result = invoker.run(
+            build_write_hosts_args(name, render_host_block(lines)), check=False
+        )
+        if result.returncode != 0:
+            raise MsbCommandError(
+                (result.stderr or result.stdout or "").strip(),
+                returncode=result.returncode,
+                stderr=result.stderr,
+            )
+    except MsbCommandError as e:
+        logger.warning(
+            "Could not update /etc/hosts in %s; forwarded host entries may "
+            "be missing or stale (%s)",
+            name,
+            e,
+        )
+        return
+    logger.debug("Wrote %d host entries into %s", len(lines), name)
+
+
 def _prepare_ssh_agent(config: MsbConfig) -> Path | None:
     """Refresh the host agent link when SSH forwarding is configured.
 
@@ -1279,6 +1336,7 @@ def _ensure_sandbox_running(
         logger.info("Sandbox %s is already running; reusing it.", name)
         _ensure_pi_trust(invoker, config, name)
         _ensure_agent_config_copies(invoker, name)
+        _ensure_host_entries(invoker, config, name)
         _ensure_claude_trust(invoker, config, name)
         _repair_codex_daemon(invoker, name)
         _ensure_ssh_files(invoker, config, name)
@@ -1296,6 +1354,7 @@ def _ensure_sandbox_running(
         invoker.run(build_start_args(name))
         _ensure_pi_trust(invoker, config, name)
         _ensure_agent_config_copies(invoker, name)
+        _ensure_host_entries(invoker, config, name)
         _ensure_claude_trust(invoker, config, name)
         _repair_codex_daemon(invoker, name)
         _ensure_ssh_files(invoker, config, name)
@@ -1327,6 +1386,7 @@ def _ensure_sandbox_running(
         )
         _ensure_pi_trust(invoker, config, name)
         _ensure_agent_config_copies(invoker, name)
+        _ensure_host_entries(invoker, config, name)
         _ensure_claude_trust(invoker, config, name)
         _repair_codex_daemon(invoker, name)
         _ensure_ssh_files(invoker, config, name)
@@ -1383,6 +1443,7 @@ def start(
         _fail_on_occupied_ports(config)
     _prepare_ssh_agent(config)
     invoker.run(build_start_args(name))
+    _ensure_host_entries(invoker, config, name)
     _ensure_ssh_files(invoker, config, name)
     _check_ssh_agent(invoker, config, name)
     _warn_on_disk_drift(invoker, config, name)
