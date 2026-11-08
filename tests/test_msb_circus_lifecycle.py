@@ -688,12 +688,44 @@ def test_up_with_ssh_does_not_retry_when_agent_has_no_keys(
     assert len(probes) == 1
 
 
-def test_up_with_ssh_warns_when_agent_has_no_keys(tmp_path, fake_msb, ssh_environ):
+def test_up_with_ssh_logs_debug_when_agent_has_no_keys(
+    tmp_path, fake_msb, ssh_environ, monkeypatch
+):
     _enable_ssh(tmp_path)
     fake_msb["ssh_add_rc"] = 1
+
+    class _RecordingLogger:
+        """Captures (level, message) pairs for every log call."""
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def _log(self, level: str, msg: str, *args: object) -> None:
+            self.calls.append((level, msg % args if args else msg))
+
+        def debug(self, msg: str, *args: object) -> None:
+            self._log("DEBUG", msg, *args)
+
+        def info(self, msg: str, *args: object) -> None:
+            self._log("INFO", msg, *args)
+
+        def warning(self, msg: str, *args: object) -> None:
+            self._log("WARNING", msg, *args)
+
+        def error(self, msg: str, *args: object) -> None:
+            self._log("ERROR", msg, *args)
+
+    recorder = _RecordingLogger()
+    monkeypatch.setattr(cli_module, "logger", recorder)
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
-    assert "has no keys" in result.output
+    assert "has no keys" not in result.output
+    expected = (
+        "The forwarded SSH agent in "
+        f"{sandbox_name_for_workspace(tmp_path)} has no keys; add one "
+        "on the host with: ssh-add"
+    )
+    assert ("DEBUG", expected) in recorder.calls
 
 
 def test_up_with_ssh_copies_config_files(tmp_path, fake_msb, ssh_environ):

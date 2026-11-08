@@ -1249,7 +1249,7 @@ def _check_ssh_agent(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
     if result.returncode == 0:
         logger.debug("SSH agent reachable in %s", name)
     elif result.returncode == 1:
-        logger.warning(
+        logger.debug(
             "The forwarded SSH agent in %s has no keys; add one on the host "
             "with: ssh-add",
             name,
