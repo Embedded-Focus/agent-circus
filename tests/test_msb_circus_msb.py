@@ -105,6 +105,36 @@ def test_expected_msb_version_follows_installed_distribution():
     assert msb_module.expected_msb_version() == dist_version("microsandbox")
 
 
+def test_expected_msb_version_returns_none_without_distribution(monkeypatch):
+    """A missing microsandbox distribution yields no expected version."""
+    from importlib.metadata import PackageNotFoundError
+
+    def _raise(name: str) -> str:
+        raise PackageNotFoundError(name)
+
+    monkeypatch.setattr(msb_module, "_dist_version", _raise)
+    assert msb_module.expected_msb_version() is None
+
+
+def test_check_version_skips_drift_check_without_expected_version(
+    tmp_path, monkeypatch, caplog
+):
+    import logging
+
+    fake = tmp_path / "msb"
+    fake.write_text("#!/bin/sh\necho 'msb 9.9.9'\n")
+    fake.chmod(0o755)
+    monkeypatch.setattr(msb_module, "_bundled_msb_path", lambda: None)
+    monkeypatch.setattr(msb_module, "expected_msb_version", lambda: None)
+    with caplog.at_level(logging.DEBUG):
+        version = check_version(fake)
+    assert version == "9.9.9"
+    assert not any(r.levelno >= logging.WARNING for r in caplog.records)
+    assert any(
+        "Skipping msb version drift check" in r.getMessage() for r in caplog.records
+    )
+
+
 def test_invoker_raises_command_error_with_stderr(tmp_path):
     fake = tmp_path / "msb"
     fake.write_text("#!/bin/sh\necho boom >&2\nexit 3\n")

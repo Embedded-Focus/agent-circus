@@ -22,10 +22,6 @@ from .exceptions import MsbCommandError, MsbNotFoundError
 
 logger = logging.getLogger(__name__)
 
-#: Version to expect when the installed ``microsandbox`` distribution
-#: version cannot be determined.
-FALLBACK_MSB_VERSION = "0.7.11"
-
 _VERSION_PATTERN = re.compile(r"\d+\.\d+\.\d+(?:[+-][\w.]+)?")
 
 #: Known msb failures and actionable host-side remedies, matched against
@@ -64,19 +60,19 @@ REMEDIATION_HINTS: tuple[tuple[str, str], ...] = (
 )
 
 
-def expected_msb_version() -> str:
+def expected_msb_version() -> str | None:
     """Return the msb version to expect for drift warnings.
 
     Uses the installed ``microsandbox`` distribution version, because the
-    bundled ``msb`` binary always matches it. Falls back to a constant
-    when the distribution metadata is unavailable.
+    bundled ``msb`` binary always matches it.
 
-    :returns: Expected version string (e.g. ``"0.7.12"``).
+    :returns: Expected version string (e.g. ``"X.Y.Z"``), or ``None`` if
+        the distribution metadata is unavailable.
     """
     try:
         return _dist_version("microsandbox")
     except PackageNotFoundError:
-        return FALLBACK_MSB_VERSION
+        return None
 
 
 def _bundled_msb_path() -> Path | None:
@@ -126,7 +122,7 @@ def probe_version(binary: Path) -> str | None:
     """Return the msb version string reported by the binary.
 
     :param binary: Path to the ``msb`` binary.
-    :returns: Version string (e.g. ``"0.7.11"``), or ``None`` if it could
+    :returns: Version string (e.g. ``"X.Y.Z"``), or ``None`` if it could
         not be determined.
     """
     try:
@@ -164,7 +160,8 @@ def check_version(binary: Path, expected: str | None = None) -> str | None:
 
     :param binary: Path to the ``msb`` binary.
     :param expected: Version to compare against; defaults to
-        :func:`expected_msb_version`.
+        :func:`expected_msb_version`. The drift check is skipped when no
+        expected version is available.
     :returns: The probed version string, or ``None``.
     """
     version = probe_version(binary)
@@ -177,6 +174,13 @@ def check_version(binary: Path, expected: str | None = None) -> str | None:
         return version
     if expected is None:
         expected = expected_msb_version()
+    if expected is None:
+        logger.debug(
+            "Skipping msb version drift check for %s: installed microsandbox "
+            "version is unknown",
+            binary,
+        )
+        return version
     if version != expected:
         logger.warning(
             "msb version %s differs from the version msb-circus is tested "
