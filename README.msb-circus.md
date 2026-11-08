@@ -781,7 +781,8 @@ With no `config_path`, msb-circus uses the first file that exists:
 msb-circus writes three files into the sandbox, below
 `/root/.config/msb-circus/git/`: the copy of the host gitconfig, the
 copy of the signing key, and a managed gitconfig that includes the host
-copy and sets `user.signingkey`. The top of `/root/.gitconfig` in the
+copy and sets `user.signingkey`. Symlinks on the host (for example from
+home-manager) are followed; the sandbox gets a copy of the target file. The top of `/root/.gitconfig` in the
 sandbox gets one managed include block that points at the managed
 file. Everything else in `/root/.gitconfig` stays as it is. Your own
 `git config --global` changes in the sandbox stay and win over host
@@ -842,7 +843,8 @@ known_hosts_path = "~/.ssh/known_hosts"
 
 msb-circus copies these files to `/root/.ssh` after every `up` and
 `start`. The copy is one-way. Files that you edit inside the sandbox are
-overwritten at the next refresh.
+overwritten at the next refresh. Symlinks on the host (for example from
+home-manager) are followed; the sandbox gets a copy of the target file.
 
 A host `~/.ssh/config` with macOS-only options such as `UseKeychain`
 makes `ssh` inside the sandbox fail. Add this line at the top of the file:

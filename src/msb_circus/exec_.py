@@ -198,6 +198,22 @@ def build_prepare_ssh_dir_args(name: str) -> list[str]:
     return build_exec_args(name, ["sh", "-c", script], tty=None)
 
 
+def build_remove_guest_symlink_args(name: str, guest_path: str) -> list[str]:
+    """Build argv removing *guest_path* in the guest if it is a symlink.
+
+    Used to repair destinations where an earlier ``msb copy`` of a host
+    symlink left a symlink behind. Regular files and directories are
+    never touched. The script always exits 0 when the path is not a
+    symlink.
+
+    :param name: Sandbox name.
+    :param guest_path: Absolute guest path of the copy destination.
+    :returns: Argv list for :class:`msb_circus.msb.MsbInvoker`.
+    """
+    script = 'if [ -L "$1" ]; then rm -f "$1"; fi'
+    return build_exec_args(name, ["sh", "-c", script, "sh", guest_path], tty=None)
+
+
 def build_host_cas_probe_args(name: str) -> list[str]:
     """Build argv reporting whether msb shipped the host CA bundle.
 

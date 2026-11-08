@@ -272,3 +272,41 @@ def test_build_prepare_ssh_dir_args_creates_private_guest_dir():
     assert args[3:5] == ["sh", "-c"]
     assert "mkdir -p /root/.ssh" in args[5]
     assert "chmod 700 /root/.ssh" in args[5]
+
+
+def test_build_remove_guest_symlink_args_passes_path_as_argument():
+    from msb_circus.exec_ import build_remove_guest_symlink_args
+
+    args = build_remove_guest_symlink_args("agents-x", "/root/.gitconfig")
+    assert args[0] == "exec"
+    assert "--tty" not in args and "--no-tty" not in args
+    assert args[-1] == "/root/.gitconfig"
+    script = args[args.index("-c") + 1]
+    assert '[ -L "$1" ]' in script
+
+
+def test_remove_guest_symlink_script_removes_only_symlinks(tmp_path):
+    import subprocess
+
+    from msb_circus.exec_ import build_remove_guest_symlink_args
+
+    args = build_remove_guest_symlink_args("agents-x", "ignored")
+    script = args[args.index("-c") + 1]
+
+    # (a) a symlink is removed
+    link = tmp_path / "link"
+    target = tmp_path / "target"
+    target.write_text("data")
+    link.symlink_to(target)
+    subprocess.run(["sh", "-c", script, "sh", str(link)], check=True)
+    assert not link.exists() and link.is_symlink() is False
+    assert target.exists()
+
+    # (b) a regular file is kept
+    regular = tmp_path / "regular"
+    regular.write_text("keep me")
+    subprocess.run(["sh", "-c", script, "sh", str(regular)], check=True)
+    assert regular.exists()
+
+    # (c) a missing path exits 0
+    subprocess.run(["sh", "-c", script, "sh", str(tmp_path / "missing")], check=True)

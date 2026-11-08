@@ -421,6 +421,26 @@ def test_start_refreshes_git_config(tmp_path, fake_msb, monkeypatch):
     ]
 
 
+def test_up_copies_symlinked_gitconfig_target(tmp_path, fake_msb, monkeypatch):
+    home = _enable_git(tmp_path)
+    monkeypatch.setenv("HOME", home)
+    target = Path(home) / "store" / "gitconfig"
+    target.parent.mkdir(parents=True)
+    target.write_text("[user]\n\temail = host@example.com\n")
+    (Path(home) / ".gitconfig").symlink_to(target)
+    name = sandbox_name_for_workspace(tmp_path)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    copies = [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "copy" and c[3] == f"{name}:{GIT_GUEST_HOST_CONFIG}"
+    ]
+    assert copies == [
+        ["copy", "-q", str(target.resolve()), f"{name}:{GIT_GUEST_HOST_CONFIG}"]
+    ]
+
+
 def test_up_publishes_configured_port_forwards(tmp_path, fake_msb):
     config_dir = tmp_path / ".agent-circus"
     config_dir.mkdir()
@@ -998,6 +1018,25 @@ def test_up_with_ssh_skips_missing_config_file(tmp_path, fake_msb, ssh_environ):
     assert not [
         c for c in fake_msb["calls"] if c[0] == "copy" and "/root/.ssh/" in c[-1]
     ]
+
+
+def test_up_with_ssh_copies_symlinked_config_target(tmp_path, fake_msb, ssh_environ):
+    ssh_dir = tmp_path / "host-ssh"
+    ssh_dir.mkdir()
+    target = tmp_path / "store" / "ssh-config"
+    target.parent.mkdir(parents=True)
+    target.write_text("Host github.com\n")
+    link = ssh_dir / "config"
+    link.symlink_to(target)
+    _enable_ssh(tmp_path, extra=f'config_path = "{link}"\n')
+    name = sandbox_name_for_workspace(tmp_path)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    copy_calls = [
+        c for c in fake_msb["calls"] if c[0] == "copy" and "/root/.ssh/" in c[-1]
+    ]
+    assert [f"{name}:/root/.ssh/config"] == [c[-1] for c in copy_calls]
+    assert copy_calls[0][2] == str(target.resolve())
 
 
 def _enable_hosts(tmp_path: Path, hosts_text: str = "") -> Path:

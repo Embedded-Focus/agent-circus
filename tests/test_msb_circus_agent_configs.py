@@ -47,14 +47,24 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 class RecordingInvoker:
     """Invoker double: records argv, scripts ``copy`` failures and inspect."""
 
-    def __init__(self, *, fail_copy: bool = False, inspect_output: str = "") -> None:
+    def __init__(
+        self,
+        *,
+        fail_copy: bool = False,
+        fail_copy_times: int = 0,
+        inspect_output: str = "",
+    ) -> None:
         self.calls: list[list[str]] = []
         self.fail_copy = fail_copy
+        #: Number of initial ``copy`` invocations that fail (0 = never).
+        self.fail_copy_times = fail_copy_times
         self.inspect_output = inspect_output
 
     def run(self, args, **kwargs):
         self.calls.append(args)
-        if args[0] == "copy" and self.fail_copy:
+        if args[0] == "copy" and (self.fail_copy or self.fail_copy_times > 0):
+            if self.fail_copy_times > 0:
+                self.fail_copy_times -= 1
             raise MsbCommandError("msb copy failed", returncode=1)
         return SimpleNamespace(returncode=0, stdout=self.inspect_output, stderr="")
 
@@ -122,6 +132,50 @@ def test_ensure_agent_config_copies_warns_and_survives_failure(isolated_home, ca
 
     assert invoker.calls  # the copy was attempted
     assert "Could not copy the pi config file" in caplog.text
+
+
+def test_ensure_agent_config_copies_copies_symlink_target(isolated_home):
+    target = isolated_home / "store" / "claude.json"
+    target.parent.mkdir(parents=True)
+    target.write_text("{}")
+    (isolated_home / ".claude.json").symlink_to(target)
+
+    invoker = RecordingInvoker()
+    _ensure_agent_config_copies(cast(MsbInvoker, invoker), "agents-demo")
+
+    copies = [call for call in invoker.calls if call[0] == "copy"]
+    assert len(copies) == 1
+    assert copies[0][2] == str(target.resolve())
+
+
+def test_ensure_agent_config_copies_repairs_stale_guest_symlink(isolated_home, caplog):
+    claude_json = isolated_home / ".claude.json"
+    claude_json.write_text("{}")
+
+    invoker = RecordingInvoker(fail_copy_times=1)
+    with caplog.at_level(logging.WARNING):
+        _ensure_agent_config_copies(cast(MsbInvoker, invoker), "agents-demo")
+
+    relevant = [call for call in invoker.calls if call[0] in ("copy", "exec")]
+    assert len(relevant) == 3
+    assert relevant[0][0] == "copy"
+    assert relevant[1][0] == "exec"
+    assert relevant[1][-1] == "/root/.claude.json"
+    assert relevant[2][0] == "copy"
+    assert relevant[2][2] == relevant[0][2]
+    assert "Could not copy" not in caplog.text
+
+
+def test_ensure_agent_config_copies_warns_when_retry_fails(isolated_home, caplog):
+    claude_json = isolated_home / ".claude.json"
+    claude_json.write_text("{}")
+
+    invoker = RecordingInvoker(fail_copy=True)
+    with caplog.at_level(logging.WARNING):
+        _ensure_agent_config_copies(cast(MsbInvoker, invoker), "agents-demo")
+
+    assert [call[0] for call in invoker.calls] == ["copy", "exec", "copy"]
+    assert "Could not copy the claude-code config file" in caplog.text
 
 
 def _inspect_output(binds: list[dict]) -> str:

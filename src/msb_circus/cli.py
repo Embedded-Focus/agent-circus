@@ -32,6 +32,7 @@ from .exec_ import (
     build_exec_args,
     build_host_cas_probe_args,
     build_prepare_ssh_dir_args,
+    build_remove_guest_symlink_args,
     build_repair_codex_daemon_args,
     build_ssh_agent_probe_args,
     build_write_claude_trust_args,
@@ -1085,6 +1086,49 @@ def _repair_codex_daemon(invoker: MsbInvoker, name: str) -> None:
         )
 
 
+def _copy_into_guest(
+    invoker: MsbInvoker, name: str, host_path: str | Path, guest_path: str
+) -> None:
+    """Copy one host file into the guest, following host symlinks.
+
+    ``msb copy`` copies a symlink as a symlink, which leaves a dangling
+    link in the guest (e.g. home-manager links into ``/nix/store``) and
+    makes later copies fail with ``File exists``. The host path is
+    therefore resolved first. When the copy fails, a symlink left at the
+    guest destination by an earlier copy is removed and the copy is
+    retried once; regular guest files are never removed. Shortcomings:
+    the guest gets a snapshot of the link target (the intended one-way
+    copy semantics anyway), and the repair runs on any copy failure, not
+    only ``File exists``.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param name: Sandbox name.
+    :param host_path: Host file to copy (may be a symlink).
+    :param guest_path: Absolute guest destination path.
+    :raises MsbCommandError: If the host path cannot be resolved or the
+        copy still fails after the repair.
+    """
+    try:
+        source = str(Path(host_path).resolve(strict=True))
+    except OSError as e:
+        raise MsbCommandError(f"cannot resolve {host_path}: {e}", returncode=1) from e
+    try:
+        invoker.run(build_copy_args(name, source, guest_path))
+        return
+    except MsbCommandError as first_error:
+        logger.debug(
+            "Copy of %s to %s failed (%s); removing a stale guest symlink and retrying",
+            source,
+            guest_path,
+            first_error,
+        )
+    try:
+        invoker.run(build_remove_guest_symlink_args(name, guest_path), check=False)
+    except MsbCommandError as e:
+        logger.debug("Guest symlink cleanup for %s failed: %s", guest_path, e)
+    invoker.run(build_copy_args(name, source, guest_path))
+
+
 def _ensure_agent_config_copies(invoker: MsbInvoker, name: str) -> None:
     """Copy host agent harness config files into the guest (one-way).
 
@@ -1108,7 +1152,7 @@ def _ensure_agent_config_copies(invoker: MsbInvoker, name: str) -> None:
             )
             continue
         try:
-            invoker.run(build_copy_args(name, str(host_file), guest))
+            _copy_into_guest(invoker, name, str(host_file), guest)
         except MsbCommandError as e:
             logger.warning(
                 "Could not copy the %s config file %s into sandbox %s; the "
@@ -1260,7 +1304,7 @@ def _ensure_ssh_files(invoker: MsbInvoker, config: MsbConfig, name: str) -> None
             )
             continue
         try:
-            invoker.run(build_copy_args(name, host, guest))
+            _copy_into_guest(invoker, name, host, guest)
             invoker.run(build_exec_args(name, ["chmod", "600", guest], tty=None))
         except MsbCommandError as e:
             logger.warning(
@@ -1338,7 +1382,7 @@ def _ensure_git_config(invoker: MsbInvoker, config: MsbConfig, name: str) -> Non
         return
     if host_config is not None:
         try:
-            invoker.run(build_copy_args(name, str(host_config), GIT_GUEST_HOST_CONFIG))
+            _copy_into_guest(invoker, name, str(host_config), GIT_GUEST_HOST_CONFIG)
         except MsbCommandError as e:
             logger.warning(
                 "Could not copy %s into sandbox %s; the guest keeps its "
@@ -1349,10 +1393,8 @@ def _ensure_git_config(invoker: MsbInvoker, config: MsbConfig, name: str) -> Non
             )
     if reason is None and config.git.signing_key_path is not None:
         try:
-            invoker.run(
-                build_copy_args(
-                    name, config.git.signing_key_path, GIT_GUEST_SIGNING_KEY
-                )
+            _copy_into_guest(
+                invoker, name, config.git.signing_key_path, GIT_GUEST_SIGNING_KEY
             )
         except MsbCommandError as e:
             logger.warning(
