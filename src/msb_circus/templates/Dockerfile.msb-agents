@@ -197,11 +197,11 @@ ENV NODE_OPTIONS=--max-old-space-size=4096
 # sync with the agent-circus template via agent-circus-update-templates.
 RUN npm install --global \
         --allow-scripts=@opencode/cli,@anthropic-ai/claude-code \
-        @opencode/cli@2.2.5 \
+        @opencode/cli@2.2.6 \
         @anthropic-ai/claude-code@2.1.319 \
         @agentclientprotocol/claude-agent-acp@0.101.0 \
         @openai/codex@0.167.0 \
-        @agentclientprotocol/codex-acp@2.5.0 \
+        @agentclientprotocol/codex-acp@2.6.0 \
         @earendil-works/pi-coding-agent@1.5.0 pi-acp@0.0.34
 
 # No main program: s6-overlay only supervises the services. With a CMD,
