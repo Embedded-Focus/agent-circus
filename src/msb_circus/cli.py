@@ -92,6 +92,10 @@ logger = logging.getLogger(__name__)
 DOCKERD_PROBE_ATTEMPTS = 20
 DOCKERD_PROBE_DELAY = 1.5
 
+#: Retry budget for the ``ssh-add -l`` probe while the guest bridge starts.
+SSH_AGENT_PROBE_ATTEMPTS = 10
+SSH_AGENT_PROBE_DELAY = 0.5
+
 #: Log file used by ``exec --acp`` when neither ``--log-file`` nor the
 #: ``[logging]`` config selects one. ACP mode never writes logs to stderr
 #: (the ACP backend treats any stderr output as an API error), so a file
@@ -1224,7 +1228,8 @@ def _check_ssh_agent(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
 
     The probe is ``ssh-add -l``: exit code 0 lists keys, 1 means the agent
     has no identities, and 2 means it cannot connect (missing route or
-    bridge). Never raises.
+    bridge). Exit code 2 is retried briefly, because the image entrypoint
+    starts the guest bridge asynchronously after boot. Never raises.
 
     :param invoker: Invoker bound to the resolved msb binary.
     :param config: Resolved msb-circus configuration.
@@ -1232,11 +1237,15 @@ def _check_ssh_agent(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
     """
     if config.ssh is None:
         return
-    try:
-        result = invoker.run(build_ssh_agent_probe_args(name), check=False)
-    except MsbCommandError as e:
-        logger.debug("SSH agent probe in %s failed: %s", name, e)
-        return
+    for attempt in range(SSH_AGENT_PROBE_ATTEMPTS):
+        try:
+            result = invoker.run(build_ssh_agent_probe_args(name), check=False)
+        except MsbCommandError as e:
+            logger.debug("SSH agent probe in %s failed: %s", name, e)
+            return
+        if result.returncode != 2 or attempt == SSH_AGENT_PROBE_ATTEMPTS - 1:
+            break
+        time.sleep(SSH_AGENT_PROBE_DELAY)
     if result.returncode == 0:
         logger.debug("SSH agent reachable in %s", name)
     elif result.returncode == 1:

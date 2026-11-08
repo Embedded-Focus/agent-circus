@@ -166,3 +166,11 @@ def test_dockerfile_installs_ssh_bridge_packages():
     assert "socat" in content
     assert "CIRCUS_SSH_AGENT_VSOCK_PORT" in content
     assert "VSOCK-CONNECT:2:" in content
+
+
+def test_dockerfile_starts_ssh_bridge_before_dockerd_wait():
+    """The bridge must not wait for dockerd, which can take up to 60s."""
+    content = bundled_dockerfile_path().read_text()
+    assert content.index("VSOCK-CONNECT:2:") < content.index(
+        "dockerd >/tmp/dockerd.log"
+    )

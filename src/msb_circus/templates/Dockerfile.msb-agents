@@ -94,9 +94,15 @@ RUN addgroup --system docker || true
 # background socat relays a guest Unix socket to the host SSH agent over
 # virtio-vsock (CID 2). Guest processes then talk to the host agent via
 # SSH_AUTH_SOCK=/run/ssh-agent.sock; see plan-msb-ssh-agent-forwarding.md.
+# The bridge starts first so that it neither waits for dockerd (up to 60
+# seconds) nor is skipped when the dockerd wait ends the script early.
 RUN printf '%s\n' \
         '#!/bin/sh' \
         'set -e' \
+        'if [ -n "${CIRCUS_SSH_AGENT_VSOCK_PORT:-}" ] && command -v socat >/dev/null 2>&1; then' \
+        '    rm -f /run/ssh-agent.sock' \
+        '    socat UNIX-LISTEN:/run/ssh-agent.sock,fork,mode=600 "VSOCK-CONNECT:2:${CIRCUS_SSH_AGENT_VSOCK_PORT}" >/tmp/ssh-agent-bridge.log 2>&1 &' \
+        'fi' \
         'if [ -r /.msb/tls/ca.pem ] && command -v update-ca-certificates >/dev/null 2>&1; then' \
         '    if ! cmp -s /.msb/tls/ca.pem /usr/local/share/ca-certificates/msb-intercept.crt; then' \
         '        mkdir -p /usr/local/share/ca-certificates' \
@@ -126,10 +132,6 @@ RUN printf '%s\n' \
         '    echo "docker is not usable in this sandbox: the docker data root is on overlayfs." >&2' \
         '    echo "Enable docker with docker_disk = \"10G\" (or root_disk = \"flat:32G\") under [msb.sandbox] in" >&2' \
         '    echo ".agent-circus/config.toml, then recreate the sandbox (msb-circus rm && msb-circus up)." >&2' \
-        'fi' \
-        'if [ -n "${CIRCUS_SSH_AGENT_VSOCK_PORT:-}" ] && command -v socat >/dev/null 2>&1; then' \
-        '    rm -f /run/ssh-agent.sock' \
-        '    socat UNIX-LISTEN:/run/ssh-agent.sock,fork,mode=600 "VSOCK-CONNECT:2:${CIRCUS_SSH_AGENT_VSOCK_PORT}" >/tmp/ssh-agent-bridge.log 2>&1 &' \
         'fi' \
         'exec "$@"' \
         > /usr/local/bin/docker-entrypoint.sh \

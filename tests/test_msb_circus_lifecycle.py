@@ -55,10 +55,13 @@ class FakeInvoker:
                 )
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         if args[0] == "exec" and "ssh-add" in args:
-            # SSH agent probe: exit code scripted via ssh_add_rc
-            return SimpleNamespace(
-                returncode=self.behavior.get("ssh_add_rc", 0), stdout="", stderr=""
-            )
+            # SSH agent probe: exit code scripted via ssh_add_rcs (one per
+            # call, last one repeats) or ssh_add_rc
+            rcs = self.behavior.get("ssh_add_rcs")
+            rc = rcs.pop(0) if rcs and len(rcs) > 1 else (rcs or [None])[0]
+            if rc is None:
+                rc = self.behavior.get("ssh_add_rc", 0)
+            return SimpleNamespace(returncode=rc, stdout="", stderr="")
         if args[0] == "exec" and any("BEGIN msb-circus hosts" in a for a in args):
             # hosts block write: exit code scripted via hosts_rc
             return SimpleNamespace(
@@ -90,6 +93,7 @@ def fake_msb(monkeypatch):
     monkeypatch.setattr(cli_module, "MsbInvoker", FakeInvoker)
     monkeypatch.setattr(cli_module.subprocess, "run", fake_host_run)
     monkeypatch.setattr(cli_module, "DOCKERD_PROBE_ATTEMPTS", 1)
+    monkeypatch.setattr(cli_module, "SSH_AGENT_PROBE_DELAY", 0)
     FakeInvoker.behavior["host_calls"] = host_calls
     FakeInvoker.behavior["inspect_rc"] = 0  # image cached by default
     return FakeInvoker.behavior
@@ -650,6 +654,38 @@ def test_up_with_ssh_warns_when_agent_unreachable(tmp_path, fake_msb, ssh_enviro
     assert result.exit_code == 0
     assert "Cannot reach the forwarded SSH agent" in result.output
     assert "re-create it" in result.output
+
+
+def test_up_with_ssh_retries_until_bridge_is_up(tmp_path, fake_msb, ssh_environ):
+    _enable_ssh(tmp_path)
+    fake_msb["ssh_add_rcs"] = [2, 2, 0]
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "Cannot reach the forwarded SSH agent" not in result.output
+    probes = [c for c in fake_msb["calls"] if c[0] == "exec" and "ssh-add" in c]
+    assert len(probes) == 3
+
+
+def test_up_with_ssh_gives_up_after_probe_budget(
+    tmp_path, fake_msb, ssh_environ, monkeypatch
+):
+    monkeypatch.setattr(cli_module, "SSH_AGENT_PROBE_ATTEMPTS", 3)
+    _enable_ssh(tmp_path)
+    fake_msb["ssh_add_rc"] = 2
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert "Cannot reach the forwarded SSH agent" in result.output
+    probes = [c for c in fake_msb["calls"] if c[0] == "exec" and "ssh-add" in c]
+    assert len(probes) == 3
+
+
+def test_up_with_ssh_does_not_retry_when_agent_has_no_keys(
+    tmp_path, fake_msb, ssh_environ
+):
+    _enable_ssh(tmp_path)
+    fake_msb["ssh_add_rc"] = 1
+    runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    probes = [c for c in fake_msb["calls"] if c[0] == "exec" and "ssh-add" in c]
+    assert len(probes) == 1
 
 
 def test_up_with_ssh_warns_when_agent_has_no_keys(tmp_path, fake_msb, ssh_environ):
