@@ -9,8 +9,14 @@ import sys
 import threading
 from collections.abc import Callable, Sequence
 
-from .config import SSH_AGENT_GUEST_SOCKET, SSH_GUEST_DIR
+from .config import (
+    SSH_AGENT_GUEST_SOCKET,
+    SSH_GUEST_DIR,
+)
 from .gitconfig import GIT_GUEST_GLOBAL_CONFIG, GIT_GUEST_MANAGED_CONFIG
+
+S6_PID1_COMM = "s6-svscan"
+"""``/proc/1/comm`` of a sandbox whose PID 1 is s6-overlay."""
 
 ACP_FLAGS: tuple[str, ...] = ("--stream", "--quiet")
 INTERACTIVE_FLAGS: tuple[str, ...] = ("--tty",)
@@ -296,6 +302,30 @@ def build_write_gitconfig_args(name: str, content: str) -> list[str]:
         ],
         tty=None,
     )
+
+
+def build_pid1_probe_args(name: str) -> list[str]:
+    """Build argv printing the guest's PID 1 command name.
+
+    :param name: Sandbox name.
+    :returns: Argv list for :class:`msb_circus.msb.MsbInvoker`.
+    """
+    return build_exec_args(name, ["cat", "/proc/1/comm"], tty=None)
+
+
+def build_init_shutdown_args(name: str) -> list[str]:
+    """Build argv asking the guest's s6 init to shut the sandbox down.
+
+    ``msb stop`` does not reach PID 1 when an init took it over (msb
+    0.7.13: the sandbox stays ``draining``). SIGTERM to PID 1 makes
+    s6-overlay stop all services in order; the VM ends when PID 1 exits.
+    Only use this when PID 1 is s6 (:data:`S6_PID1_COMM`): with msb's own
+    agent as PID 1 it would kill the agent.
+
+    :param name: Sandbox name.
+    :returns: Argv list for :class:`msb_circus.msb.MsbInvoker`.
+    """
+    return build_exec_args(name, ["sh", "-c", "kill -TERM 1"], tty=None)
 
 
 def build_exec_args(

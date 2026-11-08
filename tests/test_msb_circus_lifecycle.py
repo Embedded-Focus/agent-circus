@@ -53,6 +53,27 @@ class FakeInvoker:
                 stdout=self.behavior.get("list_output", json.dumps([])),
                 stderr="",
             )
+        if args[0] == "exec" and args[-2:] == ["cat", "/proc/1/comm"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=self.behavior.get("pid1", "init.krun\n"),
+                stderr="",
+            )
+        if args[0] == "exec" and args[-3:] == ["sh", "-c", "kill -TERM 1"]:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if args[0] == "list":
+            list_outputs = self.behavior.get("list_outputs")
+            if list_outputs:
+                if len(list_outputs) > 1:
+                    return SimpleNamespace(
+                        returncode=0, stdout=list_outputs.pop(0), stderr=""
+                    )
+                return SimpleNamespace(returncode=0, stdout=list_outputs[0], stderr="")
+            return SimpleNamespace(
+                returncode=0,
+                stdout=self.behavior.get("list_output", json.dumps([])),
+                stderr="",
+            )
         if args[0] == "exec" and args[-2:] == ["docker", "info"]:
             # dockerd probe: succeed only when enabled
             if not self.behavior.get("dockerd_ready", True):
@@ -113,6 +134,7 @@ def fake_msb(monkeypatch):
     monkeypatch.setattr(cli_module.subprocess, "run", fake_host_run)
     monkeypatch.setattr(cli_module, "DOCKERD_PROBE_ATTEMPTS", 1)
     monkeypatch.setattr(cli_module, "SSH_AGENT_PROBE_DELAY", 0)
+    monkeypatch.setattr(cli_module, "STOP_POLL_INTERVAL", 0)
     FakeInvoker.behavior["host_calls"] = host_calls
     FakeInvoker.behavior["inspect_rc"] = 0  # image cached by default
     return FakeInvoker.behavior
@@ -141,6 +163,8 @@ def test_up_boots_fresh_sandbox_with_documented_workflow(tmp_path, fake_msb):
     assert args[args.index("--mount-owned") + 1] == (
         "/var/lib/docker:kind=disk,size=10G"
     )
+    assert args[args.index("--init") + 1] == "auto"
+    assert args[args.index("--env") + 1] == "CIRCUS_DOCKERD_SHUTDOWN_TIMEOUT=20"
     assert "--detach" in args
     assert args[-1] == "docker.io/library/msb-agents:26"
     assert "dockerd is ready" in result.output
@@ -791,6 +815,84 @@ def test_stop_and_start_use_workspace_sandbox(tmp_path, fake_msb):
     assert ["start", name] in fake_msb["calls"]
 
 
+def test_up_boots_without_init_when_none(tmp_path, fake_msb):
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b'[msb.sandbox]\ninit = "none"\n')
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    assert run_calls and "--init" not in run_calls[0]
+
+
+def test_up_passes_docker_stop_timeout_env(tmp_path, fake_msb):
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b"[msb.sandbox]\nstop_timeout = 60\ndocker_stop_timeout = 30\n"
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    assert run_calls
+    assert "CIRCUS_DOCKERD_SHUTDOWN_TIMEOUT=30" in run_calls[0]
+
+
+def test_stop_shuts_down_s6_sandbox_via_init(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    fake_msb["pid1"] = "s6-svscan\n"
+    fake_msb["list_outputs"] = [
+        json.dumps([{"name": name, "status": "Running"}]),
+        json.dumps([{"name": name, "status": "Stopped"}]),
+    ]
+    result = runner.invoke(app, ["stop", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert f"✓ Stopped {name}" in result.output
+    assert [c for c in fake_msb["calls"] if c[-3:] == ["sh", "-c", "kill -TERM 1"]]
+    assert not [c for c in fake_msb["calls"] if c[0] == "stop"]
+
+
+def test_stop_forces_when_s6_shutdown_times_out(tmp_path, fake_msb, monkeypatch):
+    name = sandbox_name_for_workspace(tmp_path)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b"[msb.sandbox]\nstop_timeout = 2\ndocker_stop_timeout = 1\n"
+    )
+    fake_msb["pid1"] = "s6-svscan\n"
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    clock = {"now": 0.0}
+
+    def fake_monotonic():
+        clock["now"] += 1.0
+        return clock["now"]
+
+    monkeypatch.setattr(cli_module, "_monotonic", fake_monotonic)
+    result = runner.invoke(app, ["stop", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert ["stop", "--force", name] in fake_msb["calls"]
+    assert "did not stop within" in result.output
+
+
+def test_stop_uses_plain_msb_stop_without_s6(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    result = runner.invoke(app, ["stop", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert ["stop", name] in fake_msb["calls"]
+    assert not [c for c in fake_msb["calls"] if c[-3:] == ["sh", "-c", "kill -TERM 1"]]
+
+
+def test_stop_skips_probe_when_init_none(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b'[msb.sandbox]\ninit = "none"\n')
+    result = runner.invoke(app, ["stop", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert ["stop", name] in fake_msb["calls"]
+    assert not [c for c in fake_msb["calls"] if c[-2:] == ["cat", "/proc/1/comm"]]
+
+
 def test_destroy_forces_removal_with_confirmation(tmp_path, fake_msb):
     name = sandbox_name_for_workspace(tmp_path)
     result = runner.invoke(app, ["destroy", "--workspace", str(tmp_path)], input="y\n")
@@ -881,8 +983,12 @@ def test_up_with_ssh_boots_with_vsock_route_and_env(tmp_path, fake_msb, ssh_envi
     args = run_calls[0]
     link = agent_link_path()
     assert args[args.index("--vsock") + 1] == f"{link}:22022"
-    assert args[args.index("--env") + 1] == "SSH_AUTH_SOCK=/run/ssh-agent.sock"
+    assert args[args.index("--env") + 1] == "CIRCUS_DOCKERD_SHUTDOWN_TIMEOUT=20"
     assert args[args.index("--env", args.index("--env") + 1) + 1] == (
+        "SSH_AUTH_SOCK=/run/ssh-agent.sock"
+    )
+    ssh_sock_idx = args.index("SSH_AUTH_SOCK=/run/ssh-agent.sock")
+    assert args[args.index("--env", ssh_sock_idx) + 1] == (
         "CIRCUS_SSH_AGENT_VSOCK_PORT=22022"
     )
     # msb rejects --env values with the reserved MSB_ prefix.

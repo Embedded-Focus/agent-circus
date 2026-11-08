@@ -238,6 +238,18 @@ def test_build_run_args_adds_trust_host_cas_when_enabled():
     assert args.index("--trust-host-cas") < args.index("--detach")
 
 
+def test_build_run_args_adds_init_when_set():
+    args = build_run_args(name="agents-x", image="img:1", init="auto")
+    assert args.count("--init") == 1
+    assert args[args.index("--init") + 1] == "auto"
+    assert args.index("--init") < args.index("--detach")
+
+
+def test_build_run_args_without_init_has_no_flag():
+    args = build_run_args(name="agents-x", image="img:1")
+    assert "--init" not in args
+
+
 def test_build_run_args_without_trust_host_cas_has_no_flag():
     args = build_run_args(name="agents-x", image="img:1")
     assert "--trust-host-cas" not in args
@@ -272,6 +284,24 @@ def test_build_prepare_ssh_dir_args_creates_private_guest_dir():
     assert args[3:5] == ["sh", "-c"]
     assert "mkdir -p /root/.ssh" in args[5]
     assert "chmod 700 /root/.ssh" in args[5]
+
+
+def test_build_pid1_probe_args_reads_proc_comm():
+    from msb_circus.exec_ import build_pid1_probe_args
+
+    args = build_pid1_probe_args("agents-x")
+    assert args[0] == "exec"
+    assert "agents-x" in args
+    assert args[-2:] == ["cat", "/proc/1/comm"]
+
+
+def test_build_init_shutdown_args_sends_term_to_pid1():
+    from msb_circus.exec_ import build_init_shutdown_args
+
+    args = build_init_shutdown_args("agents-x")
+    assert args[0] == "exec"
+    assert "agents-x" in args
+    assert args[-3:] == ["sh", "-c", "kill -TERM 1"]
 
 
 def test_build_remove_guest_symlink_args_passes_path_as_argument():

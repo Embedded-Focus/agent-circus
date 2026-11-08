@@ -49,6 +49,26 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && rm -f /usr/local/bin/dind /usr/local/bin/dockerd-entrypoint.sh
 
+# s6-overlay: init system and service supervisor (PID 1 via
+# `msb run --init auto`, which recognizes /init). Pinned by version and
+# sha256; both architecture tarballs are fetched and the matching one is
+# installed (uname -m is x86_64 or aarch64). See plan-msb-s6.md.
+ADD https://github.com/just-containers/s6-overlay/releases/download/v3.2.3.2/s6-overlay-noarch.tar.xz /tmp/s6/
+ADD https://github.com/just-containers/s6-overlay/releases/download/v3.2.3.2/s6-overlay-x86_64.tar.xz /tmp/s6/
+ADD https://github.com/just-containers/s6-overlay/releases/download/v3.2.3.2/s6-overlay-aarch64.tar.xz /tmp/s6/
+RUN set -eu; \
+    cd /tmp/s6; \
+    printf '%s\n' \
+        '5379750ed30a84bbd2e2dd74847ba6b5bd29cd0b2e3ea2ec58049b57eb2eda12  s6-overlay-noarch.tar.xz' \
+        'e6befcc96a437a3831386ecfc51808c5d3e939dc5fe3c02ae9284599e8aa2408  s6-overlay-x86_64.tar.xz' \
+        'b17f17a82e7a515c682a91edaf2ffdabb73f891981b6c1fd712115693a2f8b4c  s6-overlay-aarch64.tar.xz' \
+        | sha256sum -c -; \
+    arch="$(uname -m)"; \
+    case "$arch" in x86_64|aarch64) ;; *) echo "unsupported architecture: $arch" >&2; exit 1 ;; esac; \
+    tar -C / -Jxpf s6-overlay-noarch.tar.xz; \
+    tar -C / -Jxpf "s6-overlay-${arch}.tar.xz"; \
+    cd /; rm -rf /tmp/s6
+
 # Python 3.14 interpreter, provisioned by uv. The tarball is fetched from
 # astral-sh/python-build-standalone at build time; uv verifies it against the
 # checksum in its embedded manifest (fixed by the pinned uv version above).
@@ -77,75 +97,91 @@ ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt \
 # the "group docker not found" warning on first boot.
 RUN addgroup --system docker || true
 
-# Entrypoint: start dockerd in the background on boot (unless it is already
-# reachable), wait until it is ready (its log lands in /tmp/dockerd.log), and
-# only then hand over to the image command (default: bash). Written inline
-# with printf so the Dockerfile stays a single file. Before starting dockerd,
-# the sandbox TLS interception CA is imported when TLS interception is enabled
-# (it appears at /.msb/tls/ca.pem in the guest); this must happen before
-# dockerd starts because Go caches the system cert pool per process.
-#
-# dockerd 29 uses the containerd image store with the overlayfs snapshotter,
-# which needs a real filesystem under /var/lib/docker. The kernel refuses an
-# overlayfs as an overlayfs upperdir (EINVAL on mount), so a docker data root
-# on the sandbox's overlayfs root cannot back it. The sandbox boot therefore
-# checks the data root first: when it cannot back dockerd, dockerd is not
-# started and a clear explanation is printed, so docker commands fail fast
-# instead of failing late with a cryptic mount error. The sandbox boots
-# either way, so agents that never touch docker keep working. Docker is
-# enabled by msb-circus via a mount-owned disk (--mount-owned
-# /var/lib/docker:kind=disk) or a flat root (--root-disk flat:...); see
-# plan-msb-disks.md.
-#
-# SSH agent bridge: when CIRCUS_SSH_AGENT_VSOCK_PORT is set (msb-circus
-# passes it together with a matching --vsock route at sandbox creation), a
-# background socat relays a guest Unix socket to the host SSH agent over
-# virtio-vsock (CID 2). Guest processes then talk to the host agent via
-# SSH_AUTH_SOCK=/run/ssh-agent.sock; see plan-msb-ssh-agent-forwarding.md.
-# The bridge starts first so that it neither waits for dockerd (up to 60
-# seconds) nor is skipped when the dockerd wait ends the script early.
-RUN printf '%s\n' \
+# Services, supervised by s6-overlay (s6-rc), written inline with printf so
+# the Dockerfile stays a single file. They start on every boot, including
+# `msb start` (the old ENTRYPOINT script ran only on the first boot):
+# - circus-ca-import (oneshot): imports the msb TLS interception CA from
+#   /.msb/tls/ca.pem before dockerd starts (Go caches the system cert pool
+#   per process). Host CAs (--trust-host-cas) are installed by msb itself.
+# - circus-ssh-agent-bridge (longrun): when CIRCUS_SSH_AGENT_VSOCK_PORT is
+#   set (msb-circus passes it with a matching --vsock route), socat relays
+#   /run/ssh-agent.sock to the host SSH agent over vsock (CID 2). Idles
+#   otherwise. Log: /tmp/ssh-agent-bridge.log.
+# - circus-dockerd (longrun, after circus-ca-import): dockerd 29 needs a
+#   real filesystem under /var/lib/docker (overlayfs on overlayfs fails),
+#   i.e. a mount-owned disk or a flat root. Otherwise it logs why and
+#   idles. CIRCUS_DOCKERD_SHUTDOWN_TIMEOUT (seconds, set by msb-circus)
+#   bounds how long dockerd waits for containers at shutdown.
+#   Log: /tmp/dockerd.log.
+# Idle services run `sleep infinity` instead of exiting, because s6
+# restarts a longrun that exits.
+RUN set -eu; \
+    d=/etc/s6-overlay/s6-rc.d; \
+    b=/etc/s6-overlay/user-bundles.d/user/contents.d; \
+    mkdir -p /etc/s6-overlay/scripts "$b" \
+        "$d/circus-ca-import/dependencies.d" \
+        "$d/circus-ssh-agent-bridge/dependencies.d" \
+        "$d/circus-dockerd/dependencies.d"; \
+    for s in circus-ca-import circus-ssh-agent-bridge circus-dockerd; do \
+        : > "$b/$s"; \
+        : > "$d/$s/dependencies.d/base"; \
+    done; \
+    : > "$d/circus-dockerd/dependencies.d/circus-ca-import"; \
+    echo oneshot > "$d/circus-ca-import/type"; \
+    echo /etc/s6-overlay/scripts/circus-ca-import > "$d/circus-ca-import/up"; \
+    echo longrun > "$d/circus-ssh-agent-bridge/type"; \
+    echo longrun > "$d/circus-dockerd/type"; \
+    printf '%s\n' \
         '#!/bin/sh' \
-        'set -e' \
-        'if [ -n "${CIRCUS_SSH_AGENT_VSOCK_PORT:-}" ] && command -v socat >/dev/null 2>&1; then' \
-        '    rm -f /run/ssh-agent.sock' \
-        '    socat UNIX-LISTEN:/run/ssh-agent.sock,fork,mode=600 "VSOCK-CONNECT:2:${CIRCUS_SSH_AGENT_VSOCK_PORT}" >/tmp/ssh-agent-bridge.log 2>&1 &' \
-        'fi' \
         'if [ -r /.msb/tls/ca.pem ] && command -v update-ca-certificates >/dev/null 2>&1; then' \
         '    if ! cmp -s /.msb/tls/ca.pem /usr/local/share/ca-certificates/msb-intercept.crt; then' \
         '        mkdir -p /usr/local/share/ca-certificates' \
         '        cp /.msb/tls/ca.pem /usr/local/share/ca-certificates/msb-intercept.crt' \
-        '        update-ca-certificates' \
+        '        update-ca-certificates || echo "circus-ca-import: update-ca-certificates failed" >&2' \
         '    fi' \
         'fi' \
-        'docker_usable=0' \
+        'exit 0' \
+        > /etc/s6-overlay/scripts/circus-ca-import; \
+    printf '%s\n' \
+        '#!/command/with-contenv sh' \
+        'exec >>/tmp/ssh-agent-bridge.log 2>&1' \
+        'echo "--- circus-ssh-agent-bridge start $(date -Is)"' \
+        'if [ -z "${CIRCUS_SSH_AGENT_VSOCK_PORT:-}" ]; then' \
+        '    echo "CIRCUS_SSH_AGENT_VSOCK_PORT is not set; SSH agent forwarding is off."' \
+        '    exec sleep infinity' \
+        'fi' \
+        'rm -f /run/ssh-agent.sock' \
+        'exec socat UNIX-LISTEN:/run/ssh-agent.sock,fork,mode=600 "VSOCK-CONNECT:2:${CIRCUS_SSH_AGENT_VSOCK_PORT}"' \
+        > "$d/circus-ssh-agent-bridge/run"; \
+    printf '%s\n' \
+        '#!/command/with-contenv sh' \
+        'exec >>/tmp/dockerd.log 2>&1' \
+        'echo "--- circus-dockerd start $(date -Is)"' \
+        'usable=0' \
         'if mountpoint -q /var/lib/docker 2>/dev/null; then' \
-        '    docker_usable=1' \
+        '    usable=1' \
         'else' \
         '    mkdir -p /var/lib/docker' \
         '    if [ "$(stat -f -c %T /var/lib/docker)" != "overlayfs" ]; then' \
-        '        docker_usable=1' \
+        '        usable=1' \
         '    fi' \
         'fi' \
-        'if [ "$docker_usable" -eq 1 ]; then' \
-        '    if ! docker info >/dev/null 2>&1; then' \
-        '        dockerd >/tmp/dockerd.log 2>&1 &' \
-        '        if ! timeout 60 sh -c "until docker info >/dev/null 2>&1; do sleep 1; done"; then' \
-        '            echo "dockerd failed to become ready; /tmp/dockerd.log follows:" >&2' \
-        '            cat /tmp/dockerd.log >&2' \
-        '            exit 1' \
-        '        fi' \
-        '    fi' \
-        'else' \
-        '    echo "docker is not usable in this sandbox: the docker data root is on overlayfs." >&2' \
-        '    echo "Enable docker with docker_disk = \"10G\" (or root_disk = \"flat:32G\") under [msb.sandbox] in" >&2' \
-        '    echo ".agent-circus/config.toml, then recreate the sandbox (msb-circus rm && msb-circus up)." >&2' \
+        'if [ "$usable" -ne 1 ]; then' \
+        '    echo "docker is not usable in this sandbox: the docker data root is on overlayfs."' \
+        '    echo "Enable docker with docker_disk = \"10G\" (or root_disk = \"flat:32G\") under [msb.sandbox] in"' \
+        '    echo ".agent-circus/config.toml, then recreate the sandbox (msb-circus rm -f && msb-circus up)."' \
+        '    exec sleep infinity' \
         'fi' \
-        'exec "$@"' \
-        > /usr/local/bin/docker-entrypoint.sh \
-    && chmod +x /usr/local/bin/docker-entrypoint.sh
+        'exec dockerd --shutdown-timeout "${CIRCUS_DOCKERD_SHUTDOWN_TIMEOUT:-20}"' \
+        > "$d/circus-dockerd/run"; \
+    chmod 755 /etc/s6-overlay/scripts/circus-ca-import \
+        "$d/circus-ssh-agent-bridge/run" "$d/circus-dockerd/run"
 
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+# Never fail the boot because a service is slow to come up.
+ENV S6_CMD_WAIT_FOR_SERVICES_MAXTIME=0
+
+# s6-overlay's /init becomes PID 1 via `msb run --init auto`.
+ENTRYPOINT ["/init"]
 
 # --- Agents target: build with --target agents -------------------------------
 
@@ -168,4 +204,7 @@ RUN npm install --global \
         @agentclientprotocol/codex-acp@2.5.0 \
         @earendil-works/pi-coding-agent@1.5.0 pi-acp@0.0.34
 
-CMD ["bash"]
+# No main program: s6-overlay only supervises the services. With a CMD,
+# s6-overlay shuts the sandbox down when that program exits (a detached
+# bash exits at once). The node base image sets CMD ["node"]; clear it.
+CMD []

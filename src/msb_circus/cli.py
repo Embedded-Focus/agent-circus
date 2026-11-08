@@ -17,6 +17,8 @@ from . import __version__
 from .config import (
     ADDITIONAL_DIRS_GUEST_BASE,
     AGENT_CONFIG_FILE_COPIES,
+    DOCKERD_SHUTDOWN_TIMEOUT_ENV_VAR,
+    INIT_NONE,
     SSH_AGENT_GUEST_SOCKET,
     SSH_AGENT_VSOCK_PORT,
     MsbConfig,
@@ -29,8 +31,11 @@ from .config import (
 from .envs import parse_env_assignments, resolve_passthrough
 from .exceptions import ConfigurationError, MsbCircusError, MsbCommandError
 from .exec_ import (
+    S6_PID1_COMM,
     build_exec_args,
     build_host_cas_probe_args,
+    build_init_shutdown_args,
+    build_pid1_probe_args,
     build_prepare_ssh_dir_args,
     build_remove_guest_symlink_args,
     build_repair_codex_daemon_args,
@@ -105,6 +110,15 @@ DOCKERD_PROBE_DELAY = 1.5
 #: Retry budget for the ``ssh-add -l`` probe while the guest bridge starts.
 SSH_AGENT_PROBE_ATTEMPTS = 10
 SSH_AGENT_PROBE_DELAY = 0.5
+
+#: Seconds between ``msb list`` polls while waiting for an s6 shutdown.
+STOP_POLL_INTERVAL = 0.5
+
+
+def _monotonic() -> float:
+    """Return :func:`time.monotonic`; indirection eases test patching."""
+    return time.monotonic()
+
 
 #: Log file used by ``exec --acp`` when neither ``--log-file`` nor the
 #: ``[logging]`` config selects one. ACP mode never writes logs to stderr
@@ -628,9 +642,9 @@ def _probe_dockerd(
 ) -> tuple[bool, str]:
     """Wait until dockerd answers ``docker info`` inside the guest.
 
-    The image ENTRYPOINT starts dockerd asynchronously; ``msb start`` and
-    freshly booted sandboxes may not have it ready yet (see the spike item
-    in the plan). This probe retries until the guest answers or the
+    The image's s6 services start dockerd asynchronously; ``msb start``
+    and freshly booted sandboxes may not have it ready yet (see the spike
+    item in the plan). This probe retries until the guest answers or the
     attempt budget is exhausted.
 
     The probe deliberately uses plain ``msb exec <name> -- docker info``
@@ -686,8 +700,9 @@ def _check_dockerd(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
     """Probe dockerd readiness or explain why docker is unavailable.
 
     When the sandbox has no usable docker storage backend (no docker disk
-    and no flat root), dockerd is never started by the image entrypoint and
-    ``docker`` commands in the guest fail with a socket error. That state
+    and no flat root), dockerd is never started by the image's s6 services
+    and ``docker`` commands in the guest fail with a socket error. That
+    state
     is reported as a visible warning — including for already-running
     sandboxes, which skip the boot/start paths — together with the fix.
     Otherwise dockerd readiness is probed and a failure warns with
@@ -745,10 +760,11 @@ def up(
 ) -> None:
     """Ensure the workspace sandbox exists and is running (boot-only).
 
-    Boots the sandbox via ``msb run --detach`` (so the image ENTRYPOINT
-    starts dockerd), reuses an already-running sandbox, or starts a
-    stopped one. Harnesses are then started manually via ``msb-circus
-    exec``. Verifies dockerd readiness after booting or starting.
+    Boots the sandbox via ``msb run --detach --init ...`` (so s6-overlay
+    becomes PID 1 and starts the services), reuses an already-running
+    sandbox, or starts a stopped one. Harnesses are then started manually
+    via ``msb-circus exec``. Verifies dockerd readiness after booting or
+    starting.
     """
     config, invoker = _resolve_invoker(workspace)
     _ensure_sandbox_running(
@@ -1411,8 +1427,8 @@ def _check_ssh_agent(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
 
     The probe is ``ssh-add -l``: exit code 0 lists keys, 1 means the agent
     has no identities, and 2 means it cannot connect (missing route or
-    bridge). Exit code 2 is retried briefly, because the image entrypoint
-    starts the guest bridge asynchronously after boot. Never raises.
+    bridge). Exit code 2 is retried briefly, because the image's s6
+    services start the guest bridge asynchronously after boot. Never raises.
 
     :param invoker: Invoker bound to the resolved msb binary.
     :param config: Resolved msb-circus configuration.
@@ -1576,8 +1592,17 @@ def _ensure_sandbox_running(
                 workdir=config.agent.workdir,
                 docker_disk=config.sandbox.docker_disk,
                 root_disk=config.sandbox.root_disk,
+                init=(
+                    None if config.sandbox.init == INIT_NONE else config.sandbox.init
+                ),
                 trust_host_cas=config.network.trust_host_cas,
-                env={**config.env, **(ssh_sandbox_env() if link else {})},
+                env={
+                    **config.env,
+                    DOCKERD_SHUTDOWN_TIMEOUT_ENV_VAR: str(
+                        config.sandbox.docker_stop_timeout
+                    ),
+                    **(ssh_sandbox_env() if link else {}),
+                },
                 vsock=[(str(link), SSH_AGENT_VSOCK_PORT)] if link else None,
             )
         )
@@ -1591,6 +1616,59 @@ def _ensure_sandbox_running(
         _check_ssh_agent(invoker, config, name)
 
     _check_dockerd(invoker, config, name)
+
+
+def _stop_sandbox(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
+    """Stop the sandbox, working around msb's stop with an s6 init.
+
+    With s6-overlay as PID 1, ``msb stop`` never completes (the guest
+    agent no longer is PID 1). The shutdown is then triggered in the
+    guest (``kill -TERM 1``) and msb-circus waits until msb reports the
+    sandbox as stopped, at most ``stop_timeout`` seconds, before it
+    forces the stop. Other sandboxes use plain ``msb stop``.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param config: Resolved msb-circus configuration.
+    :param name: Sandbox name.
+    :raises MsbCommandError: If the plain or forced ``msb stop`` fails.
+    """
+    if config.sandbox.init == INIT_NONE:
+        invoker.run(build_stop_args(name))
+        return
+    try:
+        result = invoker.run(build_pid1_probe_args(name), check=False)
+    except MsbCommandError:
+        result = None
+    if (
+        result is None
+        or result.returncode != 0
+        or ((result.stdout or "").strip() != S6_PID1_COMM)
+    ):
+        invoker.run(build_stop_args(name))
+        return
+    logger.info("Shutting down the services in %s...", name)
+    try:
+        invoker.run(build_init_shutdown_args(name), check=False)
+    except MsbCommandError as e:
+        logger.debug("Init shutdown exec in %s failed: %s", name, e)
+    deadline = _monotonic() + config.sandbox.stop_timeout
+    while _monotonic() < deadline:
+        try:
+            sandboxes = _list_sandboxes(invoker, running_only=False)
+        except (MsbCommandError, ConfigurationError) as e:
+            logger.debug("Sandbox list during stop of %s failed: %s", name, e)
+            sandboxes = []
+        entry = next((s for s in sandboxes if s.name == name), None)
+        if entry is None or (entry.status or "").lower() == "stopped":
+            return
+        time.sleep(STOP_POLL_INTERVAL)
+    logger.warning(
+        "Sandbox %s did not stop within %s s; forcing the stop "
+        "(unsynced writes may be lost)",
+        name,
+        config.sandbox.stop_timeout,
+    )
+    invoker.run(build_stop_args(name, force=True))
 
 
 @app.command()
@@ -1608,9 +1686,9 @@ def stop(
     ] = Path("."),
 ) -> None:
     """Stop the workspace sandbox."""
-    _config, invoker = _resolve_invoker(workspace)
+    config, invoker = _resolve_invoker(workspace)
     name = sandbox_name_for_workspace(workspace)
-    invoker.run(build_stop_args(name))
+    _stop_sandbox(invoker, config, name)
     typer.echo(f"✓ Stopped {name}")
 
 

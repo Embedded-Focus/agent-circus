@@ -102,10 +102,12 @@ The lifecycle has three steps:
 2. Boot the sandbox from that image with `msb-circus up`.
 3. Start a harness with `msb-circus exec` whenever you need one.
 
-The sandbox boots with `msb run --detach`. This starts the image entrypoint,
-which starts the Docker engine in the guest and imports the TLS interception
-certificate before that. A `msb create` boot skips the entrypoint.
-msb-circus never uses it.
+The sandbox boots with `msb run --detach --init auto`. That hands PID 1
+to s6-overlay, the init system in the image. s6 starts and supervises
+the services of the image: the SSH agent bridge, the TLS CA import, and
+the Docker engine. The services start on every boot, including
+`msb-circus start`, and s6 restarts them when they crash. A
+`msb create` boot skips this hand-off. msb-circus never uses it.
 
 After a boot or a start, msb-circus asks the guest for `docker info` until
 the Docker engine answers. If the engine does not answer within the probe
@@ -129,6 +131,12 @@ tar file, imports it with `msb load`, and deletes the tar file. Use
 The build skips itself when the image tag is already in the msb image cache.
 Use `--force` to rebuild anyway. Use `--engine docker` to build with Docker
 instead of Podman.
+
+If you use your own Dockerfile instead (see `[msb.image] dockerfile`), it
+needs an init system for the sandbox services, or the setting
+`init = "none"` under `[msb.sandbox]`. Without an init, the image must
+not set `ENTRYPOINT ["/init"]`; msb then keeps its own guest agent as
+PID 1. See "Configuration Reference" and "Lifecycle".
 
 The `import` command loads an existing docker-archive tar file into the msb
 image cache:
@@ -161,6 +169,16 @@ Your workspace files come from the host and stay on the host, so `rm` and
 `STATUS`) with relative creation ages. `ps --all` lists every sandbox
 that msb knows about, not only the sandbox of this workspace.
 `ps --running` lists only running sandboxes.
+
+`msb-circus stop` shuts the sandbox down cleanly: it asks the s6 init
+inside the sandbox to stop all services in order, and waits up to
+`stop_timeout` seconds (default 45) for msb to report the sandbox as
+stopped. Only then does it force the stop. **Do not use `msb stop` or
+`msb restart` directly** for these sandboxes: msb 0.7.13 waits forever
+(status `draining`), because the init is PID 1 and msb does not reach
+it. If that happened to you, run
+`msb exec agents-<project> -- kill -TERM 1` or
+`msb stop --force agents-<project>`.
 
 For scripts, `ps --format json` prints a JSON array with `name`, `id`,
 `status`, `created_at` and `updated_at` per sandbox, and `ps --quiet`
@@ -538,6 +556,12 @@ tag = "docker.io/library/msb-agents:26"
 [msb.sandbox]
 memory = "4G"
 # cpus = 2                              # default: 1
+# init = "auto"                         # "none" for custom images without
+                                        # an init; or an absolute init path.
+                                        # Applies at sandbox creation only.
+# stop_timeout = 45                     # seconds to wait for a clean stop
+# docker_stop_timeout = 20              # seconds dockerd may take to stop
+                                        # containers at shutdown
 # root_disk = "flat:32G"                # root disk spec, see "Docker and Disks"
 # docker_disk = "10G"                   # docker opt-in: dedicated ext4 disk
                                         # for /var/lib/docker; unset = no docker
@@ -701,6 +725,12 @@ Docker data does not count against it, but image content and rootfs
 writes do. The sandbox image carries about 3G of content, so expect
 roughly 1G of headroom. If your agents write a lot outside
 `/var/lib/docker`, raise the root next to the docker disk.
+
+dockerd runs as a supervised s6 service inside the sandbox. It is
+restarted when it crashes and stopped cleanly when the sandbox stops.
+`docker_stop_timeout` (default 20 seconds) bounds how long dockerd waits
+for running containers at shutdown. It is passed to the sandbox at
+creation, so a change needs a re-created sandbox.
 
 Disk settings apply at sandbox creation. msb-circus warns when the
 settings of an existing sandbox differ from the configuration. Remove and
@@ -965,6 +995,11 @@ log of dockerd:
 ``` shell
 msb exec agents-<project> -- cat /tmp/dockerd.log
 ```
+
+The log contains one `--- circus-dockerd start` line per (re)start of the
+service, including restarts after a crash. The command
+`msb exec agents-<project> -- /command/s6-rc -a list` lists the services
+that s6 currently runs.
 
 If a command fails with a message about the msb storage root and path
 substitution, an ancestor of the msb storage root is writable by other

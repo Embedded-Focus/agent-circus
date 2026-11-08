@@ -152,7 +152,9 @@ def test_bundled_dockerfile_template_exists():
     content = path.read_text()
     assert "FROM docker.io/library/node:26-slim@" in content
     assert "FROM base AS agents" in content
-    assert 'ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]' in content
+    assert 'ENTRYPOINT ["/init"]' in content
+    assert "CMD []" in content
+    assert "docker-entrypoint.sh" not in content
 
 
 def test_build_image_inspect_args():
@@ -177,9 +179,51 @@ def test_dockerfile_installs_ssh_bridge_packages():
     assert "VSOCK-CONNECT:2:" in content
 
 
-def test_dockerfile_starts_ssh_bridge_before_dockerd_wait():
-    """The bridge must not wait for dockerd, which can take up to 60s."""
+def test_dockerfile_defines_s6_services():
+    """The three services are wired into the s6 user bundle correctly."""
     content = bundled_dockerfile_path().read_text()
-    assert content.index("VSOCK-CONNECT:2:") < content.index(
-        "dockerd >/tmp/dockerd.log"
+    for service in ("circus-ca-import", "circus-ssh-agent-bridge", "circus-dockerd"):
+        assert service in content
+    assert "user-bundles.d/user/contents.d" in content
+    assert "circus-dockerd/dependencies.d/circus-ca-import" in content
+    assert (
+        'exec dockerd --shutdown-timeout "${CIRCUS_DOCKERD_SHUTDOWN_TIMEOUT:-20}"'
+        in content
     )
+    assert "/tmp/dockerd.log" in content
+    assert "/tmp/ssh-agent-bridge.log" in content
+
+
+def test_dockerfile_pins_s6_overlay():
+    """The s6-overlay tarballs are pinned by version and sha256."""
+    content = bundled_dockerfile_path().read_text()
+    assert "v3.2.3.2" in content
+    assert "5379750ed30a84bbd2e2dd74847ba6b5bd29cd0b2e3ea2ec58049b57eb2eda12" in content
+    assert "e6befcc96a437a3831386ecfc51808c5d3e939dc5fe3c02ae9284599e8aa2408" in content
+    assert "b17f17a82e7a515c682a91edaf2ffdabb73f891981b6c1fd712115693a2f8b4c" in content
+
+
+def test_dockerfile_dockerd_default_matches_config():
+    """The dockerd service default equals DEFAULT_DOCKER_STOP_TIMEOUT."""
+    from msb_circus.config import (
+        DEFAULT_DOCKER_STOP_TIMEOUT,
+        DOCKERD_SHUTDOWN_TIMEOUT_ENV_VAR,
+    )
+
+    content = bundled_dockerfile_path().read_text()
+    assert (
+        f"${{{DOCKERD_SHUTDOWN_TIMEOUT_ENV_VAR}:-{DEFAULT_DOCKER_STOP_TIMEOUT}}}"
+        in content
+    )
+
+
+def test_dockerfile_service_scripts_have_no_single_quotes():
+    """Script lines are single-quoted printf arguments; an inner single
+    quote would break the RUN command, so none may appear."""
+    content = bundled_dockerfile_path().read_text()
+    for line in (
+        "'exec >>/tmp/dockerd.log 2>&1'",
+        "'exec >>/tmp/ssh-agent-bridge.log 2>&1'",
+        "'    exec sleep infinity'",
+    ):
+        assert content.count(line) >= 1

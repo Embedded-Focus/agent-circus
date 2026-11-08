@@ -24,6 +24,9 @@ def test_parse_config_returns_defaults_for_empty_dict():
     assert config.image.dockerfile is None
     assert config.sandbox.memory == "4G"
     assert config.sandbox.cpus is None
+    assert config.sandbox.init == "auto"
+    assert config.sandbox.stop_timeout == 45
+    assert config.sandbox.docker_stop_timeout == 20
     assert config.network.mode == "public,private"
     assert config.agent.command == ("pi",)
     assert config.agent.workdir == "/workspace"
@@ -150,6 +153,48 @@ def test_parse_config_logs_info_for_ca_certs(caplog):
     records = [r for r in caplog.records if "trust_host_cas" in r.getMessage()]
     assert len(records) == 1
     assert records[0].levelno == logging.INFO
+
+
+def test_parse_config_accepts_sandbox_init_values():
+    assert parse_config({"msb": {"sandbox": {"init": "none"}}}).sandbox.init == "none"
+    config = parse_config({"msb": {"sandbox": {"init": "/sbin/init"}}})
+    assert config.sandbox.init == "/sbin/init"
+
+
+@pytest.mark.parametrize("value", ["systemd", "", "relative/init"])
+def test_parse_config_rejects_bad_sandbox_init(value):
+    with pytest.raises(ConfigurationError, match=r"msb\.sandbox\.init"):
+        parse_config({"msb": {"sandbox": {"init": value}}})
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["stop_timeout", "docker_stop_timeout"],
+)
+@pytest.mark.parametrize("value", [0, -1, "45", True])
+def test_parse_config_rejects_bad_sandbox_timeouts(key, value):
+    with pytest.raises(
+        ConfigurationError, match=f"msb.sandbox.{key} must be a positive"
+    ):
+        parse_config({"msb": {"sandbox": {key: value}}})
+
+
+def test_parse_config_rejects_stop_timeout_not_greater_than_docker():
+    with pytest.raises(
+        ConfigurationError,
+        match=r"must be greater than msb\.sandbox\.docker_stop_timeout",
+    ):
+        parse_config(
+            {"msb": {"sandbox": {"stop_timeout": 20, "docker_stop_timeout": 20}}}
+        )
+
+
+def test_parse_config_accepts_valid_sandbox_timeouts():
+    config = parse_config(
+        {"msb": {"sandbox": {"stop_timeout": 60, "docker_stop_timeout": 30}}}
+    )
+    assert config.sandbox.stop_timeout == 60
+    assert config.sandbox.docker_stop_timeout == 30
 
 
 def test_load_config_merges_user_global_and_project_layers(tmp_path, monkeypatch):

@@ -39,15 +39,16 @@ def build_run_args(
     workdir: str | None = None,
     docker_disk: str | None = None,
     root_disk: str | None = None,
+    init: str | None = None,
     trust_host_cas: bool = False,
     detach: bool = True,
     vsock: list[tuple[str, int]] | None = None,
 ) -> list[str]:
     """Build argv for ``msb run`` (first-time sandbox boot).
 
-    The boot must go through ``msb run --detach`` so the image ENTRYPOINT
-    applies (it starts dockerd and imports the TLS CA); ``msb create`` and
-    ``msb exec`` do not run the entrypoint.
+    The boot must go through ``msb run --detach --init ...`` so
+    s6-overlay becomes PID 1 and starts the services (CA import, SSH
+    agent bridge, dockerd); ``msb create`` and ``msb exec`` do not.
 
     :param name: Sandbox name (``agents-<project>``).
     :param image: Image reference to boot.
@@ -66,6 +67,8 @@ def build_run_args(
         disk: dockerd then has no usable storage backend.
     :param root_disk: Optional root disk spec sent as ``--root-disk``
         verbatim (e.g. ``"flat:32G"``); ``None`` keeps the msb default.
+    :param init: Value for ``--init`` (PID 1 handoff); ``None`` sends no
+        flag.
     :param trust_host_cas: Send ``--trust-host-cas`` so msb ships the
         host's trusted CAs into the guest.
     :param detach: Whether to boot detached (default True).
@@ -87,6 +90,8 @@ def build_run_args(
         ]
     if net:
         args += ["--net", net]
+    if init is not None:
+        args += ["--init", init]
     if trust_host_cas:
         args.append("--trust-host-cas")
     for forward in port_forwards or ():

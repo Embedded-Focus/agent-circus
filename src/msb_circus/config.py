@@ -42,6 +42,18 @@ SUPPORTED_TOP_LEVEL_KEYS: frozenset[str] = frozenset(
 
 DEFAULT_IMAGE_TAG = "docker.io/library/msb-agents:26"
 DEFAULT_MEMORY = "4G"
+DEFAULT_INIT = "auto"
+"""Default ``--init`` value: msb detects s6-overlay's ``/init``."""
+
+INIT_NONE = "none"
+"""``[msb.sandbox] init`` value that sends no ``--init`` flag."""
+
+DEFAULT_STOP_TIMEOUT = 45
+"""Seconds msb-circus waits for an s6 shutdown before forcing a stop."""
+
+DEFAULT_DOCKER_STOP_TIMEOUT = 20
+"""Seconds dockerd may take to stop containers at shutdown."""
+
 DEFAULT_NETWORK_MODE = "public,private"
 DEFAULT_AGENT_COMMAND: tuple[str, ...] = ("pi",)
 DEFAULT_WORKDIR = "/workspace"
@@ -55,12 +67,16 @@ ADDITIONAL_DIRS_GUEST_BASE = "/workspaces"
 SSH_AGENT_VSOCK_PORT = 22022
 #: Guest path of the bridged SSH agent socket.
 SSH_AGENT_GUEST_SOCKET = "/run/ssh-agent.sock"
-#: Sandbox env var telling the image entrypoint to start the bridge.
+#: Sandbox env var telling the image's s6 services to start the bridge.
 #: Not prefixed with ``MSB_``: msb reserves that prefix for its own env
 #: vars and rejects ``--env`` values using it.
 SSH_AGENT_PORT_ENV_VAR = "CIRCUS_SSH_AGENT_VSOCK_PORT"
 #: Guest directory for copied SSH config files (the guest runs as root).
 SSH_GUEST_DIR = "/root/.ssh"
+
+#: Sandbox env var read by the image's dockerd service (seconds at
+#: shutdown). Not prefixed with ``MSB_``: msb reserves that prefix.
+DOCKERD_SHUTDOWN_TIMEOUT_ENV_VAR = "CIRCUS_DOCKERD_SHUTDOWN_TIMEOUT"
 
 #: Host file that ``[hosts]`` entries are read from.
 DEFAULT_HOSTS_FILE = "/etc/hosts"
@@ -128,12 +144,22 @@ class SandboxConfig:
         ``None`` keeps msb's managed default root.
     :ivar docker_disk: Optional size of a dedicated ext4 disk mounted at
         ``/var/lib/docker`` (the docker opt-in); ``None`` disables docker.
+    :ivar init: Value for ``--init`` at sandbox creation (``"auto"``,
+        ``"none"`` sends no flag, or an absolute path to another init);
+        applies at creation only.
+    :ivar stop_timeout: Host-side seconds msb-circus waits for an s6
+        shutdown before forcing the stop.
+    :ivar docker_stop_timeout: Seconds dockerd may take to stop
+        containers at shutdown; sent as sandbox env at creation.
     """
 
     memory: str = DEFAULT_MEMORY
     cpus: int | None = None
     root_disk: str | None = None
     docker_disk: str | None = None
+    init: str = DEFAULT_INIT
+    stop_timeout: int = DEFAULT_STOP_TIMEOUT
+    docker_stop_timeout: int = DEFAULT_DOCKER_STOP_TIMEOUT
 
 
 def docker_enabled(config: MsbConfig) -> bool:
@@ -642,11 +668,42 @@ def _parse_sandbox(raw: Any) -> SandboxConfig:
         raise ConfigurationError(
             'msb.sandbox.docker_disk must be a non-empty string (e.g. "10G")'
         )
+    init = raw.get("init", DEFAULT_INIT)
+    if (
+        not isinstance(init, str)
+        or not init
+        or not (init in ("auto", "none") or init.startswith("/"))
+    ):
+        raise ConfigurationError(
+            'msb.sandbox.init must be "auto", "none" or an absolute path'
+        )
+
+    timeouts: dict[str, int] = {}
+    for key in ("stop_timeout", "docker_stop_timeout"):
+        value = raw.get(
+            key,
+            DEFAULT_STOP_TIMEOUT
+            if key == "stop_timeout"
+            else DEFAULT_DOCKER_STOP_TIMEOUT,
+        )
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ConfigurationError(
+                f"msb.sandbox.{key} must be a positive integer (seconds)"
+            )
+        timeouts[key] = value
+    if timeouts["stop_timeout"] <= timeouts["docker_stop_timeout"]:
+        raise ConfigurationError(
+            "msb.sandbox.stop_timeout must be greater than "
+            "msb.sandbox.docker_stop_timeout"
+        )
     return SandboxConfig(
         memory=memory,
         cpus=cpus,
         root_disk=root_disk,
         docker_disk=docker_disk,
+        init=init,
+        stop_timeout=timeouts["stop_timeout"],
+        docker_stop_timeout=timeouts["docker_stop_timeout"],
     )
 
 

@@ -162,8 +162,8 @@ flowchart TB
   static dockerd from the dind image, apt packages incl. `openssh-client`
   and `socat`, agents pinned by version). Built on the host with podman
   (default) or docker, exported as tar, imported with `msb load`.
-- **Boot path:** always `msb run --detach` (never `msb create`), because
-  only `run` executes the image ENTRYPOINT.
+- **Boot path:** always `msb run --detach --init auto` (never
+  `msb create`), so s6-overlay becomes PID 1 and starts the services.
 
 ### 5.2 Internal view: modules
 
@@ -229,7 +229,7 @@ sequenceDiagram
     else no sandbox
         CLI->>Host: fail if a forwarded host port is occupied
         CLI->>MSB: msb run --detach --name ... --volume ... --port ...<br/>--vsock &lt;link&gt;:22022 --env ... --mount-owned/--root-disk ... &lt;image&gt;
-        MSB->>Guest: boot, ENTRYPOINT docker-entrypoint.sh
+        MSB->>Guest: boot, s6-overlay as PID 1 (--init auto), services start
     end
     CLI->>Guest: msb exec: pi trust.json
     CLI->>Guest: msb copy: agent config files (.claude.json, pi, opencode)
@@ -252,35 +252,38 @@ msb call.
 ```mermaid
 flowchart TB
     subgraph guest["microVM agents-&lt;project&gt;"]
-        agentd["PID 1: msb agentd<br/>(exec, copy, reaping; no supervision)"]
-        ep["docker-entrypoint.sh (ENTRYPOINT)"]
-        ca["import /.msb/tls/ca.pem<br/>-> msb-intercept.crt,<br/>update-ca-certificates"]
-        dockerd["dockerd (background)<br/>only if /var/lib/docker is usable"]
-        socat["socat bridge (background)<br/>only if MSB_CIRCUS_SSH_AGENT_VSOCK_PORT set<br/>/run/ssh-agent.sock <-> VSOCK 2:22022"]
-        bash["CMD bash"]
+        init["PID 1: s6-svscan (s6-overlay)<br/>supervises and restarts services"]
+        agentd["/init.krun: msb guest agent<br/>(exec, copy; child of PID 1)"]
+        ca["circus-ca-import (oneshot)<br/>import /.msb/tls/ca.pem,<br/>update-ca-certificates"]
+        dockerd["circus-dockerd (longrun)<br/>only if /var/lib/docker is usable<br/>log: /tmp/dockerd.log"]
+        socat["circus-ssh-agent-bridge (longrun)<br/>only if CIRCUS_SSH_AGENT_VSOCK_PORT set<br/>/run/ssh-agent.sock <-> VSOCK 2:22022<br/>log: /tmp/ssh-agent-bridge.log"]
         execs["msb exec sessions:<br/>harnesses, ACP streams, setup scripts"]
         msbdir["/.msb: scripts/, tls/, heartbeat.json, rootfs"]
         disks["/workspace (bind), /workspaces/&lt;name&gt; (bind),<br/>/root/.claude, /root/.codex (bind),<br/>/var/lib/docker (mount-owned ext4 disk)"]
     end
-    agentd --> ep
-    ep --> ca --> dockerd
-    ep --> socat
-    ep --> bash
-    agentd --> execs
+    init --> agentd
+    init --> ca --> dockerd
+    init --> socat
+    init --> execs
     msbdir -. read by .-> ca
 ```
 
 Notes:
 
-- There is **no real init system** yet. Background services are children
-  of the entrypoint shell; nothing restarts them. msb supports
-  `--init auto|<path>` to hand PID 1 to systemd/s6/runit (agentd keeps
-  running as a child). s6-overlay is the favored candidate; see §9.
+- s6-overlay is PID 1 (`msb run --init auto`); msb's guest agent
+  `/init.krun` keeps running as its child. `msb stop` does not reach
+  PID 1 any more (msb 0.7.13 stays `draining`), so `msb-circus stop`
+  runs `kill -TERM 1` in the guest and waits for msb to report the
+  sandbox as stopped (`stop_timeout`), then forces the stop.
+- The services are defined in the Dockerfile (inline `printf`): CA
+  import as a oneshot, SSH agent bridge and dockerd as longruns. Idle
+  services run `sleep infinity`, because s6 restarts a longrun that
+  exits.
 - dockerd needs a real filesystem for `/var/lib/docker` (overlayfs on
   overlayfs fails). Docker is enabled by `[msb.sandbox] docker_disk`
   (`--mount-owned /var/lib/docker:kind=disk,size=...`) or a flat root
-  (`root_disk = "flat:..."`). Otherwise the entrypoint prints an
-  explanation and skips dockerd.
+  (`root_disk = "flat:..."`). Otherwise the dockerd service logs an
+  explanation and idles.
 - Go programs (dockerd) cache the system cert pool per process, so CAs
   must be installed **before** dockerd starts.
 
@@ -306,8 +309,9 @@ flowchart LR
 - Guest `SSH_AUTH_SOCK` is set as sandbox env at creation **and** injected
   into every `exec` env (after `env_passthrough`, before `-e`), so a host
   value leaking through a `SSH_*` passthrough glob cannot override it.
-- Pending live checks: whether msb re-opens the host path per connection
-  (symlink trick), and whether the entrypoint runs again on `msb start`.
+- Pending live check: whether msb re-opens the host path per connection
+  (symlink trick). The bridge runs as an s6 service, so it starts on
+  every boot including `msb start`.
 
 ### 5.6 Internal view: `exec` and ACP
 
@@ -364,7 +368,7 @@ Bundled msb version: see `uv.lock` (0.7.13 at the time of writing).
   guest location is unknown (being investigated, §9).
 - `--tls-intercept` makes msb's own inspection CA
   (`~/.microsandbox/tls/ca.{crt,key}`) available in the guest at
-  `/.msb/tls/ca.pem`; the entrypoint imports it.
+  `/.msb/tls/ca.pem`; the `circus-ca-import` service imports it.
 - Rootfs **patches** (`--copy-file`, `--mkdir`, YAML `patches`, incl.
   `append`) apply before the first boot only.
 - DNS: msb intercepts DNS on the host; no static records. Guest
@@ -373,7 +377,10 @@ Bundled msb version: see `uv.lock` (0.7.13 at the time of writing).
 - `host.microsandbox.internal` reaches the host when the `host` network
   group is allowed.
 - `--init auto|<path>` hands PID 1 to a real init; persisted across
-  restarts for detached sandboxes.
+  restarts for detached sandboxes. With s6-overlay as PID 1, `msb stop`
+  waits forever (status `draining`, msb 0.7.13): msb sends
+  `core.shutdown` to `/init.krun`, which no longer is PID 1.
+  `kill -TERM 1` in the guest shuts the sandbox down cleanly.
 - `msb ssh` / `msb ssh serve` give SSH access *into* a sandbox; not used.
 
 ## 8. Feature status (msb-circus)
@@ -389,7 +396,7 @@ KVM, docker socket, or msb runtime.
 | SSH agent forwarding | implemented (`b0650bc`); open live checks: does msb re-open the symlinked host socket per connection, does the entrypoint run again on `msb start` |
 | Host entries | implemented (`809068f`) |
 | CA certificates (`[ca_certs]`) | in analysis, see §9 |
-| Init system (s6-overlay) | idea |
+| Init system (s6-overlay) | implemented; pending live verification (plan-msb-s6.md) |
 
 ## 9. Work in progress
 
@@ -422,10 +429,7 @@ count. Without the flag, `/.msb/tls` is empty.
 
 ### 9.2 Init system
 
-Considered: hand PID 1 to s6-overlay via `msb run --init auto` and move
-dockerd and the SSH bridge into s6 services (conditional on env vars),
-which adds restarts, ordering, and clean shutdown. Needs a live spike
-first (detached boot, restart behavior, env propagation, `msb exec`).
+Implemented; see `plan-msb-s6.md`.
 
 ## 10. Conventions and working rules
 

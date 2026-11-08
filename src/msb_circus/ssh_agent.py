@@ -4,8 +4,8 @@ The sandbox's vsock route to the host SSH agent is fixed when the sandbox
 is created, but ``$SSH_AUTH_SOCK`` changes with every host login session.
 msb-circus therefore points the route at a stable symlink (refreshed
 before every boot, start, and reuse) and passes a sandbox-level env var
-that makes the image entrypoint bridge a guest Unix socket to the host
-agent over virtio-vsock. No private key material enters the guest.
+that makes the image's s6 services bridge a guest Unix socket to the
+host agent over virtio-vsock. No private key material enters the guest.
 """
 
 from __future__ import annotations
@@ -131,7 +131,7 @@ def ssh_sandbox_env() -> dict[str, str]:
     """Return sandbox-level env vars enabling the guest agent bridge.
 
     :returns: ``SSH_AUTH_SOCK`` (guest socket path) and the bridge port
-        variable read by the image entrypoint.
+        variable read by the image's s6 services.
     """
     return {
         "SSH_AUTH_SOCK": SSH_AGENT_GUEST_SOCKET,
