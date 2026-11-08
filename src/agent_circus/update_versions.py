@@ -18,7 +18,12 @@ location, so they only resolve to the real template sources when run against
 an editable/source checkout (e.g. via ``uv run``). Running it from an
 installed wheel would edit the installed copy, not the repository. The node
 base image in the msb-agents Dockerfile is digest-refreshed in place; its
-major tag (26-slim) is never bumped automatically.
+major tag (26-slim) is never bumped automatically. s6-overlay is tracked as
+four pins (release tag plus one sha256 per release asset); if the tag moves
+but an asset's ``.sha256`` lookup fails, ``--apply`` can leave the URLs
+ahead of the hashes — the Dockerfile build then fails loudly at
+``sha256sum -c`` instead of silently trusting an unverified tarball, and
+the updater's non-zero exit names the failed pin.
 """
 
 import json
@@ -66,6 +71,8 @@ class VersionPin:
         ``"registry-digest"`` only).
     :param tag_template: Tag built from the resolved version (source
         ``"github-image"`` only), e.g. ``"{version}-dind"``.
+    :param asset: Release asset filename whose ``.sha256`` companion is
+        fetched (source ``"github-asset-sha256"`` only).
     :param source: Version lookup backend.
     """
 
@@ -77,7 +84,10 @@ class VersionPin:
     image: str = ""
     tag: str = ""
     tag_template: str = ""
-    source: Literal["github", "npm", "github-image", "registry-digest"] = "github"
+    asset: str = ""
+    source: Literal[
+        "github", "npm", "github-image", "registry-digest", "github-asset-sha256"
+    ] = "github"
 
 
 PINS: list[VersionPin] = [
@@ -271,6 +281,40 @@ MSB_AGENTS_PINS: list[VersionPin] = [
         pattern=re.compile(r"(?<![\w.-])pi-acp@([0-9][0-9.]*)"),
         source="npm",
     ),
+    # s6-overlay is pinned by version and sha256 (the Dockerfile verifies the
+    # tarballs with sha256sum -c). The tag appears in all three ADD URLs and
+    # is rewritten together by apply_version; each tarball's hash comes from
+    # the release's own .sha256 asset, so hashes and URLs move in lockstep.
+    VersionPin(
+        name="s6-overlay (msb-agents)",
+        repo="just-containers/s6-overlay",
+        file=MSB_AGENTS_DOCKERFILE,
+        pattern=re.compile(r"s6-overlay/releases/download/(v[0-9][0-9.]*)/s6-overlay-"),
+    ),
+    VersionPin(
+        name="s6-overlay noarch sha256 (msb-agents)",
+        repo="just-containers/s6-overlay",
+        file=MSB_AGENTS_DOCKERFILE,
+        pattern=re.compile(r"'([0-9a-f]{64})  s6-overlay-noarch\.tar\.xz'"),
+        asset="s6-overlay-noarch.tar.xz.sha256",
+        source="github-asset-sha256",
+    ),
+    VersionPin(
+        name="s6-overlay x86_64 sha256 (msb-agents)",
+        repo="just-containers/s6-overlay",
+        file=MSB_AGENTS_DOCKERFILE,
+        pattern=re.compile(r"'([0-9a-f]{64})  s6-overlay-x86_64\.tar\.xz'"),
+        asset="s6-overlay-x86_64.tar.xz.sha256",
+        source="github-asset-sha256",
+    ),
+    VersionPin(
+        name="s6-overlay aarch64 sha256 (msb-agents)",
+        repo="just-containers/s6-overlay",
+        file=MSB_AGENTS_DOCKERFILE,
+        pattern=re.compile(r"'([0-9a-f]{64})  s6-overlay-aarch64\.tar\.xz'"),
+        asset="s6-overlay-aarch64.tar.xz.sha256",
+        source="github-asset-sha256",
+    ),
 ]
 
 # Every tracked pin, in report order: the agent-circus template first, then
@@ -458,6 +502,35 @@ def fetch_latest_npm_version(package: str) -> str:
     return latest
 
 
+def fetch_latest_github_asset_sha256(gh: Github, repo: str, asset: str) -> str:
+    """Return the sha256 recorded in a GitHub release's ``.sha256`` asset.
+
+    Resolves the repository's latest release tag and downloads
+    ``<asset>`` from it (e.g. ``s6-overlay-noarch.tar.xz.sha256``). The
+    asset content follows the sha256sum text format
+    (``<64 hex digits>  <filename>``); only the hash is returned.
+
+    :param gh: Authenticated or anonymous GitHub client.
+    :param repo: Repository as ``"owner/repo"``.
+    :param asset: Release asset filename of the ``.sha256`` file.
+    :returns: The 64-digit lowercase hex digest.
+    :raises ValueError: If the asset content is not a sha256sum line.
+    :raises urllib.error.URLError: If the download fails.
+    :raises GithubException: If the latest release cannot be resolved.
+    """
+    tag = fetch_latest_tag(gh, repo)
+    url = (
+        f"https://github.com/{repo}/releases/download/{urllib.parse.quote(tag)}"
+        f"/{urllib.parse.quote(asset)}"
+    )
+    with urllib.request.urlopen(url, timeout=30) as response:
+        text = response.read().decode("utf-8")
+    match = re.search(r"^([0-9a-f]{64})\s+\S", text, re.MULTILINE)
+    if match is None:
+        raise ValueError(f"Release asset {asset} of {repo} is not a sha256sum line")
+    return match.group(1)
+
+
 def fetch_latest_version(gh: Github, pin: VersionPin) -> str:
     """Return the latest normalized version for *pin*.
 
@@ -474,6 +547,8 @@ def fetch_latest_version(gh: Github, pin: VersionPin) -> str:
         return fetch_latest_npm_version(pin.repo)
     if pin.source == "registry-digest":
         return fetch_latest_docker_digest(pin.image, pin.tag)
+    if pin.source == "github-asset-sha256":
+        return fetch_latest_github_asset_sha256(gh, pin.repo, pin.asset)
     if pin.source == "github-image":
         version = normalize_tag(fetch_latest_tag(gh, pin.repo), pin.strip_prefix)
         tag = pin.tag_template.format(version=version)

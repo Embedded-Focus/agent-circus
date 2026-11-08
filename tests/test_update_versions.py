@@ -23,6 +23,7 @@ from agent_circus.update_versions import (
     apply_version,
     build_report,
     fetch_latest_docker_digest,
+    fetch_latest_github_asset_sha256,
     fetch_latest_npm_version,
     fetch_latest_tag,
     fetch_latest_version,
@@ -148,7 +149,20 @@ def test_msb_pins_cover_every_pinned_component_in_msb_dockerfile() -> None:
         "codex-acp (msb-agents)",
         "pi (msb-agents)",
         "pi-acp (msb-agents)",
+        "s6-overlay (msb-agents)",
+        "s6-overlay noarch sha256 (msb-agents)",
+        "s6-overlay x86_64 sha256 (msb-agents)",
+        "s6-overlay aarch64 sha256 (msb-agents)",
     }
+
+
+def test_s6_overlay_version_pin_matches_all_three_add_urls() -> None:
+    # The tag appears once per ADD URL; apply_version must rewrite all of
+    # them together, or the sha256sum -c build check breaks.
+    pin = next(pin for pin in MSB_AGENTS_PINS if pin.name == "s6-overlay (msb-agents)")
+    assert pin.source == "github"
+    content = pin.file.read_text()
+    assert len(list(pin.pattern.finditer(content))) == 3
 
 
 def test_apply_version_updates_all_duplicate_image_references() -> None:
@@ -287,6 +301,85 @@ def test_fetch_latest_tag_returns_tag_name() -> None:
 
     assert tag == "v1.2.3"
     gh.get_repo.assert_called_once_with("owner/repo")
+
+
+def test_fetch_latest_github_asset_sha256_parses_release_asset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gh = MagicMock()
+    gh.get_repo.return_value.get_latest_release.return_value.tag_name = "v3.2.3.2"
+
+    class Response:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+        def read(self) -> bytes:
+            return b"" + b"a" * 64 + b"  s6-overlay-noarch.tar.xz\n"
+
+    urlopen = MagicMock(return_value=Response())
+    monkeypatch.setattr("agent_circus.update_versions.urllib.request.urlopen", urlopen)
+
+    digest = fetch_latest_github_asset_sha256(
+        gh, "just-containers/s6-overlay", "s6-overlay-noarch.tar.xz.sha256"
+    )
+
+    assert digest == "a" * 64
+    url = urlopen.call_args.args[0]
+    assert url == (
+        "https://github.com/just-containers/s6-overlay/releases/download/"
+        "v3.2.3.2/s6-overlay-noarch.tar.xz.sha256"
+    )
+
+
+def test_fetch_latest_github_asset_sha256_rejects_malformed_asset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gh = MagicMock()
+    gh.get_repo.return_value.get_latest_release.return_value.tag_name = "v1.0"
+
+    class Response:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+        def read(self) -> bytes:
+            return b"not a sha256sum line\n"
+
+    urlopen = MagicMock(return_value=Response())
+    monkeypatch.setattr("agent_circus.update_versions.urllib.request.urlopen", urlopen)
+
+    with pytest.raises(ValueError, match="not a sha256sum line"):
+        fetch_latest_github_asset_sha256(
+            gh, "just-containers/s6-overlay", "s6-overlay-noarch.tar.xz.sha256"
+        )
+
+
+def test_fetch_latest_version_routes_github_asset_sha256_pin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pin = next(
+        pin
+        for pin in MSB_AGENTS_PINS
+        if pin.source == "github-asset-sha256"
+        and pin.name == "s6-overlay noarch sha256 (msb-agents)"
+    )
+    fetch = MagicMock(return_value="a" * 64)
+    monkeypatch.setattr(
+        "agent_circus.update_versions.fetch_latest_github_asset_sha256", fetch
+    )
+
+    latest = fetch_latest_version(MagicMock(), pin)
+
+    assert latest == "a" * 64
+    fetch.assert_called_once()
+    args = fetch.call_args.args
+    assert args[1] == "just-containers/s6-overlay"
+    assert args[2] == "s6-overlay-noarch.tar.xz.sha256"
 
 
 def test_fetch_latest_npm_version_returns_latest_dist_tag(
