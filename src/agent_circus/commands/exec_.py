@@ -25,6 +25,7 @@ from agent_circus.config import (
 )
 from agent_circus.context import build_compose_context
 from agent_circus.exceptions import AgentCircusError
+from agent_circus.gitworktree import ensure_not_linked_worktree
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,7 @@ def exec_cmd(
     companions = get_companion_services(load_config(workspace))
 
     try:
+        ensure_not_linked_worktree(workspace)
         validate_services([service], companions)
         cmd = command or []
         if not cmd:

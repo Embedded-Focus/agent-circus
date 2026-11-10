@@ -1219,6 +1219,14 @@ subsequent runs.
 > time. Re-run `agent-circus init --git-worktree-mirror` if the repository is
 > moved to a different location on the host.
 
+agent-circus does not run in a linked worktree (a directory created with
+`git worktree add`). Its Git metadata lives in the main repository, outside
+the containers, so Git cannot work inside them. `up` and `exec` fail with an
+error when the workspace or one of its parent directories is a linked
+worktree. Run agent-circus from the main checkout and create or change
+worktrees there. `ps`, `rm`, and `destroy` still work, so you can remove
+containers that were created in a worktree earlier.
+
 ### CA Certificates
 
 Add a `[ca_certs]` table to `config.toml` to forward selected CA certificates from the
