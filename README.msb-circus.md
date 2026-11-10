@@ -225,7 +225,8 @@ msb-circus brings your host harness configuration into the sandbox:
   edits to these files are overwritten by the next refresh. Authenticate
   through `env_passthrough` (see [Secrets](#secrets)).
 
-msb-circus pre-trusts the agent workdir (`[msb.agent] workdir`) and every
+msb-circus pre-trusts the agent workdir (`[msb.agent] workdir`), the
+worktree mirror path (when enabled), and every
 `additional_dirs` mount for pi and pi-acp: after each boot or start it
 writes `~/.pi/agent/trust.json` in the guest, so the first harness start in
 a new sandbox does not ask to trust the directory. The write is idempotent
@@ -582,7 +583,7 @@ guest_port = 8000                       # or container_port (agent-circus style)
 
 [msb.agent]
 command = ["pi"]                       # default exec target
-workdir = "/workspace"
+# workdir = "/workspace"               # default; host path with git.worktree_mirror
 
 [ssh]                                  # forward the host SSH agent; see
                                        # "SSH Agent Forwarding"
@@ -768,24 +769,20 @@ warns when an existing sandbox was created without the mirror. Remove and
 re-create the sandbox to apply the flag:
 
 ``` shell
-msb-circus rm && msb-circus up
+msb-circus rm -f && msb-circus up
 ```
 
-For best results, tell your agent to prefer the host path over
-`/workspace` for Git operations — Git records the paths it is invoked
-with, so a worktree created under `/workspace` may record paths that only
-exist inside the sandbox. Paste this into your `AGENTS.md` (adjust the
-path to your repository location):
+With the mirror on, agents start in the host path of the workspace
+instead of `/workspace` (unless `[msb.agent] workdir` or `exec --workdir`
+sets another directory). Git then records paths that are valid on the
+host, and you do not need extra instructions in `AGENTS.md`.
 
-``` markdown
-## Git Operations
-
-This repository is mounted at `/home/user/myrepo` inside the agent
-sandbox in addition to the standard `/workspace` mount. When performing
-Git operations that involve absolute paths — such as `git worktree`
-commands — use `/home/user/myrepo` rather than `/workspace` to ensure
-Git's recorded paths remain consistent with the host.
-```
+Create worktrees inside the workspace, for example in a `.worktrees/`
+directory that `.gitignore` excludes: `git worktree add
+.worktrees/my-branch`. A worktree outside the workspace (such as
+`../my-branch`) created in the sandbox exists only in the sandbox. It is
+lost when you remove the sandbox, and it leaves a stale entry in
+`.git/worktrees/` (clean it up with `git worktree prune`).
 
 msb-circus does not run in a linked worktree (a directory created with
 `git worktree add`). Its Git metadata lives in the main repository, outside

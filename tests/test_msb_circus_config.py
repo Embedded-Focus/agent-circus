@@ -29,7 +29,7 @@ def test_parse_config_returns_defaults_for_empty_dict():
     assert config.sandbox.docker_stop_timeout == 20
     assert config.network.mode == "public,private"
     assert config.agent.command == ("pi",)
-    assert config.agent.workdir == "/workspace"
+    assert config.agent.workdir is None
     assert config.tracing.enabled is False
     assert config.tracing.directory == ".agent-circus/traces"
     assert config.tracing.sample_interval == pytest.approx(1.0)

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from msb_circus.cli import _warn_on_mount_drift
-from msb_circus.config import effective_mounts, parse_config
+from msb_circus.config import effective_mounts, parse_config, resolve_agent_workdir
 from msb_circus.exceptions import ConfigurationError, MsbCommandError
 from msb_circus.msb import MsbInvoker
 from msb_circus.sandbox import parse_inspect_bind_mounts
@@ -173,3 +173,24 @@ def test_warn_on_mount_drift_skips_on_inspect_failure(tmp_path, caplog):
     with caplog.at_level(logging.WARNING):
         _warn_on_mount_drift(FailingInvoker(), config, "agents-x", tmp_path)
     assert caplog.records == []
+
+
+def test_resolve_agent_workdir_defaults_to_workspace_mount(tmp_path):
+    assert resolve_agent_workdir(parse_config({}), tmp_path) == "/workspace"
+
+
+def test_resolve_agent_workdir_uses_host_path_with_mirror(tmp_path):
+    config = parse_config({"git": {"worktree_mirror": True}})
+    assert resolve_agent_workdir(config, tmp_path) == str(tmp_path)
+
+
+def test_resolve_agent_workdir_prefers_explicit_workdir(tmp_path):
+    config = parse_config(
+        {"git": {"worktree_mirror": True}, "msb": {"agent": {"workdir": "/w"}}}
+    )
+    assert resolve_agent_workdir(config, tmp_path) == "/w"
+
+
+def test_parse_config_rejects_empty_agent_workdir():
+    with pytest.raises(ConfigurationError, match="workdir"):
+        parse_config({"msb": {"agent": {"workdir": ""}}})

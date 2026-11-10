@@ -193,10 +193,14 @@ class NetworkConfig:
 
 @dataclass(frozen=True)
 class AgentConfig:
-    """Default exec target (``[msb.agent]``)."""
+    """Default exec target (``[msb.agent]``).
+
+    :ivar workdir: Explicit guest working directory, or None when unset
+        (see resolve_agent_workdir).
+    """
 
     command: tuple[str, ...] = DEFAULT_AGENT_COMMAND
-    workdir: str = DEFAULT_WORKDIR
+    workdir: str | None = None
 
 
 @dataclass(frozen=True)
@@ -564,6 +568,25 @@ def effective_mounts(config: MsbConfig, workspace: Path) -> list[tuple[str, str]
     return mounts
 
 
+def resolve_agent_workdir(config: MsbConfig, workspace: Path) -> str:
+    """Return the guest working directory for agent commands.
+
+    An explicit ``[msb.agent] workdir`` wins. Otherwise the host path of
+    the workspace is used when the git worktree mirror is on, so Git
+    records paths that are valid on the host, and ``/workspace`` when
+    it is off.
+
+    :param config: Resolved msb-circus configuration.
+    :param workspace: Workspace directory (absolute host path).
+    :returns: Guest working directory.
+    """
+    if config.agent.workdir is not None:
+        return config.agent.workdir
+    if config.git_worktree_mirror:
+        return str(workspace)
+    return DEFAULT_WORKDIR
+
+
 def resolve_agent_config_mounts(
     environ: dict[str, str] | None = None,
 ) -> list[tuple[str, str]]:
@@ -872,8 +895,8 @@ def _parse_agent(raw: Any) -> AgentConfig:
         raise ConfigurationError(
             "msb.agent.command must be a non-empty list of strings"
         )
-    workdir = raw.get("workdir", DEFAULT_WORKDIR)
-    if not isinstance(workdir, str) or not workdir:
+    workdir = raw.get("workdir")
+    if workdir is not None and (not isinstance(workdir, str) or not workdir):
         raise ConfigurationError("msb.agent.workdir must be a non-empty string")
     return AgentConfig(command=tuple(command), workdir=workdir)
 

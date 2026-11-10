@@ -348,7 +348,10 @@ def test_ensure_claude_trust_trusts_workdir_and_additional_dirs():
     invoker = RecordingInvoker()
 
     _ensure_claude_trust(
-        cast(MsbInvoker, invoker), _config_with_additional_dir(), "agents-demo"
+        cast(MsbInvoker, invoker),
+        _config_with_additional_dir(),
+        "agents-demo",
+        Path("/host/ws"),
     )
 
     assert invoker.calls == [
@@ -363,7 +366,10 @@ def test_ensure_claude_trust_warns_on_failure(caplog):
 
     with caplog.at_level(logging.WARNING):
         _ensure_claude_trust(
-            cast(MsbInvoker, FailingInvoker()), MsbConfig(), "agents-demo"
+            cast(MsbInvoker, FailingInvoker()),
+            MsbConfig(),
+            "agents-demo",
+            Path("/host/ws"),
         )
 
     assert "Could not pre-trust" in caplog.text

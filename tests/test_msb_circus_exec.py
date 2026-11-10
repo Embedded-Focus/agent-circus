@@ -274,6 +274,16 @@ def test_exec_defaults_to_configured_agent_command(tmp_path, fake_msb):
     assert argv[-1] == "pi"
 
 
+def test_exec_uses_host_path_workdir_with_mirror(tmp_path, fake_msb):
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b"[git]\nworktree_mirror = true\n")
+    result = runner.invoke(app, ["exec", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    argv = fake_msb["interactive_argv"]
+    assert argv[argv.index("--workdir") + 1] == str(tmp_path)
+
+
 def test_exec_acp_uses_stream_quiet_without_tty(tmp_path, fake_msb):
     name = sandbox_name_for_workspace(tmp_path)
     result = runner.invoke(

@@ -17,6 +17,7 @@ from . import __version__
 from .config import (
     ADDITIONAL_DIRS_GUEST_BASE,
     AGENT_CONFIG_FILE_COPIES,
+    DEFAULT_WORKDIR,
     DOCKERD_SHUTDOWN_TIMEOUT_ENV_VAR,
     INIT_NONE,
     SSH_AGENT_GUEST_SOCKET,
@@ -26,6 +27,7 @@ from .config import (
     effective_mounts,
     load_config,
     resolve_agent_config_mounts,
+    resolve_agent_workdir,
     sandbox_name_for_workspace,
 )
 from .envs import parse_env_assignments, resolve_passthrough
@@ -989,23 +991,55 @@ def _fail_on_occupied_ports(config: MsbConfig) -> None:
     raise typer.Exit(code=1)
 
 
-def _trusted_guest_dirs(config: MsbConfig) -> list[str]:
-    """Return the guest directories to pre-trust for the agent harnesses.
+def _workspace_guest_path(config: MsbConfig, workspace: Path) -> str:
+    """Return the guest path the workspace itself is mounted at.
 
-    The exec workdir plus every ``additional_dirs`` guest target, in first-
-    occurrence order and without duplicates.
+    ACP clients open sessions with the workspace's guest path as the
+    ``session/new`` cwd, independent of the agent workdir. The path is
+    taken from the first effective mount whose host side is the
+    workspace (the ``.`` mount, ``/workspace`` by default); the
+    worktree mirror mount, which has the same host side, comes later
+    and is never matched. Without a workspace mount the documented
+    default is assumed.
 
     :param config: Resolved msb-circus configuration.
+    :param workspace: Workspace directory (absolute host path).
+    :returns: Guest directory the workspace is mounted at.
+    """
+    for host_path, guest in effective_mounts(config, workspace):
+        if host_path == str(workspace):
+            return guest.split(":", 1)[0]
+    return DEFAULT_WORKDIR
+
+
+def _trusted_guest_dirs(config: MsbConfig, workspace: Path) -> list[str]:
+    """Return the guest directories to pre-trust for the agent harnesses.
+
+    The guest workspace path, the exec workdir, the worktree mirror
+    path (when enabled), and every ``additional_dirs`` guest target, in
+    first-occurrence order and without duplicates. The workspace path
+    is always included because ACP clients pass it as the session cwd
+    even when the agent workdir differs.
+
+    :param config: Resolved msb-circus configuration.
+    :param workspace: Workspace directory (absolute host path).
     :returns: Guest directory paths.
     """
-    dirs = [config.agent.workdir]
+    dirs = [
+        _workspace_guest_path(config, workspace),
+        resolve_agent_workdir(config, workspace),
+    ]
+    if config.git_worktree_mirror:
+        dirs.append(str(workspace))
     dirs += [
         f"{ADDITIONAL_DIRS_GUEST_BASE}/{entry.name}" for entry in config.additional_dirs
     ]
     return list(dict.fromkeys(dirs))
 
 
-def _ensure_pi_trust(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
+def _ensure_pi_trust(
+    invoker: MsbInvoker, config: MsbConfig, name: str, workspace: Path
+) -> None:
     """Pre-trust the mounted work directories for pi and pi-acp.
 
     Writes ``$HOME/.pi/agent/trust.json`` in the guest so the first harness
@@ -1016,10 +1050,12 @@ def _ensure_pi_trust(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
     :param invoker: Invoker bound to the resolved msb binary.
     :param config: Resolved msb-circus configuration.
     :param name: Sandbox name.
+    :param workspace: Workspace directory (absolute host path).
     """
     try:
         result = invoker.run(
-            build_write_trust_args(name, _trusted_guest_dirs(config)), check=False
+            build_write_trust_args(name, _trusted_guest_dirs(config, workspace)),
+            check=False,
         )
         if result.returncode == 0:
             return
@@ -1037,7 +1073,9 @@ def _ensure_pi_trust(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
         )
 
 
-def _ensure_claude_trust(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
+def _ensure_claude_trust(
+    invoker: MsbInvoker, config: MsbConfig, name: str, workspace: Path
+) -> None:
     """Pre-trust the mounted work directories for Claude Code.
 
     Merges ``projects[<dir>].hasTrustDialogAccepted`` into the guest's
@@ -1050,10 +1088,11 @@ def _ensure_claude_trust(invoker: MsbInvoker, config: MsbConfig, name: str) -> N
     :param invoker: Invoker bound to the resolved msb binary.
     :param config: Resolved msb-circus configuration.
     :param name: Sandbox name.
+    :param workspace: Workspace directory (absolute host path).
     """
     try:
         result = invoker.run(
-            build_write_claude_trust_args(name, _trusted_guest_dirs(config)),
+            build_write_claude_trust_args(name, _trusted_guest_dirs(config, workspace)),
             check=False,
         )
         if result.returncode == 0:
@@ -1558,10 +1597,10 @@ def _ensure_sandbox_running(
     existing = {s.name: s for s in sandboxes}.get(name)
     if existing is not None and (existing.status or "").lower() == "running":
         logger.info("Sandbox %s is already running; reusing it.", name)
-        _ensure_pi_trust(invoker, config, name)
+        _ensure_pi_trust(invoker, config, name, workspace)
         _ensure_agent_config_copies(invoker, name)
         _ensure_host_entries(invoker, config, name)
-        _ensure_claude_trust(invoker, config, name)
+        _ensure_claude_trust(invoker, config, name, workspace)
         _repair_codex_daemon(invoker, name)
         _ensure_ssh_files(invoker, config, name)
         _ensure_git_config(invoker, config, name)
@@ -1578,10 +1617,10 @@ def _ensure_sandbox_running(
         logger.info("Starting existing sandbox %s...", name)
         _fail_on_occupied_ports(config)
         invoker.run(build_start_args(name))
-        _ensure_pi_trust(invoker, config, name)
+        _ensure_pi_trust(invoker, config, name, workspace)
         _ensure_agent_config_copies(invoker, name)
         _ensure_host_entries(invoker, config, name)
-        _ensure_claude_trust(invoker, config, name)
+        _ensure_claude_trust(invoker, config, name, workspace)
         _repair_codex_daemon(invoker, name)
         _ensure_ssh_files(invoker, config, name)
         _ensure_git_config(invoker, config, name)
@@ -1605,7 +1644,7 @@ def _ensure_sandbox_running(
                 ),
                 net=config.network.mode,
                 port_forwards=config.port_forwards,
-                workdir=config.agent.workdir,
+                workdir=resolve_agent_workdir(config, workspace),
                 docker_disk=config.sandbox.docker_disk,
                 root_disk=config.sandbox.root_disk,
                 init=(
@@ -1622,10 +1661,10 @@ def _ensure_sandbox_running(
                 vsock=[(str(link), SSH_AGENT_VSOCK_PORT)] if link else None,
             )
         )
-        _ensure_pi_trust(invoker, config, name)
+        _ensure_pi_trust(invoker, config, name, workspace)
         _ensure_agent_config_copies(invoker, name)
         _ensure_host_entries(invoker, config, name)
-        _ensure_claude_trust(invoker, config, name)
+        _ensure_claude_trust(invoker, config, name, workspace)
         _repair_codex_daemon(invoker, name)
         _ensure_ssh_files(invoker, config, name)
         _ensure_git_config(invoker, config, name)
@@ -1844,7 +1883,8 @@ def exec_(
         str | None,
         typer.Option(
             "--workdir",
-            help="Guest working directory. Defaults to [msb] agent.workdir.",
+            help="Guest working directory. Defaults to [msb] agent.workdir, or the "
+            "workspace host path when git.worktree_mirror is on.",
         ),
     ] = None,
     trace: Annotated[
@@ -1893,7 +1933,7 @@ def exec_(
     config, invoker = _resolve_invoker(workspace)
     name = sandbox_name_for_workspace(workspace)
     cmd = list(command) if command else list(config.agent.command)
-    guest_workdir = workdir or config.agent.workdir
+    guest_workdir = workdir or resolve_agent_workdir(config, workspace)
 
     try:
         env_map = {

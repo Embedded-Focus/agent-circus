@@ -672,6 +672,49 @@ def test_up_boots_with_git_worktree_mirror_mount(tmp_path, fake_msb, monkeypatch
     assert run_calls[0][run_calls[0].index("--name") + 1] == name
 
 
+def test_up_uses_host_path_workdir_with_mirror(tmp_path, fake_msb, monkeypatch):
+    """With the mirror on, the agent starts at the workspace host path."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b"[git]\nworktree_mirror = true\n")
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_call = next(c for c in fake_msb["calls"] if c[0] == "run")
+    assert run_call[run_call.index("--workdir") + 1] == str(tmp_path)
+
+
+def test_up_writes_pi_trust_for_mirror_path(tmp_path, fake_msb, monkeypatch):
+    """With the mirror on, /workspace and the host path are both pre-trusted."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b"[git]\nworktree_mirror = true\n")
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    trust_calls = [
+        c for c in fake_msb["calls"] if c[0] == "exec" and "trust.json" in c[-1]
+    ]
+    assert len(trust_calls) == 1
+    script = trust_calls[0][-1]
+    # /workspace stays trusted: ACP clients pass it as the session cwd.
+    assert f'{{"/workspace": true, "{tmp_path}": true}}' in script
+
+
+def test_up_keeps_explicit_workdir_with_mirror(tmp_path, fake_msb, monkeypatch):
+    """An explicit [msb.agent] workdir wins over the mirror host path."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b'[git]\nworktree_mirror = true\n[msb.agent]\nworkdir = "/workspace"\n'
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_call = next(c for c in fake_msb["calls"] if c[0] == "run")
+    assert run_call[run_call.index("--workdir") + 1] == "/workspace"
+
+
 def test_up_warns_on_mount_drift_for_existing_sandbox(tmp_path, fake_msb):
     """Flag enabled after creation: the mount is missing and must warn."""
     name = sandbox_name_for_workspace(tmp_path)
@@ -933,6 +976,23 @@ def test_up_writes_pi_trust_for_workdir_and_additional_dirs(tmp_path, fake_msb):
     assert len(trust_calls) == 1
     script = trust_calls[0][-1]
     assert '{"/workspace": true, "/workspaces/shared-libs": true}' in script
+
+
+def test_up_trusts_workspace_guest_path_with_explicit_workdir(tmp_path, fake_msb):
+    """ACP clients use the workspace guest path even with a custom workdir."""
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b'[msb.agent]\nworkdir = "/workspace/repo"\n'
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    trust_calls = [
+        c for c in fake_msb["calls"] if c[0] == "exec" and "trust.json" in c[-1]
+    ]
+    assert len(trust_calls) == 1
+    script = trust_calls[0][-1]
+    assert '{"/workspace": true, "/workspace/repo": true}' in script
 
 
 def test_up_writes_pi_trust_when_reusing_running_sandbox(tmp_path, fake_msb):
