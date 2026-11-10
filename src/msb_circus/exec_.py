@@ -565,3 +565,29 @@ def run_acp_stream(
     if host_gone.is_set() or killed.is_set():
         return 0
     return returncode if returncode is not None else 0
+
+
+#: Guest script installing an executable file atomically: ``$1`` content,
+#: ``$2`` destination path.
+_INSTALL_EXECUTABLE_SCRIPT = (
+    "set -e\n"
+    'tmp="$2.msb-circus.tmp"\n'
+    'printf "%s" "$1" > "$tmp"\n'
+    'chmod 755 "$tmp"\n'
+    'mv -f "$tmp" "$2"\n'
+)
+
+
+def build_install_executable_args(name: str, content: str, path: str) -> list[str]:
+    """Build argv writing an executable guest file atomically.
+
+    :param name: Sandbox name.
+    :param content: File content.
+    :param path: Absolute guest destination path.
+    :returns: Argv list for :class:`msb_circus.msb.MsbInvoker`.
+    """
+    return build_exec_args(
+        name,
+        ["sh", "-c", _INSTALL_EXECUTABLE_SCRIPT, "sh", content, path],
+        tty=None,
+    )

@@ -9,6 +9,7 @@ start there.
 from __future__ import annotations
 
 import os
+import shlex
 from pathlib import Path
 
 from .config import CONFIG_DIR_NAME
@@ -141,3 +142,29 @@ def has_sandbox_worktrees(workspace: Path) -> bool:
         return any(child.is_dir() for child in directory.iterdir())
     except OSError:
         return False
+
+
+#: Guest path of the git wrapper; precedes /usr/bin in the image's PATH.
+GIT_WRAPPER_GUEST_PATH = "/usr/local/bin/git"
+
+
+def git_wrapper_script(guest_root: str = "", mirror_root: str = "") -> str:
+    """Return the guest ``git`` wrapper script for one sandbox.
+
+    Fills the workspace mount points into ``templates/git-wrapper.sh``.
+    With both values set, the wrapper rejects worktrees of the repository
+    at ``guest_root`` and suggests ``mirror_root`` instead, because only
+    worktrees made there record paths that are valid on the host.
+
+    :param guest_root: Guest mount point of the workspace (e.g.
+        ``/workspace``); empty if unknown.
+    :param mirror_root: Guest mount point of the git worktree mirror (the
+        workspace host path); empty when the mirror is off.
+    :returns: Script text.
+    """
+    template = (Path(__file__).parent / "templates" / "git-wrapper.sh").read_text(
+        encoding="utf-8"
+    )
+    return template.replace("@GUEST_ROOT@", shlex.quote(guest_root)).replace(
+        "@MIRROR_ROOT@", shlex.quote(mirror_root)
+    )

@@ -790,6 +790,25 @@ sandbox and leave a stale entry in `.git/worktrees/` (clean it up with
 `.agent-circus/worktrees/` record `/workspace` paths that are invalid on
 the host; msb-circus warns about this as well.
 
+The sandbox runs `git` through a small wrapper (`/usr/local/bin/git`,
+installed by msb-circus on every start). It rejects `git worktree add`
+and `git worktree move` to paths outside `.agent-circus/worktrees/` and
+`.claude/worktrees/`. Its error repeats the rejected command, rewritten to
+run in the repository root with a target below `.agent-circus/worktrees/`
+(named after the new branch or the rejected path), so agents can run it
+as-is. All other Git commands pass through
+unchanged. The wrapper guides agents; it is not a security boundary:
+`/usr/bin/git` bypasses it. Worktrees that Codex creates under `~/.codex`
+are rejected as well, because their paths differ between host and
+sandbox.
+
+With `worktree_mirror = true`, the wrapper also rejects worktrees made
+through the `/workspace` mount (e.g. from a shell started in
+`/workspace`), because Git would record `/workspace` paths. Its error
+explains that both mounts are the same checkout and suggests the host
+path instead, e.g. `git worktree add ../feature -b feature` becomes
+`git -C /home/user/myrepo worktree add .agent-circus/worktrees/feature -b feature`.
+
 msb-circus does not run in a linked worktree (a directory created with
 `git worktree add`). Its Git metadata lives in the main repository, outside
 the sandbox, so Git cannot work inside the sandbox. `up`, `start`, and

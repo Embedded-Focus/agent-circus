@@ -20,6 +20,7 @@ from msb_circus.gitconfig import (
     GIT_GUEST_MANAGED_CONFIG,
     GIT_GUEST_SIGNING_KEY,
 )
+from msb_circus.gitworktree import GIT_WRAPPER_GUEST_PATH
 from msb_circus.ssh_agent import agent_link_path
 
 runner = CliRunner()
@@ -110,6 +111,11 @@ class FakeInvoker:
                 returncode=self.behavior.get("gitconfig_rc", 0),
                 stdout="",
                 stderr="",
+            )
+        if args[0] == "exec" and GIT_WRAPPER_GUEST_PATH in args:
+            # git wrapper install: exit code scripted via git_wrapper_rc
+            return SimpleNamespace(
+                returncode=self.behavior.get("git_wrapper_rc", 0), stdout="", stderr=""
             )
         if args[0] == "load" and self.behavior.get("load_fail"):
             raise MsbCommandError("msb load failed", returncode=1)
@@ -1320,3 +1326,56 @@ def test_up_does_not_warn_about_sandbox_worktrees_with_mirror(tmp_path, fake_msb
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
     assert "worktree_mirror is off" not in result.output
+
+
+def test_up_installs_git_wrapper(tmp_path, fake_msb):
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    installs = [
+        c for c in fake_msb["calls"] if c[0] == "exec" and GIT_WRAPPER_GUEST_PATH in c
+    ]
+    assert len(installs) == 1
+
+
+def test_start_installs_git_wrapper(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    result = runner.invoke(app, ["start", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert ["start", name] in fake_msb["calls"]
+    installs = [
+        c for c in fake_msb["calls"] if c[0] == "exec" and GIT_WRAPPER_GUEST_PATH in c
+    ]
+    assert len(installs) == 1
+
+
+def test_up_continues_when_git_wrapper_install_fails(tmp_path, fake_msb):
+    fake_msb["git_wrapper_rc"] = 1
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "git wrapper" in result.output
+
+
+def _installed_git_wrapper(calls: list[list[str]]) -> str:
+    """Return the script content of the single git wrapper install call."""
+    (install,) = [c for c in calls if c[0] == "exec" and GIT_WRAPPER_GUEST_PATH in c]
+    return install[install.index(GIT_WRAPPER_GUEST_PATH) - 1]
+
+
+def test_up_installs_git_wrapper_with_mirror_root(tmp_path, fake_msb, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b"[git]\nworktree_mirror = true\n")
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    script = _installed_git_wrapper(fake_msb["calls"])
+    assert "MSB_CIRCUS_GUEST_ROOT-/workspace}" in script
+    assert f"MSB_CIRCUS_MIRROR_ROOT-{tmp_path}}}" in script
+
+
+def test_up_installs_git_wrapper_without_mirror_root(tmp_path, fake_msb):
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    script = _installed_git_wrapper(fake_msb["calls"])
+    assert "MSB_CIRCUS_GUEST_ROOT-/workspace}" in script
+    assert "MSB_CIRCUS_MIRROR_ROOT-''}" in script

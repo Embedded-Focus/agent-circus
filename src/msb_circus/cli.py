@@ -28,6 +28,7 @@ from .config import (
     load_config,
     resolve_agent_config_mounts,
     resolve_agent_workdir,
+    resolve_mounts,
     sandbox_name_for_workspace,
 )
 from .envs import parse_env_assignments, resolve_passthrough
@@ -37,6 +38,7 @@ from .exec_ import (
     build_exec_args,
     build_host_cas_probe_args,
     build_init_shutdown_args,
+    build_install_executable_args,
     build_pid1_probe_args,
     build_prepare_ssh_dir_args,
     build_remove_guest_symlink_args,
@@ -56,10 +58,12 @@ from .gitconfig import (
     resolve_host_gitconfig,
 )
 from .gitworktree import (
+    GIT_WRAPPER_GUEST_PATH,
     SANDBOX_WORKTREES_DIR,
     ensure_not_linked_worktree,
     ensure_sandbox_worktrees_dir,
     find_missing_worktrees,
+    git_wrapper_script,
     has_sandbox_worktrees,
 )
 from .hostports import find_occupied_ports
@@ -1577,6 +1581,46 @@ def _prepare_sandbox_worktrees(config: MsbConfig, workspace: Path) -> None:
         )
 
 
+def _ensure_git_wrapper(
+    invoker: MsbInvoker, config: MsbConfig, name: str, workspace: Path
+) -> None:
+    """Install the guest ``git`` wrapper that guides worktree locations.
+
+    Rewritten on every boot, start, and reuse. With the git worktree
+    mirror on, the wrapper sends worktrees from the workspace mount (e.g.
+    ``/workspace``) to the mirror at the host path. Failures are
+    non-fatal: the guest then uses the plain git.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param config: Resolved msb-circus configuration.
+    :param name: Sandbox name.
+    :param workspace: Workspace directory (absolute host path).
+    """
+    guest_spec = resolve_mounts(config.mounts, workspace).get(str(workspace), "")
+    guest_root = guest_spec.split(":", 1)[0]
+    mirror_root = str(workspace) if config.git_worktree_mirror else ""
+    script = git_wrapper_script(guest_root, mirror_root)
+    try:
+        result = invoker.run(
+            build_install_executable_args(name, script, GIT_WRAPPER_GUEST_PATH),
+            check=False,
+        )
+        if result.returncode == 0:
+            return
+        raise MsbCommandError(
+            (result.stderr or result.stdout or "").strip(),
+            returncode=result.returncode,
+            stderr=result.stderr,
+        )
+    except MsbCommandError as e:
+        logger.warning(
+            "Could not install the git wrapper in sandbox %s; worktree "
+            "locations are not checked (%s)",
+            name,
+            e,
+        )
+
+
 def _ensure_sandbox_running(
     invoker: MsbInvoker,
     config: MsbConfig,
@@ -1658,6 +1702,7 @@ def _ensure_sandbox_running(
         _repair_codex_daemon(invoker, name)
         _ensure_ssh_files(invoker, config, name)
         _ensure_git_config(invoker, config, name)
+        _ensure_git_wrapper(invoker, config, name, workspace)
         _check_ssh_agent(invoker, config, name)
         _warn_on_agent_config_mount_drift(invoker, name)
         _warn_on_port_drift(invoker, config, name)
@@ -1678,6 +1723,7 @@ def _ensure_sandbox_running(
         _repair_codex_daemon(invoker, name)
         _ensure_ssh_files(invoker, config, name)
         _ensure_git_config(invoker, config, name)
+        _ensure_git_wrapper(invoker, config, name, workspace)
         _check_ssh_agent(invoker, config, name)
         _warn_on_agent_config_mount_drift(invoker, name)
         _warn_on_port_drift(invoker, config, name)
@@ -1722,6 +1768,7 @@ def _ensure_sandbox_running(
         _repair_codex_daemon(invoker, name)
         _ensure_ssh_files(invoker, config, name)
         _ensure_git_config(invoker, config, name)
+        _ensure_git_wrapper(invoker, config, name, workspace)
         _check_ssh_agent(invoker, config, name)
 
     _check_dockerd(invoker, config, name)
@@ -1834,6 +1881,7 @@ def start(
     _ensure_host_entries(invoker, config, name)
     _ensure_ssh_files(invoker, config, name)
     _ensure_git_config(invoker, config, name)
+    _ensure_git_wrapper(invoker, config, name, workspace)
     _check_ssh_agent(invoker, config, name)
     _warn_on_disk_drift(invoker, config, name)
     _warn_on_mount_drift(invoker, config, name, workspace)
