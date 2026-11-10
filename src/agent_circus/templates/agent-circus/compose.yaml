@@ -30,13 +30,13 @@ services:
       target: claude-code
       args:
         <<: *common-build-args
-        CLAUDE_CODE_VERSION: 2.1.319
+        CLAUDE_CODE_VERSION: 2.1.322
         # https://github.com/agentclientprotocol/claude-agent-acp
-        CLAUDE_AGENT_ACP_VERSION: 0.101.0
+        CLAUDE_AGENT_ACP_VERSION: 0.103.0
         # https://github.com/oven-sh/bun
         BUN_VERSION: 1.4.4
         # https://github.com/thedotmack/claude-mem
-        CLAUDE_MEM_VERSION: 15.12.0
+        CLAUDE_MEM_VERSION: 15.15.1
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
     - ${HOME}/.cache:/home/node/.cache
@@ -83,7 +83,7 @@ services:
       target: opencode
       args:
         <<: *common-build-args
-        OPENCODE_VERSION: 2.2.6
+        OPENCODE_VERSION: 2.2.7
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
     - ${HOME}/.cache:/home/node/.cache
@@ -98,7 +98,7 @@ services:
       args:
         <<: *common-build-args
         # https://github.com/earendil-works/pi
-        PI_VERSION: 1.5.0
+        PI_VERSION: 1.5.1
         # https://github.com/svkozak/pi-acp
         PI_ACP_VERSION: 0.0.34
     volumes:
