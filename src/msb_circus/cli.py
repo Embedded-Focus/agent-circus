@@ -53,6 +53,7 @@ from .gitconfig import (
     render_managed_gitconfig,
     resolve_host_gitconfig,
 )
+from .gitworktree import ensure_not_linked_worktree
 from .hostports import find_occupied_ports
 from .hosts import (
     loopback_names,
@@ -1472,6 +1473,19 @@ def _check_ssh_agent(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
         )
 
 
+def _fail_on_linked_worktree(workspace: Path) -> None:
+    """Exit with an error when the workspace is in a linked Git worktree.
+
+    :param workspace: Workspace directory.
+    :raises typer.Exit: If the workspace is in a linked Git worktree.
+    """
+    try:
+        ensure_not_linked_worktree(workspace)
+    except ConfigurationError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+
 def _ensure_sandbox_running(
     invoker: MsbInvoker,
     config: MsbConfig,
@@ -1493,8 +1507,10 @@ def _ensure_sandbox_running(
     :param allow_build: Build and import the image when it is missing
         instead of failing.
     :param engine: Host engine used when building.
-    :raises typer.Exit: If the image is missing and building is not allowed.
+    :raises typer.Exit: If the image is missing and building is not allowed,
+        or the workspace is in a linked Git worktree.
     """
+    _fail_on_linked_worktree(workspace)
     name = sandbox_name_for_workspace(workspace)
     image_tag = config.image.tag
     try:
@@ -1707,6 +1723,7 @@ def start(
     ] = Path("."),
 ) -> None:
     """Start the workspace sandbox and verify dockerd readiness."""
+    _fail_on_linked_worktree(workspace)
     config, invoker = _resolve_invoker(workspace)
     name = sandbox_name_for_workspace(workspace)
     # A running sandbox holds its own forwarded ports; only probe before a

@@ -787,6 +787,15 @@ commands — use `/home/user/myrepo` rather than `/workspace` to ensure
 Git's recorded paths remain consistent with the host.
 ```
 
+msb-circus does not run in a linked worktree (a directory created with
+`git worktree add`). Its Git metadata lives in the main repository, outside
+the sandbox, so Git cannot work inside the sandbox. `up`, `start`, and
+`exec` fail with an error when the workspace or one of its parent
+directories is a linked worktree. Run msb-circus from the main checkout and
+create or change worktrees there, on the host or in the sandbox. `ps`,
+`stop`, `rm`, and `destroy` still work, so you can remove a sandbox that
+was created in a worktree earlier.
+
 The remaining agent-circus `[git]` keys are supported as well; see
 "Git Configuration".
 
