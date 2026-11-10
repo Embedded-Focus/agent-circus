@@ -55,7 +55,7 @@ from .gitconfig import (
     render_managed_gitconfig,
     resolve_host_gitconfig,
 )
-from .gitworktree import ensure_not_linked_worktree
+from .gitworktree import ensure_not_linked_worktree, find_missing_worktrees
 from .hostports import find_occupied_ports
 from .hosts import (
     loopback_names,
@@ -1525,6 +1525,28 @@ def _fail_on_linked_worktree(workspace: Path) -> None:
         raise typer.Exit(code=1) from e
 
 
+def _warn_on_missing_worktrees(workspace: Path) -> None:
+    """Warn about registered Git worktrees that are missing on the host.
+
+    Non-fatal; reads only host files.
+
+    :param workspace: Workspace directory.
+    """
+    missing = find_missing_worktrees(workspace)
+    if not missing:
+        return
+    logger.warning(
+        "These Git worktrees of %s do not exist on the host: %s. A worktree "
+        "created in the sandbox outside the workspace exists only in the "
+        "sandbox, and its uncommitted changes are lost when the sandbox is "
+        "removed. Create worktrees below .agent-circus/worktrees/ instead. "
+        "Run 'git worktree prune' on the host to drop entries whose "
+        "worktree is gone.",
+        workspace,
+        ", ".join(str(p) for p in missing),
+    )
+
+
 def _ensure_sandbox_running(
     invoker: MsbInvoker,
     config: MsbConfig,
@@ -1550,6 +1572,7 @@ def _ensure_sandbox_running(
         or the workspace is in a linked Git worktree.
     """
     _fail_on_linked_worktree(workspace)
+    _warn_on_missing_worktrees(workspace)
     name = sandbox_name_for_workspace(workspace)
     image_tag = config.image.tag
     try:
@@ -1763,6 +1786,7 @@ def start(
 ) -> None:
     """Start the workspace sandbox and verify dockerd readiness."""
     _fail_on_linked_worktree(workspace)
+    _warn_on_missing_worktrees(workspace)
     config, invoker = _resolve_invoker(workspace)
     name = sandbox_name_for_workspace(workspace)
     # A running sandbox holds its own forwarded ports; only probe before a
@@ -1822,6 +1846,15 @@ def destroy(
     """
     _config, invoker = _resolve_invoker(workspace)
     name = sandbox_name_for_workspace(workspace)
+    missing = find_missing_worktrees(workspace)
+    if missing:
+        typer.echo(
+            "Warning: these Git worktrees do not exist on the host and are "
+            "lost with the sandbox: "
+            + ", ".join(str(p) for p in missing)
+            + ". Commit and push their changes first.",
+            err=True,
+        )
     if not force:
         typer.echo(f"This will remove sandbox {name} and all its guest state.")
         if not typer.confirm("Are you sure you want to continue?"):

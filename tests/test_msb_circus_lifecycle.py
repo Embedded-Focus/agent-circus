@@ -1267,3 +1267,31 @@ def test_start_refreshes_host_entries(tmp_path, fake_msb):
     assert ["start", name] in fake_msb["calls"]
     assert len(writes) == 1
     assert "10.1.2.3 myserver.test.local" in writes[0][-1]
+
+
+def test_up_warns_about_missing_worktrees(tmp_path, fake_msb):
+    (tmp_path / ".git" / "worktrees" / "feature").mkdir(parents=True)
+    (tmp_path / ".git" / "worktrees" / "feature" / "gitdir").write_text(
+        f"{tmp_path / 'feature' / '.git'}\n"
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "do not exist on the host" in result.output
+    assert str(tmp_path / "feature") in result.output
+
+
+def test_up_does_not_warn_without_missing_worktrees(tmp_path, fake_msb):
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "do not exist on the host" not in result.output
+
+
+def test_destroy_warns_about_missing_worktrees_before_prompt(tmp_path, fake_msb):
+    (tmp_path / ".git" / "worktrees" / "feature").mkdir(parents=True)
+    (tmp_path / ".git" / "worktrees" / "feature" / "gitdir").write_text(
+        f"{tmp_path / 'feature' / '.git'}\n"
+    )
+    result = runner.invoke(app, ["destroy", "--workspace", str(tmp_path)], input="n\n")
+    assert result.exit_code == 0
+    assert "lost with the sandbox" in result.output
+    assert not [c for c in fake_msb.get("calls", []) if c[0] == "remove"]

@@ -8,6 +8,7 @@ start there.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from .exceptions import ConfigurationError
@@ -52,6 +53,37 @@ def _common_dir_of_git_file(dot_git: Path) -> Path | None:
     except (OSError, UnicodeDecodeError, IndexError):
         return None
     return (git_dir / common).resolve()
+
+
+def find_missing_worktrees(workspace: Path) -> list[Path]:
+    """List registered linked worktrees whose directory is missing on the host.
+
+    Reads ``<workspace>/.git/worktrees/*/gitdir`` without running Git.
+    Such worktrees were created in the sandbox outside every mount (they
+    exist only in the guest) or were deleted without ``git worktree
+    prune``. Unreadable entries are skipped.
+
+    :param workspace: Absolute workspace directory (main checkout).
+    :returns: Missing worktree directories, sorted.
+    """
+    registry = workspace / ".git" / "worktrees"
+    if not registry.is_dir():
+        return []
+    missing: list[Path] = []
+    for entry in sorted(registry.iterdir()):
+        try:
+            line = (entry / "gitdir").read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if not line:
+            continue
+        dot_git = Path(line)
+        if not dot_git.is_absolute():
+            dot_git = entry / dot_git
+        worktree = Path(os.path.normpath(dot_git)).parent
+        if not worktree.exists():
+            missing.append(worktree)
+    return sorted(missing)
 
 
 def ensure_not_linked_worktree(workspace: Path) -> None:
