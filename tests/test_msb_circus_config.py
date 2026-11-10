@@ -412,3 +412,9 @@ def test_parse_hosts_expands_home_in_file(monkeypatch):
     config = parse_config({"hosts": {"file": "~/.hosts"}})
     assert config.hosts is not None
     assert config.hosts.file == "/home/tester/.hosts"
+
+
+def test_parse_config_agent_table_without_command_uses_default():
+    config = parse_config({"msb": {"agent": {"workdir": "/w"}}})
+    assert config.agent.command == ("pi",)
+    assert config.agent.workdir == "/w"

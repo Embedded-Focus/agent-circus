@@ -861,7 +861,9 @@ def _parse_agent(raw: Any) -> AgentConfig:
         return AgentConfig()
     if not isinstance(raw, dict):
         raise ConfigurationError("msb.agent must be a table")
-    command = raw.get("command", DEFAULT_AGENT_COMMAND)
+    command = raw.get("command")
+    if command is None:
+        command = list(DEFAULT_AGENT_COMMAND)
     if (
         not isinstance(command, list)
         or not command
