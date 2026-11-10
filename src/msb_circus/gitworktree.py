@@ -11,7 +11,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from .config import CONFIG_DIR_NAME
 from .exceptions import ConfigurationError
+
+#: Worktree directory below the main checkout for worktrees made in the sandbox.
+SANDBOX_WORKTREES_DIR = f"{CONFIG_DIR_NAME}/worktrees"
 
 
 def find_linked_worktree(path: Path) -> tuple[Path, Path] | None:
@@ -102,3 +106,38 @@ def ensure_not_linked_worktree(workspace: Path) -> None:
         f"metadata lives in {common_dir}, outside the sandbox. Run "
         "msb-circus from the main checkout and manage worktrees there."
     )
+
+
+def ensure_sandbox_worktrees_dir(workspace: Path) -> Path | None:
+    """Create ``.agent-circus/worktrees/`` with a self-ignoring ``.gitignore``.
+
+    Only acts in a main checkout (``<workspace>/.git`` is a directory).
+    The ``.gitignore`` contains ``*``, so Git ignores the directory and
+    its content without changes to the user's ignore files. An existing
+    ``.gitignore`` is left unchanged.
+
+    :param workspace: Absolute workspace directory.
+    :returns: The worktree directory, or ``None`` outside a main checkout.
+    :raises OSError: If the directory or file cannot be created.
+    """
+    if not (workspace / ".git").is_dir():
+        return None
+    directory = workspace / SANDBOX_WORKTREES_DIR
+    directory.mkdir(parents=True, exist_ok=True)
+    ignore = directory / ".gitignore"
+    if not ignore.exists():
+        ignore.write_text("*\n", encoding="utf-8")
+    return directory
+
+
+def has_sandbox_worktrees(workspace: Path) -> bool:
+    """Tell whether ``.agent-circus/worktrees/`` contains a subdirectory.
+
+    :param workspace: Absolute workspace directory.
+    :returns: ``True`` when at least one worktree directory exists.
+    """
+    directory = workspace / SANDBOX_WORKTREES_DIR
+    try:
+        return any(child.is_dir() for child in directory.iterdir())
+    except OSError:
+        return False

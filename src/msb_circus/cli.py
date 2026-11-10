@@ -55,7 +55,13 @@ from .gitconfig import (
     render_managed_gitconfig,
     resolve_host_gitconfig,
 )
-from .gitworktree import ensure_not_linked_worktree, find_missing_worktrees
+from .gitworktree import (
+    SANDBOX_WORKTREES_DIR,
+    ensure_not_linked_worktree,
+    ensure_sandbox_worktrees_dir,
+    find_missing_worktrees,
+    has_sandbox_worktrees,
+)
 from .hostports import find_occupied_ports
 from .hosts import (
     loopback_names,
@@ -1547,6 +1553,30 @@ def _warn_on_missing_worktrees(workspace: Path) -> None:
     )
 
 
+def _prepare_sandbox_worktrees(config: MsbConfig, workspace: Path) -> None:
+    """Create the sandbox worktree directory and warn without the mirror.
+
+    Non-fatal: a failure to create the directory only logs a warning.
+
+    :param config: Resolved msb-circus configuration.
+    :param workspace: Workspace directory.
+    """
+    try:
+        ensure_sandbox_worktrees_dir(workspace)
+    except OSError as e:
+        logger.warning(
+            "Could not create %s in %s: %s", SANDBOX_WORKTREES_DIR, workspace, e
+        )
+    if not config.git_worktree_mirror and has_sandbox_worktrees(workspace):
+        logger.warning(
+            "%s contains worktrees, but git.worktree_mirror is off. Git "
+            "records their paths below /workspace, which do not exist on the "
+            "host. Set [git] worktree_mirror = true and re-create the "
+            "sandbox: msb-circus rm -f && msb-circus up.",
+            workspace / SANDBOX_WORKTREES_DIR,
+        )
+
+
 def _ensure_sandbox_running(
     invoker: MsbInvoker,
     config: MsbConfig,
@@ -1573,6 +1603,7 @@ def _ensure_sandbox_running(
     """
     _fail_on_linked_worktree(workspace)
     _warn_on_missing_worktrees(workspace)
+    _prepare_sandbox_worktrees(config, workspace)
     name = sandbox_name_for_workspace(workspace)
     image_tag = config.image.tag
     try:
@@ -1786,8 +1817,9 @@ def start(
 ) -> None:
     """Start the workspace sandbox and verify dockerd readiness."""
     _fail_on_linked_worktree(workspace)
-    _warn_on_missing_worktrees(workspace)
     config, invoker = _resolve_invoker(workspace)
+    _warn_on_missing_worktrees(workspace)
+    _prepare_sandbox_worktrees(config, workspace)
     name = sandbox_name_for_workspace(workspace)
     # A running sandbox holds its own forwarded ports; only probe before a
     # real start. If the status probe fails, still run the check.

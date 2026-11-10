@@ -1295,3 +1295,28 @@ def test_destroy_warns_about_missing_worktrees_before_prompt(tmp_path, fake_msb)
     assert result.exit_code == 0
     assert "lost with the sandbox" in result.output
     assert not [c for c in fake_msb.get("calls", []) if c[0] == "remove"]
+
+
+def test_up_creates_sandbox_worktrees_dir(tmp_path, fake_msb):
+    (tmp_path / ".git").mkdir()
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert (tmp_path / ".agent-circus" / "worktrees" / ".gitignore").exists()
+
+
+def test_up_warns_when_sandbox_worktrees_exist_without_mirror(tmp_path, fake_msb):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".agent-circus" / "worktrees" / "x").mkdir(parents=True)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "worktree_mirror is off" in result.output
+
+
+def test_up_does_not_warn_about_sandbox_worktrees_with_mirror(tmp_path, fake_msb):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".agent-circus" / "worktrees" / "x").mkdir(parents=True)
+    config_dir = tmp_path / ".agent-circus"
+    (config_dir / "config.toml").write_text("[git]\nworktree_mirror = true\n")
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "worktree_mirror is off" not in result.output

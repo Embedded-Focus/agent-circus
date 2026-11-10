@@ -773,12 +773,22 @@ instead of `/workspace` (unless `[msb.agent] workdir` or `exec --workdir`
 sets another directory). Git then records paths that are valid on the
 host, and you do not need extra instructions in `AGENTS.md`.
 
-Create worktrees inside the workspace, for example in a `.worktrees/`
-directory that `.gitignore` excludes: `git worktree add
-.worktrees/my-branch`. A worktree outside the workspace (such as
-`../my-branch`) created in the sandbox exists only in the sandbox. It is
-lost when you remove the sandbox, and it leaves a stale entry in
-`.git/worktrees/` (clean it up with `git worktree prune`).
+Create worktrees below `.agent-circus/worktrees/`, for example
+`git worktree add .agent-circus/worktrees/my-branch -b my-branch`.
+msb-circus creates this directory on `up`, `start`, and `exec` in the main
+checkout, with a `.gitignore` that hides it from `git status`. It is part
+of the workspace mount, so the worktree and its uncommitted files are
+visible on the host, and Git paths are valid on both sides. Claude Code's
+own worktrees in `.claude/worktrees/` work the same way. Add
+`.claude/worktrees/` to your `.gitignore` if you use them.
+
+A worktree outside the workspace (such as `../my-branch`) created in the
+sandbox exists only in the sandbox. msb-circus warns about such worktrees
+on `up`, `start`, `exec`, and `destroy`. They are lost when you remove the
+sandbox and leave a stale entry in `.git/worktrees/` (clean it up with
+`git worktree prune`). Without `worktree_mirror`, worktrees in
+`.agent-circus/worktrees/` record `/workspace` paths that are invalid on
+the host; msb-circus warns about this as well.
 
 msb-circus does not run in a linked worktree (a directory created with
 `git worktree add`). Its Git metadata lives in the main repository, outside
