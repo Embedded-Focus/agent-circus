@@ -10,8 +10,14 @@
 ;; Both tools run agent harnesses in an isolated guest and speak ACP on
 ;; their `exec' subcommand:
 ;;
-;;   agent-circus exec <service> --   (Docker or Podman container)
+;;   agent-circus exec <service> -- <harness>   (Docker or Podman container)
 ;;   msb-circus exec --acp -- <harness>   (Microsandbox micro-VM)
+;;
+;; `agent-shell-command-prefix' is only a PREFIX: agent-shell appends the
+;; agent's own ACP command (for example `agent-shell-opencode-acp-command',
+;; \='("opencode" "acp")) after it. The runner therefore returns the exec
+;; prefix only; the per-agent defaults of agent-shell name the same
+;; harnesses that ship in the sandbox image.
 ;;
 ;; Pick the backend with `rpo/agent-shell-circus-backend', or call
 ;; `rpo/agent-shell-circus-set-backend' at runtime. New sessions use the
@@ -88,18 +94,6 @@ Running sessions keep the backend they started with."
     ('pi "pi")
     (_ "opencode")))
 
-(defun rpo/agent-shell-circus--msb-harness (identifier)
-  "Return the msb-circus harness command for IDENTIFIER.
-
-The msb-circus sandbox carries Pi, OpenCode, Claude Code, and
-Codex. Every identifier without a harness in the sandbox falls
-back to Pi through the pi-acp adapter."
-  (pcase identifier
-    ('opencode '("opencode" "acp"))
-    ('claude-code '("claude-agent-acp"))
-    ('codex '("codex-acp"))
-    (_ '("pi-acp"))))
-
 (defun rpo/agent-shell-circus-resolve-path (path)
   "Resolve PATH between local filesystem and the guest workspace.
 
@@ -130,14 +124,21 @@ For example:
 
 The command prefix depends on `rpo/agent-shell-circus-backend'.
 agent-circus selects the service by identifier. msb-circus always
-runs in ACP mode and selects the harness by identifier."
+runs in ACP mode.
+
+This returns the prefix only. agent-shell appends the agent's own
+ACP command (for example (\"opencode\" \"acp\") for OpenCode) after
+the prefix. Those per-agent defaults name the harnesses that ship
+in the sandbox image (opencode acp, pi-acp, claude-agent-acp,
+codex-acp), so no identifier mapping is needed here. Do NOT add a
+harness command to the prefix: the doubled command makes the guest
+harness reject its arguments."
   (let ((id (map-elt (agent-shell-get-config buffer) :identifier)))
     (pcase rpo/agent-shell-circus-backend
       ('msb-circus
-       (append (list "msb-circus" "--log-level" "DEBUG"
-                     "--log-file" "/tmp/msb-circus.log"
-                     "exec" "--acp" "--")
-               (rpo/agent-shell-circus--msb-harness id)))
+       (list "msb-circus" "--log-level" "DEBUG"
+             "--log-file" "/tmp/msb-circus.log"
+             "exec" "--acp" "--"))
       (_
        (append (list "agent-circus" "--log-level" "DEBUG"
                      "--log-file" "/tmp/agent-circus.log"

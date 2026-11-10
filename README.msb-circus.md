@@ -267,9 +267,11 @@ configuration based on msb-circus. The runner starts the harness through
 path resolver maps file paths between your editor and the `/workspace`
 mount in the sandbox.
 
-The sandbox carries Pi, OpenCode, Claude Code, and Codex. An identifier
-without a harness in the sandbox falls back to Pi through the pi-acp
-adapter. API keys do not go into
+The sandbox carries Pi, OpenCode, Claude Code, and Codex. agent-shell
+knows the harness command for every agent it supports (for example
+\='("opencode" "acp") for OpenCode); these defaults name the harnesses
+that ship in the sandbox image, so the runner returns the exec prefix
+only. API keys do not go into
 this configuration; msb-circus reads them from `env_passthrough` on the
 host. If you change the mount in `[msb.mounts]`, change the workspace path
 constant to match it.
@@ -302,22 +304,16 @@ For example:
             (error "Unexpected path outside of workspace folder: %s" path))
         (error "Refuse to resolve to local filesystem with text file capabilities disabled: %s" path)))))
 
-(defun rpo/agent-shell-msb-runner (buffer)
+(defun rpo/agent-shell-msb-runner (_buffer)
   "Return the msb-circus exec command prefix to run for BUFFER's agent.
 
-Looks up the agent identifier in BUFFER's `agent-shell' config and
-selects the matching harness in the sandbox. The sandbox carries
-Pi, OpenCode, Claude Code, and Codex; every other identifier falls
-back to Pi through the pi-acp adapter."
-  (let* ((cfg (agent-shell-get-config buffer))
-         (id  (map-elt cfg :identifier))
-         (harness
-          (pcase id
-            ('opencode '("opencode" "acp"))
-            ('claude-code '("claude-agent-acp"))
-            ('codex '("codex-acp"))
-            (_ '("pi-acp")))))
-    (append (list "msb-circus" "exec" "--acp" "--") harness)))
+This is the prefix only. agent-shell appends the agent's own ACP
+command (for example \='("opencode" "acp") for OpenCode) after the
+prefix. Those per-agent defaults name the harnesses that ship in
+the sandbox image (opencode acp, pi-acp, claude-agent-acp,
+codex-acp). Do NOT add a harness command to the prefix: the
+doubled command makes the guest harness reject its arguments."
+  (list "msb-circus" "exec" "--acp" "--"))
 
 (use-package agent-shell
   :ensure t
