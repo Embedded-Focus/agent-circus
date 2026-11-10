@@ -178,3 +178,4 @@ node_modules/
 .agent-circus/
 opencode.json
 .pi/
+plan-*.md
