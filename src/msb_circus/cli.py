@@ -1264,6 +1264,43 @@ def _warn_on_agent_config_mount_drift(invoker: MsbInvoker, name: str) -> None:
     )
 
 
+def _warn_on_agent_skill_mount_drift(invoker: MsbInvoker, name: str) -> None:
+    """Warn when an existing host user skill directory is not mounted.
+
+    msb fixes mounts at sandbox creation, so a skill directory created on
+    the host later (e.g. by the first ``npx skills add -g``) stays
+    invisible in the sandbox until it is re-created. The ``:ro`` option is
+    stripped before comparing, because ``msb inspect`` may report the
+    read-only flag separately from the guest path. Failures here are
+    non-fatal: an unreadable inspect output skips the check.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param name: Sandbox name to inspect.
+    """
+    expected = resolve_agent_skill_mounts()
+    if not expected:
+        return
+    try:
+        result = invoker.run(build_inspect_args(name))
+        binds = parse_inspect_bind_mounts(result.stdout)
+    except (MsbCommandError, ConfigurationError) as e:
+        logger.debug("Agent skill mount drift check for %s failed: %s", name, e)
+        return
+    mounted = {(host, guest.split(":", 1)[0]) for host, guest in binds}
+    wanted = [(host, guest.split(":", 1)[0]) for host, guest in expected]
+    missing = [guest for host, guest in wanted if (host, guest) not in mounted]
+    if not missing:
+        return
+    logger.warning(
+        "User skill directory mounts (%s) are missing from sandbox %s, so "
+        "agents in it cannot see your user skills. Mounts are fixed at "
+        "sandbox creation. Remove and re-create it to apply: "
+        "msb-circus rm -f && msb-circus up.",
+        ", ".join(missing),
+        name,
+    )
+
+
 def _ensure_host_entries(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
     """Write the selected host entries into the guest ``/etc/hosts``.
 
@@ -1706,6 +1743,7 @@ def _ensure_sandbox_running(
         _ensure_git_wrapper(invoker, config, name, workspace)
         _check_ssh_agent(invoker, config, name)
         _warn_on_agent_config_mount_drift(invoker, name)
+        _warn_on_agent_skill_mount_drift(invoker, name)
         _warn_on_port_drift(invoker, config, name)
         _warn_on_disk_drift(invoker, config, name)
         _warn_on_mount_drift(invoker, config, name, workspace)
@@ -1727,6 +1765,7 @@ def _ensure_sandbox_running(
         _ensure_git_wrapper(invoker, config, name, workspace)
         _check_ssh_agent(invoker, config, name)
         _warn_on_agent_config_mount_drift(invoker, name)
+        _warn_on_agent_skill_mount_drift(invoker, name)
         _warn_on_port_drift(invoker, config, name)
         _warn_on_disk_drift(invoker, config, name)
         _warn_on_mount_drift(invoker, config, name, workspace)

@@ -249,7 +249,8 @@ do this. Absolute symlinks to host paths break inside the sandbox.
 - Install user skills on the host. A new skill appears in a running
   sandbox; restart the agent session to load it. If the directory did
   not exist when the sandbox was created, re-create the sandbox with
-  `msb-circus rm -f && msb-circus up`.
+  `msb-circus rm -f && msb-circus up`. `up` warns when a user skill
+  directory exists on the host but is not mounted in the sandbox.
 - `~/.claude/skills` and `~/.codex/skills` are part of the read-write
   config mounts, so they are not read-only.
 - Skills that an agent writes in the sandbox land in the project.
