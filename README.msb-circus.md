@@ -240,7 +240,8 @@ Project skills need no setup: they live in the repository
 (`.agents/skills/`, `.claude/skills/`, `.pi/skills/`), and the workspace
 is mounted read-write. Install them on the host or from inside the
 sandbox. Use relative symlinks; installers such as `npx skills` already
-do this. Absolute symlinks to host paths break inside the sandbox.
+do this. Absolute symlinks to host paths break inside the sandbox;
+`up` and `start` warn about skill links that do not resolve there.
 
 - User skills in `~/.agents/skills`, `~/.pi/agent/skills`,
   `~/.config/opencode/skills` and `~/.config/opencode/skill` are mounted

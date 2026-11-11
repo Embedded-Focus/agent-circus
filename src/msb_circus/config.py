@@ -604,6 +604,8 @@ def resolve_agent_workdir(config: MsbConfig, workspace: Path) -> str:
 
 def resolve_agent_config_mounts(
     environ: dict[str, str] | None = None,
+    *,
+    warn_missing: bool = True,
 ) -> list[tuple[str, str]]:
     """Return bind mounts for existing agent harness config directories.
 
@@ -614,6 +616,8 @@ def resolve_agent_config_mounts(
 
     :param environ: Environment mapping for the ``$HOME`` lookup, defaults
         to :data:`os.environ`.
+    :param warn_missing: Log a warning for each missing directory; callers
+        that only need the mount list pass ``False``.
     :returns: ``(host directory, guest path)`` pairs in declaration order.
     """
     env = os.environ if environ is None else environ
@@ -622,15 +626,16 @@ def resolve_agent_config_mounts(
     for harness, (below_home, guest) in AGENT_CONFIG_DIR_MOUNTS.items():
         host_dir = home / below_home
         if not host_dir.is_dir():
-            logger.warning(
-                "Host config directory %s for %s not found; skipping its "
-                "sandbox mount (the harness starts without host config and "
-                "credentials). Log in inside the guest or create the "
-                "directory, then re-create the sandbox: msb-circus rm -f "
-                "&& msb-circus up.",
-                host_dir,
-                harness,
-            )
+            if warn_missing:
+                logger.warning(
+                    "Host config directory %s for %s not found; skipping its "
+                    "sandbox mount (the harness starts without host config and "
+                    "credentials). Log in inside the guest or create the "
+                    "directory, then re-create the sandbox: msb-circus rm -f "
+                    "&& msb-circus up.",
+                    host_dir,
+                    harness,
+                )
             continue
         mounts.append((str(host_dir), guest))
     return mounts

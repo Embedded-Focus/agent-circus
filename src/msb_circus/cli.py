@@ -101,6 +101,11 @@ from .sandbox import (
     parse_sandbox_list_output,
     parse_size_mib,
 )
+from .skills import (
+    CONFIG_MOUNT_SKILL_DIRS,
+    PROJECT_SKILL_DIRS,
+    find_broken_skill_links,
+)
 from .ssh_agent import (
     refresh_agent_link,
     ssh_file_copies,
@@ -1595,6 +1600,43 @@ def _warn_on_missing_worktrees(workspace: Path) -> None:
     )
 
 
+def _warn_on_broken_skill_links(config: MsbConfig, workspace: Path) -> None:
+    """Warn about project and user skill links that do not resolve.
+
+    Checks the links against the mounts a new sandbox would get. For a
+    sandbox created with other mounts, the result can differ; the mount
+    drift warnings cover that case. Non-fatal; reads only host files.
+
+    :param config: Resolved msb-circus configuration.
+    :param workspace: Workspace directory.
+    """
+    home = Path(os.environ.get("HOME", str(Path.home())))
+    try:
+        mounts = (
+            effective_mounts(config, workspace)
+            + resolve_agent_config_mounts(warn_missing=False)
+            + resolve_agent_skill_mounts()
+        )
+    except ConfigurationError as e:
+        logger.debug("Skill link check skipped: %s", e)
+        return
+    skill_dirs = (
+        [workspace / d for d in PROJECT_SKILL_DIRS]
+        + [Path(host) for host, _ in resolve_agent_skill_mounts()]
+        + [home / d for d in CONFIG_MOUNT_SKILL_DIRS]
+    )
+    broken = find_broken_skill_links(skill_dirs, mounts)
+    if not broken:
+        return
+    logger.warning(
+        "These skill links do not work in the sandbox: %s. Agents in the "
+        "sandbox cannot load these skills. Use relative links between "
+        "mounted directories (installers such as 'npx skills' create them), "
+        "and reinstall skills whose target is missing.",
+        "; ".join(f"{b.path} -> {b.target} ({b.problem})" for b in broken),
+    )
+
+
 def _prepare_sandbox_worktrees(config: MsbConfig, workspace: Path) -> None:
     """Create the sandbox worktree directory and warn without the mirror.
 
@@ -1685,6 +1727,7 @@ def _ensure_sandbox_running(
     """
     _fail_on_linked_worktree(workspace)
     _warn_on_missing_worktrees(workspace)
+    _warn_on_broken_skill_links(config, workspace)
     _prepare_sandbox_worktrees(config, workspace)
     name = sandbox_name_for_workspace(workspace)
     image_tag = config.image.tag
@@ -1908,6 +1951,7 @@ def start(
     _fail_on_linked_worktree(workspace)
     config, invoker = _resolve_invoker(workspace)
     _warn_on_missing_worktrees(workspace)
+    _warn_on_broken_skill_links(config, workspace)
     _prepare_sandbox_worktrees(config, workspace)
     name = sandbox_name_for_workspace(workspace)
     # A running sandbox holds its own forwarded ports; only probe before a
