@@ -228,7 +228,7 @@ def _enable_docker(tmp_path: Path, size: str = "10G") -> None:
 
 
 def test_up_skips_dockerd_probe_when_docker_is_disabled(tmp_path, fake_msb):
-    """No disk config means no usable docker: no probe, but a visible warning."""
+    """No disk config means no usable docker: no probe, only a debug note."""
     with capture_cli_debug_records() as records:
         result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
@@ -237,20 +237,24 @@ def test_up_skips_dockerd_probe_when_docker_is_disabled(tmp_path, fake_msb):
     ]
     assert probe_calls == []
     assert not any("dockerd is ready" in message for message in debug_messages(records))
-    assert "docker is not enabled" in result.output
-    assert "docker_disk" in result.output  # the fix is actionable
+    enabled = [r for r in records if "docker is not enabled" in r.getMessage()]
+    assert enabled and all(r.levelno == logging.DEBUG for r in enabled)
+    debug_notes = "\n".join(debug_messages(records))
+    assert "docker_disk" in debug_notes  # the fix is actionable
 
 
 def test_up_warns_docker_disabled_when_reusing_running_sandbox(tmp_path, fake_msb):
-    """The reuse path must surface docker unavailability, not silently skip."""
+    """The reuse path must note docker unavailability, not silently skip."""
     name = sandbox_name_for_workspace(tmp_path)
     fake_msb["list_output"] = json.dumps(
         [{"name": name, "status": "Running", "id": "abc"}]
     )
-    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    with capture_cli_debug_records() as records:
+        result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
     assert not [c for c in fake_msb["calls"] if c[0] == "run"]
-    assert "docker is not enabled" in result.output
+    enabled = [r for r in records if "docker is not enabled" in r.getMessage()]
+    assert enabled and all(r.levelno == logging.DEBUG for r in enabled)
 
 
 def test_up_reuses_running_sandbox(tmp_path, fake_msb):

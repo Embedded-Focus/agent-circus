@@ -722,7 +722,7 @@ def _check_dockerd(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
     and no flat root), dockerd is never started by the image's s6 services
     and ``docker`` commands in the guest fail with a socket error. That
     state
-    is reported as a visible warning — including for already-running
+    is reported at debug level — including for already-running
     sandboxes, which skip the boot/start paths — together with the fix.
     Otherwise dockerd readiness is probed and a failure is logged at
     debug level with diagnostics.
@@ -732,7 +732,7 @@ def _check_dockerd(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
     :param name: Sandbox name.
     """
     if not docker_enabled(config):
-        logger.warning(
+        logger.debug(
             "docker is not enabled for sandbox %s: the guest has no usable "
             "docker storage backend, so docker commands will fail. Enable "
             'it with docker_disk = "10G" (or root_disk = "flat:32G") under '
