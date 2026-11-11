@@ -114,6 +114,17 @@ AGENT_CONFIG_FILE_COPIES: tuple[tuple[str, str, str], ...] = (
     ),
 )
 
+#: Read-only bind mounts of host user skill directories into the guest.
+#: Entries are ``(directory below $HOME, guest path)``. Read-only keeps
+#: agents in the sandbox from changing skills that also run on the host;
+#: install user skills on the host, or project skills in the workspace.
+#: Missing host directories are skipped (debug log only). msb fixes
+#: mounts at creation, so a directory created later needs a re-create.
+AGENT_SKILL_DIR_MOUNTS: tuple[tuple[str, str], ...] = (
+    (".agents/skills", "/root/.agents/skills"),
+    (".pi/agent/skills", "/root/.pi/agent/skills"),
+)
+
 
 @dataclass(frozen=True)
 class ImageConfig:
@@ -618,6 +629,37 @@ def resolve_agent_config_mounts(
             )
             continue
         mounts.append((str(host_dir), guest))
+    return mounts
+
+
+def resolve_agent_skill_mounts(
+    environ: dict[str, str] | None = None,
+) -> list[tuple[str, str]]:
+    """Return read-only bind mounts for existing user skill directories.
+
+    Iterates :data:`AGENT_SKILL_DIR_MOUNTS`, keeps every entry whose host
+    directory (``$HOME/<dir>``) exists, and appends ``:ro`` to the guest
+    path so agents in the sandbox cannot change skills that also run on
+    the host. A missing directory is normal and only logged at debug
+    level. Guest paths assume the msb-circus image's root user.
+
+    :param environ: Environment mapping for the ``$HOME`` lookup, defaults
+        to :data:`os.environ`.
+    :returns: ``(host directory, guest path)`` pairs in declaration order;
+        each guest path carries the ``:ro`` read-only option.
+    """
+    env = os.environ if environ is None else environ
+    home = Path(env.get("HOME", str(Path.home())))
+    mounts: list[tuple[str, str]] = []
+    for below_home, guest in AGENT_SKILL_DIR_MOUNTS:
+        host_dir = home / below_home
+        if not host_dir.is_dir():
+            logger.debug(
+                "Host skill directory %s not found; skipping its sandbox mount.",
+                host_dir,
+            )
+            continue
+        mounts.append((str(host_dir), f"{guest}:ro"))
     return mounts
 
 

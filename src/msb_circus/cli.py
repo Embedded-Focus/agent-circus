@@ -27,6 +27,7 @@ from .config import (
     effective_mounts,
     load_config,
     resolve_agent_config_mounts,
+    resolve_agent_skill_mounts,
     resolve_agent_workdir,
     resolve_mounts,
     sandbox_name_for_workspace,
@@ -1740,7 +1741,9 @@ def _ensure_sandbox_running(
                 memory=config.sandbox.memory,
                 cpus=config.sandbox.cpus,
                 mounts=(
-                    effective_mounts(config, workspace) + resolve_agent_config_mounts()
+                    effective_mounts(config, workspace)
+                    + resolve_agent_config_mounts()
+                    + resolve_agent_skill_mounts()
                 ),
                 net=config.network.mode,
                 port_forwards=config.port_forwards,
