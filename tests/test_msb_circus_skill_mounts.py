@@ -133,3 +133,15 @@ def test_warn_on_agent_skill_mount_drift_ignores_inspect_failure(
             cast(MsbInvoker, InspectInvoker(fail=True)), "agents-demo"
         )
     assert caplog.text == ""
+
+
+def test_resolve_agent_skill_mounts_mounts_opencode_skill_dirs(tmp_path) -> None:
+    """Both opencode config skill directories are mounted read-only."""
+    home = tmp_path
+    (home / ".config" / "opencode" / "skills").mkdir(parents=True)
+    (home / ".config" / "opencode" / "skill").mkdir(parents=True)
+    result = resolve_agent_skill_mounts(environ={"HOME": str(home)})
+    assert result == [
+        (str(home / ".config/opencode/skills"), "/root/.config/opencode/skills:ro"),
+        (str(home / ".config/opencode/skill"), "/root/.config/opencode/skill:ro"),
+    ]

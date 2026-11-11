@@ -242,10 +242,10 @@ is mounted read-write. Install them on the host or from inside the
 sandbox. Use relative symlinks; installers such as `npx skills` already
 do this. Absolute symlinks to host paths break inside the sandbox.
 
-- User skills in `~/.agents/skills` and `~/.pi/agent/skills` are mounted
-  read-only at `/root/.agents/skills` and `/root/.pi/agent/skills`. A
-  skill changed in the sandbox would later run on your host, so the
-  mount refuses writes.
+- User skills in `~/.agents/skills`, `~/.pi/agent/skills`,
+  `~/.config/opencode/skills` and `~/.config/opencode/skill` are mounted
+  read-only at the same paths below `/root`. A skill changed in the
+  sandbox would later run on your host, so the mount refuses writes.
 - Install user skills on the host. A new skill appears in a running
   sandbox; restart the agent session to load it. If the directory did
   not exist when the sandbox was created, re-create the sandbox with

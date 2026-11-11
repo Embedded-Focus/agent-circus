@@ -120,9 +120,13 @@ AGENT_CONFIG_FILE_COPIES: tuple[tuple[str, str, str], ...] = (
 #: install user skills on the host, or project skills in the workspace.
 #: Missing host directories are skipped (debug log only). msb fixes
 #: mounts at creation, so a directory created later needs a re-create.
+#: opencode 2.2.7 reads both ``skill`` and ``skills`` below its config
+#: directory; it also reads ``~/.agents/skills`` and ``~/.claude/skills``.
 AGENT_SKILL_DIR_MOUNTS: tuple[tuple[str, str], ...] = (
     (".agents/skills", "/root/.agents/skills"),
     (".pi/agent/skills", "/root/.pi/agent/skills"),
+    (".config/opencode/skills", "/root/.config/opencode/skills"),
+    (".config/opencode/skill", "/root/.config/opencode/skill"),
 )
 
 
