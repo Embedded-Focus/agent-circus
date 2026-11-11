@@ -1,6 +1,8 @@
 """Tests for the msb-circus lifecycle commands: up, stop, start, destroy."""
 
+import contextlib
 import json
+import logging
 import socket
 from itertools import pairwise
 from pathlib import Path
@@ -24,6 +26,45 @@ from msb_circus.gitworktree import GIT_WRAPPER_GUEST_PATH
 from msb_circus.ssh_agent import agent_link_path
 
 runner = CliRunner()
+
+
+@contextlib.contextmanager
+def capture_cli_debug_records():
+    """Capture log records from the ``msb_circus.cli`` logger at DEBUG level.
+
+    Attaches a handler directly to the CLI logger because
+    ``setup_logging(force=True)`` replaces root handlers during the
+    command run, which would lose a caplog-attached handler.
+
+    :yields: List that collects the emitted :class:`logging.LogRecord`.
+    """
+    cli_logger = logging.getLogger("msb_circus.cli")
+    records: list[logging.LogRecord] = []
+
+    class CaptureHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = CaptureHandler(level=logging.DEBUG)
+    cli_logger.addHandler(handler)
+    old_level = cli_logger.level
+    cli_logger.setLevel(logging.DEBUG)
+    try:
+        yield records
+    finally:
+        cli_logger.removeHandler(handler)
+        cli_logger.setLevel(old_level)
+
+
+def debug_messages(records: list[logging.LogRecord]) -> list[str]:
+    """Return the messages of DEBUG-level records as strings.
+
+    :param records: Records collected by :func:`capture_cli_debug_records`.
+    :returns: Message texts of the records logged at DEBUG level.
+    """
+    return [
+        record.getMessage() for record in records if record.levelno == logging.DEBUG
+    ]
 
 
 class FakeInvoker:
@@ -156,7 +197,8 @@ def test_up_errors_when_image_missing_without_build(tmp_path, fake_msb):
 def test_up_boots_fresh_sandbox_with_documented_workflow(tmp_path, fake_msb):
     name = sandbox_name_for_workspace(tmp_path)
     _enable_docker(tmp_path)
-    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    with capture_cli_debug_records() as records:
+        result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
     run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
     assert len(run_calls) == 1
@@ -173,7 +215,7 @@ def test_up_boots_fresh_sandbox_with_documented_workflow(tmp_path, fake_msb):
     assert args[args.index("--env") + 1] == "CIRCUS_DOCKERD_SHUTDOWN_TIMEOUT=20"
     assert "--detach" in args
     assert args[-1] == "docker.io/library/msb-agents:26"
-    assert "dockerd is ready" in result.output
+    assert any("dockerd is ready" in message for message in debug_messages(records))
 
 
 def _enable_docker(tmp_path: Path, size: str = "10G") -> None:
@@ -187,13 +229,14 @@ def _enable_docker(tmp_path: Path, size: str = "10G") -> None:
 
 def test_up_skips_dockerd_probe_when_docker_is_disabled(tmp_path, fake_msb):
     """No disk config means no usable docker: no probe, but a visible warning."""
-    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    with capture_cli_debug_records() as records:
+        result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
     probe_calls = [
         c for c in fake_msb["calls"] if c[0] == "exec" and c[-2:] == ["docker", "info"]
     ]
     assert probe_calls == []
-    assert "dockerd is ready" not in result.output
+    assert not any("dockerd is ready" in message for message in debug_messages(records))
     assert "docker is not enabled" in result.output
     assert "docker_disk" in result.output  # the fix is actionable
 
@@ -825,22 +868,30 @@ def test_up_probes_dockerd_when_reusing_running_sandbox(tmp_path, fake_msb):
     fake_msb["list_output"] = json.dumps(
         [{"name": name, "status": "Running", "id": "abc"}]
     )
-    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    with capture_cli_debug_records() as records:
+        result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
     probe_calls = [
         c for c in fake_msb["calls"] if c[0] == "exec" and c[-2:] == ["docker", "info"]
     ]
     assert probe_calls == [["exec", name, "--", "docker", "info"]]
-    assert "dockerd is ready" in result.output
+    assert any("dockerd is ready" in message for message in debug_messages(records))
 
 
-def test_up_warns_when_dockerd_never_becomes_ready(tmp_path, fake_msb):
+def test_up_logs_debug_when_dockerd_never_becomes_ready(tmp_path, fake_msb):
+    """The dockerd-not-ready failure is a debug log, not user output."""
     _enable_docker(tmp_path)
     fake_msb["dockerd_ready"] = False
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
-    assert "dockerd did not become ready" in result.output
-    assert "permission denied" in result.output  # last probe error is surfaced
+    assert "dockerd did not become ready" not in result.output
+
+    with capture_cli_debug_records() as records:
+        result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    messages = debug_messages(records)
+    assert any("dockerd did not become ready" in message for message in messages)
+    assert any("permission denied" in message for message in messages)
 
 
 def test_dockerd_probe_uses_plain_exec_without_no_tty(tmp_path, fake_msb):

@@ -724,8 +724,8 @@ def _check_dockerd(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
     state
     is reported as a visible warning — including for already-running
     sandboxes, which skip the boot/start paths — together with the fix.
-    Otherwise dockerd readiness is probed and a failure warns with
-    diagnostics.
+    Otherwise dockerd readiness is probed and a failure is logged at
+    debug level with diagnostics.
 
     :param invoker: Invoker bound to the resolved msb binary.
     :param config: Resolved msb-circus configuration.
@@ -743,9 +743,9 @@ def _check_dockerd(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
         return
     ready, last_error = _probe_dockerd(invoker, name)
     if ready:
-        logger.info("dockerd is ready in the guest.")
+        logger.debug("dockerd is ready in the guest.")
     else:
-        logger.warning("%s", _dockerd_warning(name, last_error))
+        logger.debug("%s", _dockerd_warning(name, last_error))
 
 
 @app.command()
