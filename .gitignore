@@ -165,7 +165,9 @@ cython_debug/
 
 # AI
 .agent-shell/
-.claude/
+**/.claude/*
+# Project skill links for Claude Code (files live in .agents/skills)
+!/.claude/skills/
 
 # others
 .direnv/
