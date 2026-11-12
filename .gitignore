@@ -172,6 +172,8 @@ cython_debug/
 # others
 .direnv/
 .devenv/
+.env.enc
+.sops.yaml
 
 # Node
 node_modules/
