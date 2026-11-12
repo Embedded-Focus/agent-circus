@@ -18,12 +18,14 @@ from .config import (
     ADDITIONAL_DIRS_GUEST_BASE,
     AGENT_CONFIG_FILE_COPIES,
     DEFAULT_WORKDIR,
+    DOCKER_VOLUME_SUFFIX,
     DOCKERD_SHUTDOWN_TIMEOUT_ENV_VAR,
     INIT_NONE,
     SSH_AGENT_GUEST_SOCKET,
     SSH_AGENT_VSOCK_PORT,
     MsbConfig,
     docker_enabled,
+    docker_volume_name_for_workspace,
     effective_mounts,
     load_config,
     resolve_agent_config_mounts,
@@ -86,6 +88,7 @@ from .msb import MsbInvoker, check_version, probe_version, resolve_msb_binary
 from .ps import format_sandbox_json, format_sandbox_table
 from .sandbox import (
     SandboxInfo,
+    VolumeInfo,
     build_copy_args,
     build_inspect_args,
     build_list_args,
@@ -93,6 +96,8 @@ from .sandbox import (
     build_run_args,
     build_start_args,
     build_stop_args,
+    build_volume_list_args,
+    build_volume_remove_args,
     configured_ports,
     parse_inspect_bind_mounts,
     parse_inspect_disk_config,
@@ -100,6 +105,7 @@ from .sandbox import (
     parse_root_disk_spec,
     parse_sandbox_list_output,
     parse_size_mib,
+    parse_volume_list_output,
 )
 from .skills import (
     CONFIG_MOUNT_SKILL_DIRS,
@@ -360,6 +366,58 @@ def _resolve_invoker(workspace: Path) -> tuple[MsbConfig, MsbInvoker]:
     return config, MsbInvoker(binary)
 
 
+def _docker_volumes(invoker: MsbInvoker) -> dict[str, VolumeInfo] | None:
+    """Return existing msb volumes by name.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :returns: Volumes keyed by name, or ``None`` when the list could not
+        be read (the failure is logged at debug level).
+    """
+    try:
+        result = invoker.run(build_volume_list_args())
+        volumes = parse_volume_list_output(result.stdout)
+    except (MsbCommandError, ConfigurationError) as e:
+        logger.debug("Could not list msb volumes: %s", e)
+        return None
+    return {volume.name: volume for volume in volumes}
+
+
+def _finish_docker_volume(
+    invoker: MsbInvoker,
+    volumes: dict[str, VolumeInfo] | None,
+    volume: str,
+    *,
+    delete: bool,
+) -> None:
+    """Delete or report the persistent docker volume of a removed sandbox.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param volumes: Result of :func:`_docker_volumes` taken before removal.
+    :param volume: Docker volume name of the removed sandbox.
+    :param delete: Delete the volume instead of keeping it.
+    :raises typer.Exit: If deleting the volume fails.
+    """
+    if volumes is None or volume not in volumes:
+        return
+    if delete:
+        try:
+            invoker.run(build_volume_remove_args(volume))
+        except MsbCircusError as e:
+            typer.echo(f"Error: could not delete docker volume {volume}: {e}", err=True)
+            raise typer.Exit(code=1) from e
+        typer.echo(f"✓ Deleted docker volume {volume}")
+        return
+    info = volumes[volume]
+    if info.capacity_bytes is None:
+        size = "unknown size"
+    else:
+        size = _format_capacity(info.capacity_bytes)
+    typer.echo(
+        f"Kept docker volume {volume} ({size}) with its docker images. "
+        f"Delete it with: msb volume rm {volume}"
+    )
+
+
 @app.command()
 def remove(
     names: Annotated[
@@ -390,18 +448,33 @@ def remove(
             help="Skip confirmation and stop running sandboxes before removal.",
         ),
     ] = False,
+    volumes: Annotated[
+        bool,
+        typer.Option(
+            "--volumes",
+            help="Also delete the persistent docker volume (all docker images and data in it).",
+        ),
+    ] = False,
 ) -> None:
     """Remove agent sandboxes and their guest state.
 
     Host-mounted files (e.g. the workspace bind mount) are not affected.
     Without names, this workspace's sandbox is removed. Without --force,
     a confirmation prompt is shown and a running sandbox is not stopped.
+    A persistent docker volume is kept unless --volumes is given.
     """
     _config, invoker = _resolve_invoker(workspace)
     targets = names or [sandbox_name_for_workspace(workspace)]
+    existing = _docker_volumes(invoker)
 
     if not force:
-        typer.echo(f"This will remove sandbox(es): {', '.join(targets)}.")
+        if volumes:
+            typer.echo(
+                f"This will remove sandbox(es): {', '.join(targets)}, "
+                "and delete their persistent docker volumes."
+            )
+        else:
+            typer.echo(f"This will remove sandbox(es): {', '.join(targets)}.")
         if not typer.confirm("Are you sure you want to continue?"):
             typer.echo("Aborted.")
             raise typer.Exit(code=0)
@@ -413,6 +486,9 @@ def remove(
             typer.echo(f"Error: {e}", err=True)
             raise typer.Exit(code=1) from e
         typer.echo(f"✓ Removed {target}")
+        _finish_docker_volume(
+            invoker, existing, f"{target}{DOCKER_VOLUME_SUFFIX}", delete=volumes
+        )
 
 
 app.command(name="rm", hidden=True)(remove)
@@ -846,9 +922,40 @@ def _warn_on_disk_drift(invoker: MsbInvoker, config: MsbConfig, name: str) -> No
 
     # Docker data disk: compare presence and size. A smaller persisted
     # disk is a drift; a larger one is fine (the user raised it via
-    # `msb modify`-style growth or manually).
+    # `msb modify`-style growth or manually). Named volume sizes are not
+    # in the inspect output; they are checked at creation instead.
     requested_docker_disk = config.sandbox.docker_disk
-    if requested_docker_disk is not None:
+    expected_volume = (
+        f"{name}{DOCKER_VOLUME_SUFFIX}" if config.sandbox.docker_disk_persist else None
+    )
+    if expected_volume is not None:
+        if guest.docker_volume_name == expected_volume:
+            logger.debug(
+                "Persistent docker volume %s is mounted in sandbox %s.",
+                expected_volume,
+                name,
+            )
+        elif guest.docker_volume_name is not None:
+            problems.append(
+                f"sandbox uses docker volume {guest.docker_volume_name}, but the "
+                f"config expects {expected_volume}"
+            )
+        elif guest.docker_disk_size_mib is not None:
+            problems.append(
+                "docker_disk_persist is set, but the sandbox keeps docker data "
+                "on a private disk that is deleted with the sandbox"
+            )
+        elif guest.mounts_seen:
+            problems.append(
+                f"persistent docker volume {expected_volume} is not mounted "
+                "in the sandbox"
+            )
+    elif guest.docker_volume_name is not None:
+        problems.append(
+            f"sandbox uses persistent docker volume {guest.docker_volume_name}, "
+            "but msb.sandbox.docker_disk_persist is not set"
+        )
+    elif requested_docker_disk is not None:
         if guest.docker_disk_size_mib is None:
             if guest.mounts_seen:
                 problems.append(
@@ -899,8 +1006,9 @@ def _warn_on_disk_drift(invoker: MsbInvoker, config: MsbConfig, name: str) -> No
     logger.warning(
         "Disk settings of sandbox %s differ from the configuration. Disks are "
         "fixed at sandbox creation, so the change is not applied to this "
-        "sandbox. Remove and re-create it to apply (this deletes the docker "
-        "data disk): msb-circus rm -f && msb-circus up (%s).",
+        "sandbox. Remove and re-create it to apply (this deletes a private "
+        "docker data disk; a persistent docker volume is kept): "
+        "msb-circus rm -f && msb-circus up (%s).",
         name,
         "; ".join(problems),
     )
@@ -1701,6 +1809,91 @@ def _ensure_git_wrapper(
         )
 
 
+def _format_capacity(capacity_bytes: int) -> str:
+    """Format a byte count as an msb size string.
+
+    :param capacity_bytes: Size in bytes.
+    :returns: ``"<n>G"`` when the size is a whole number of GiB,
+        otherwise ``"<n>M"`` (MiB, rounded down).
+    """
+    gib = 1024 * 1024 * 1024
+    if capacity_bytes % gib == 0:
+        return f"{capacity_bytes // gib}G"
+    return f"{capacity_bytes // (1024 * 1024)}M"
+
+
+def _check_docker_volume(invoker: MsbInvoker, config: MsbConfig, volume: str) -> None:
+    """Check that an existing persistent docker volume fits the config.
+
+    Reads ``msb volume list`` and compares the volume's kind and size
+    with ``msb.sandbox.docker_disk``. When msb itself cannot be queried
+    the check is skipped at debug level: ``msb run`` still validates the
+    volume when it attaches it. When the volume does not exist yet,
+    ``--mount-named`` creates it with the configured size.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param config: Resolved msb-circus configuration.
+    :param volume: Name of the persistent docker volume.
+    :raises typer.Exit: If the volume exists with another kind or size.
+    """
+    try:
+        result = invoker.run(build_volume_list_args())
+        volumes = parse_volume_list_output(result.stdout)
+    except (MsbCommandError, ConfigurationError) as e:
+        logger.debug(
+            "Could not list msb volumes to check %s; msb validates the "
+            "volume at run time (%s)",
+            volume,
+            e,
+        )
+        return
+    entry = next((v for v in volumes if v.name == volume), None)
+    if entry is None:
+        logger.info(
+            "Creating persistent docker volume %s (%s).",
+            volume,
+            config.sandbox.docker_disk,
+        )
+        return
+    if entry.kind is not None and entry.kind != "disk":
+        typer.echo(
+            f"Error: docker volume {volume} exists but is a {entry.kind} "
+            f"volume, not a disk volume. Remove it with: msb volume rm {volume}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    wanted_mib = (
+        parse_size_mib(config.sandbox.docker_disk)
+        if config.sandbox.docker_disk is not None
+        else None
+    )
+    if (
+        entry.capacity_bytes is not None
+        and wanted_mib is not None
+        and entry.capacity_bytes != wanted_mib * 1024 * 1024
+    ):
+        typer.echo(
+            f"Error: docker volume {volume} has "
+            f"{_format_capacity(entry.capacity_bytes)}, but "
+            f"msb.sandbox.docker_disk is {config.sandbox.docker_disk}. The "
+            "size of an existing volume cannot change. Either set "
+            f'docker_disk = "{_format_capacity(entry.capacity_bytes)}", or '
+            "delete the volume and its docker images with: "
+            f"msb volume rm {volume}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    logger.info(
+        "Reusing persistent docker volume %s (%s).",
+        volume,
+        (
+            _format_capacity(entry.capacity_bytes)
+            if entry.capacity_bytes is not None
+            else config.sandbox.docker_disk
+        ),
+    )
+
+
 def _ensure_sandbox_running(
     invoker: MsbInvoker,
     config: MsbConfig,
@@ -1815,37 +2008,59 @@ def _ensure_sandbox_running(
         _warn_on_trust_host_cas_drift(invoker, config, name)
     else:
         logger.info("Booting sandbox %s from %s...", name, image_tag)
-        _fail_on_occupied_ports(config)
-        invoker.run(
-            build_run_args(
-                name=name,
-                image=image_tag,
-                memory=config.sandbox.memory,
-                cpus=config.sandbox.cpus,
-                mounts=(
-                    effective_mounts(config, workspace)
-                    + resolve_agent_config_mounts()
-                    + resolve_agent_skill_mounts()
-                ),
-                net=config.network.mode,
-                port_forwards=config.port_forwards,
-                workdir=resolve_agent_workdir(config, workspace),
-                docker_disk=config.sandbox.docker_disk,
-                root_disk=config.sandbox.root_disk,
-                init=(
-                    None if config.sandbox.init == INIT_NONE else config.sandbox.init
-                ),
-                trust_host_cas=config.network.trust_host_cas,
-                env={
-                    **config.env,
-                    DOCKERD_SHUTDOWN_TIMEOUT_ENV_VAR: str(
-                        config.sandbox.docker_stop_timeout
-                    ),
-                    **(ssh_sandbox_env() if link else {}),
-                },
-                vsock=[(str(link), SSH_AGENT_VSOCK_PORT)] if link else None,
-            )
+        docker_volume = (
+            docker_volume_name_for_workspace(workspace)
+            if config.sandbox.docker_disk_persist
+            else None
         )
+        if docker_volume is not None:
+            _check_docker_volume(invoker, config, docker_volume)
+        _fail_on_occupied_ports(config)
+        try:
+            invoker.run(
+                build_run_args(
+                    name=name,
+                    image=image_tag,
+                    memory=config.sandbox.memory,
+                    cpus=config.sandbox.cpus,
+                    mounts=(
+                        effective_mounts(config, workspace)
+                        + resolve_agent_config_mounts()
+                        + resolve_agent_skill_mounts()
+                    ),
+                    net=config.network.mode,
+                    port_forwards=config.port_forwards,
+                    workdir=resolve_agent_workdir(config, workspace),
+                    docker_disk=config.sandbox.docker_disk,
+                    root_disk=config.sandbox.root_disk,
+                    init=(
+                        None
+                        if config.sandbox.init == INIT_NONE
+                        else config.sandbox.init
+                    ),
+                    trust_host_cas=config.network.trust_host_cas,
+                    env={
+                        **config.env,
+                        DOCKERD_SHUTDOWN_TIMEOUT_ENV_VAR: str(
+                            config.sandbox.docker_stop_timeout
+                        ),
+                        **(ssh_sandbox_env() if link else {}),
+                    },
+                    vsock=[(str(link), SSH_AGENT_VSOCK_PORT)] if link else None,
+                    docker_volume=docker_volume,
+                )
+            )
+        except MsbCommandError as e:
+            if docker_volume is not None and "already attached" in f"{e} {e.stderr}":
+                invoker.run(build_remove_args(name, force=True), check=False)
+                typer.echo(
+                    f"Error: docker volume {docker_volume} is in use by another "
+                    "running sandbox. A disk volume can only be attached to one "
+                    "sandbox at a time. Stop the other sandbox and try again.",
+                    err=True,
+                )
+                raise typer.Exit(code=1) from e
+            raise
         _ensure_pi_trust(invoker, config, name, workspace)
         _ensure_agent_config_copies(invoker, name)
         _ensure_host_entries(invoker, config, name)
@@ -2003,15 +2218,24 @@ def destroy(
             help="Skip confirmation prompt.",
         ),
     ] = False,
+    volumes: Annotated[
+        bool,
+        typer.Option(
+            "--volumes",
+            help="Also delete the persistent docker volume (all docker images and data in it).",
+        ),
+    ] = False,
 ) -> None:
     """Remove the workspace sandbox including all guest state.
 
     This stops the sandbox if it is running and deletes guest-only state
     (image layers, caches). Workspace files mounted from the host are not
-    affected.
+    affected. A persistent docker volume is kept unless --volumes is given.
     """
     _config, invoker = _resolve_invoker(workspace)
     name = sandbox_name_for_workspace(workspace)
+    volume = docker_volume_name_for_workspace(workspace)
+    existing = _docker_volumes(invoker)
     missing = find_missing_worktrees(workspace)
     if missing:
         typer.echo(
@@ -2022,12 +2246,19 @@ def destroy(
             err=True,
         )
     if not force:
-        typer.echo(f"This will remove sandbox {name} and all its guest state.")
+        if volumes and existing is not None and volume in existing:
+            typer.echo(
+                f"This will remove sandbox {name} and all its guest state, "
+                f"and delete docker volume {volume} with all docker images in it."
+            )
+        else:
+            typer.echo(f"This will remove sandbox {name} and all its guest state.")
         if not typer.confirm("Are you sure you want to continue?"):
             typer.echo("Aborted.")
             raise typer.Exit(code=0)
     invoker.run(build_remove_args(name, force=True))
     typer.echo(f"✓ Destroyed {name}")
+    _finish_docker_volume(invoker, existing, volume, delete=volumes)
 
 
 @app.command(name="exec")

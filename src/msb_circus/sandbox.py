@@ -38,6 +38,7 @@ def build_run_args(
     env: dict[str, str] | None = None,
     workdir: str | None = None,
     docker_disk: str | None = None,
+    docker_volume: str | None = None,
     root_disk: str | None = None,
     init: str | None = None,
     trust_host_cas: bool = False,
@@ -63,8 +64,12 @@ def build_run_args(
     :param env: Optional sandbox-level environment variables.
     :param workdir: Optional guest working directory.
     :param docker_disk: Optional size of a dedicated ext4 disk for the
-        docker data root, sent as ``--mount-owned``. ``None`` sends no
-        disk: dockerd then has no usable storage backend.
+        docker data root, sent as ``--mount-owned`` (or ``--mount-named``
+        when *docker_volume* is set). ``None`` sends no disk: dockerd
+        then has no usable storage backend.
+    :param docker_volume: Optional name of a persistent msb volume for
+        the docker data root; sent as ``--mount-named`` so the volume
+        survives sandbox removal. Requires *docker_disk*.
     :param root_disk: Optional root disk spec sent as ``--root-disk``
         verbatim (e.g. ``"flat:32G"``); ``None`` keeps the msb default.
     :param init: Value for ``--init`` (PID 1 handoff); ``None`` sends no
@@ -84,10 +89,18 @@ def build_run_args(
     if root_disk is not None:
         args += ["--root-disk", root_disk]
     if docker_disk is not None:
-        args += [
-            "--mount-owned",
-            f"{DOCKER_DATA_GUEST_PATH}:kind=disk,size={docker_disk}",
-        ]
+        if docker_volume is not None:
+            args += [
+                "--mount-named",
+                f"{docker_volume}:{DOCKER_DATA_GUEST_PATH}:kind=disk,size={docker_disk}",
+            ]
+        else:
+            args += [
+                "--mount-owned",
+                f"{DOCKER_DATA_GUEST_PATH}:kind=disk,size={docker_disk}",
+            ]
+    elif docker_volume is not None:
+        raise ValueError("docker_volume requires docker_disk")
     if net:
         args += ["--net", net]
     if init is not None:
@@ -190,6 +203,23 @@ def build_remove_args(name: str, *, force: bool = False) -> list[str]:
     return args
 
 
+def build_volume_list_args() -> list[str]:
+    """Build argv for ``msb volume list`` with JSON output.
+
+    :returns: Argv list.
+    """
+    return ["volume", "list", "--format", "json"]
+
+
+def build_volume_remove_args(name: str) -> list[str]:
+    """Build argv for ``msb volume remove``.
+
+    :param name: Volume name.
+    :returns: Argv list.
+    """
+    return ["volume", "remove", name]
+
+
 def parse_inspect_ports(output: str) -> frozenset[tuple[str, int, int, str]]:
     """Extract published ports from ``msb inspect --format json`` output.
 
@@ -274,6 +304,8 @@ class GuestDiskConfig:
     :ivar root_disk_size_mib: Root disk size in MiB, if reported.
     :ivar docker_disk_size_mib: Size (``capacity_mib``) of the mount-owned
         docker data disk at :data:`DOCKER_DATA_GUEST_PATH`, if present.
+    :ivar docker_volume_name: Name of the named msb volume mounted at
+        :data:`DOCKER_DATA_GUEST_PATH`, if present.
     :ivar mounts_seen: ``True`` when at least one mount entry with a
         known shape was found, so absence of a docker disk is meaningful.
     """
@@ -281,6 +313,7 @@ class GuestDiskConfig:
     root_disk_kind: str | None = None
     root_disk_size_mib: int | None = None
     docker_disk_size_mib: int | None = None
+    docker_volume_name: str | None = None
     mounts_seen: bool = False
 
 
@@ -396,7 +429,9 @@ def parse_inspect_disk_config(output: str) -> GuestDiskConfig:
     ``capacity_mib``) and the root disk tagged with ``kind`` (``managed``,
     ``tmpfs``, ``flat``, ``disk-image``); anything else is ignored. The
     docker disk is assumed to be the sandbox's only mount-owned disk,
-    which holds while sandboxes are created by msb-circus.
+    which holds while sandboxes are created by msb-circus. A ``Named``
+    mount at :data:`DOCKER_DATA_GUEST_PATH` is the persistent docker
+    volume; msb reports no size for it here.
 
     :param output: Raw stdout of the inspect command.
     :returns: Extracted settings; fields stay ``None`` when not found.
@@ -418,6 +453,7 @@ def parse_inspect_disk_config(output: str) -> GuestDiskConfig:
                     docker_disk_size_mib=(
                         capacity if isinstance(capacity, int) else None
                     ),
+                    docker_volume_name=result.docker_volume_name,
                     mounts_seen=True,
                 )
             else:
@@ -425,6 +461,7 @@ def parse_inspect_disk_config(output: str) -> GuestDiskConfig:
                     root_disk_kind=result.root_disk_kind,
                     root_disk_size_mib=result.root_disk_size_mib,
                     docker_disk_size_mib=result.docker_disk_size_mib,
+                    docker_volume_name=result.docker_volume_name,
                     mounts_seen=True,
                 )
             continue
@@ -434,10 +471,19 @@ def parse_inspect_disk_config(output: str) -> GuestDiskConfig:
             "Tmpfs",
             "DiskImage",
         }:
+            named_volume = (
+                entry.get("name")
+                if mount_type == "Named"
+                and entry.get("guest") == DOCKER_DATA_GUEST_PATH
+                and isinstance(entry.get("name"), str)
+                and entry.get("name")
+                else None
+            )
             result = GuestDiskConfig(
                 root_disk_kind=result.root_disk_kind,
                 root_disk_size_mib=result.root_disk_size_mib,
                 docker_disk_size_mib=result.docker_disk_size_mib,
+                docker_volume_name=(named_volume or result.docker_volume_name),
                 mounts_seen=True,
             )
             continue
@@ -453,6 +499,7 @@ def parse_inspect_disk_config(output: str) -> GuestDiskConfig:
                 root_disk_kind=kind,
                 root_disk_size_mib=size if isinstance(size, int) else None,
                 docker_disk_size_mib=result.docker_disk_size_mib,
+                docker_volume_name=result.docker_volume_name,
                 mounts_seen=result.mounts_seen,
             )
     return result
@@ -562,3 +609,66 @@ def parse_sandbox_list_output(output: str) -> list[SandboxInfo]:
             )
         )
     return sandboxes
+
+
+@dataclass(frozen=True)
+class VolumeInfo:
+    """A single entry of ``msb volume list --format json`` output.
+
+    :ivar name: Volume name.
+    :ivar kind: Volume kind as reported (``disk`` or ``dir``), if present.
+    :ivar capacity_bytes: Disk capacity in bytes, if reported.
+    """
+
+    name: str
+    kind: str | None = None
+    capacity_bytes: int | None = None
+
+
+def parse_volume_list_output(output: str) -> list[VolumeInfo]:
+    """Parse ``msb volume list --format json`` output.
+
+    The parse is defensive: msb is beta and its schema may change between
+    releases. ``used_bytes`` is deliberately not parsed because msb's
+    reported used-space value is not reliable for provisioned volumes.
+
+    :param output: Raw stdout of the volume list command.
+    :returns: Parsed volume entries.
+    :raises ConfigurationError: If the output is not valid JSON or has an
+        unexpected shape.
+    """
+    try:
+        document = json.loads(output)
+    except json.JSONDecodeError as e:
+        raise ConfigurationError(
+            f"Could not parse msb volume list output as JSON: {e}"
+        ) from e
+    if not isinstance(document, list):
+        raise ConfigurationError(
+            "Unexpected msb volume list output shape: expected a JSON array"
+        )
+    volumes: list[VolumeInfo] = []
+    for index, entry in enumerate(document):
+        if not isinstance(entry, dict):
+            raise ConfigurationError(
+                f"Unexpected msb volume list entry at index {index}: expected an object"
+            )
+        name = entry.get("name")
+        if not isinstance(name, str) or not name:
+            raise ConfigurationError(
+                f"msb volume list entry at index {index} has no valid 'name'"
+            )
+        kind = entry.get("kind")
+        capacity = entry.get("capacity_bytes")
+        volumes.append(
+            VolumeInfo(
+                name=name,
+                kind=kind if isinstance(kind, str) else None,
+                capacity_bytes=(
+                    capacity
+                    if not isinstance(capacity, bool) and isinstance(capacity, int)
+                    else None
+                ),
+            )
+        )
+    return volumes

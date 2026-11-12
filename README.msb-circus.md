@@ -586,6 +586,8 @@ memory = "4G"
 # root_disk = "flat:32G"                # root disk spec, see "Docker and Disks"
 # docker_disk = "10G"                   # docker opt-in: dedicated ext4 disk
                                         # for /var/lib/docker; unset = no docker
+# docker_disk_persist = false           # keep docker data in a named volume
+                                        # that survives rm/destroy
 
 [msb.mounts]
 "." = "/workspace"                     # default; more mounts: "/data" = "/data:ro"
@@ -764,8 +766,54 @@ msb-circus rm && msb-circus up
 Removing the sandbox deletes the docker data disk, together with all
 images and containers in it. The disk survives `stop` and `start`.
 
+### Persistent Docker Data
+
+Large images or slow builds are expensive to recreate. Set
+`docker_disk_persist = true` to keep docker data when you remove the
+sandbox:
+
+``` toml
+[msb.sandbox]
+docker_disk = "20G"
+docker_disk_persist = true
+```
+
+msb-circus then stores `/var/lib/docker` in a named msb volume called
+`agents-<project>-docker` instead of a disk that belongs to the sandbox.
+`up` creates the volume on first use and reuses it when the sandbox is
+created again. `rm` and `destroy` keep the volume and print its name.
+Everything in it survives: images, build cache, containers, networks,
+and docker volumes. Containers with a restart policy start again with
+the new sandbox.
+
+To delete the volume as well, add `--volumes`:
+
+``` shell
+msb-circus destroy --volumes
+msb-circus rm -f --volumes
+```
+
+You can also delete it later with `msb volume rm agents-<project>-docker`.
+`msb volume list` shows all volumes and their sizes.
+
+Rules and limits:
+
+- `docker_disk_persist` needs `docker_disk`. A flat root alone cannot
+  persist docker data.
+- The size of an existing volume cannot change. When `docker_disk` does
+  not match the volume, `up` stops with an error. Set `docker_disk` to
+  the size that the error names, or delete the volume.
+- Only one running sandbox can use a disk volume at a time. msb refuses
+  a second one, and `up` reports that the volume is in use.
+- An existing sandbox keeps the disk it was created with. After you turn
+  the setting on or off, `up` warns until you re-create the sandbox. The
+  images on the old private disk are lost when you re-create it.
+- A newer dockerd can use the data of an older one. Going back to an
+  older sandbox image with an older dockerd can fail on the same volume.
+
 Host storage lives under the msb storage root (`~/.microsandbox` by
 default). A flat root or a docker disk adds its size there per sandbox.
+A persistent docker volume stays there until you delete it.
 
 ## Git Worktrees
 

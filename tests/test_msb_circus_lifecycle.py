@@ -13,7 +13,7 @@ import pytest
 from typer.testing import CliRunner
 
 import msb_circus.cli as cli_module
-from msb_circus.cli import app
+from msb_circus.cli import _format_capacity, app
 from msb_circus.config import sandbox_name_for_workspace
 from msb_circus.exceptions import MsbCommandError
 from msb_circus.gitconfig import (
@@ -77,6 +77,16 @@ class FakeInvoker:
 
     def run(self, args, **kwargs):
         self.behavior.setdefault("calls", []).append(args)
+        if args[:2] == ["volume", "list"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=self.behavior.get("volume_list", "[]"),
+                stderr="",
+            )
+        if args[0] == "run" and self.behavior.get("run_stderr"):
+            raise MsbCommandError(
+                "msb run failed", returncode=1, stderr=self.behavior["run_stderr"]
+            )
         if args[:2] == ["image", "inspect"]:
             return SimpleNamespace(
                 returncode=self.behavior.get("inspect_rc", 1),
@@ -224,6 +234,15 @@ def _enable_docker(tmp_path: Path, size: str = "10G") -> None:
     config_dir.mkdir(exist_ok=True)
     (config_dir / "config.toml").write_bytes(
         f'[msb.sandbox]\ndocker_disk = "{size}"\n'.encode()
+    )
+
+
+def _enable_persistent_docker(tmp_path: Path, size: str = "10G") -> None:
+    """Write a config that opts into a persistent docker volume."""
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir(exist_ok=True)
+    (config_dir / "config.toml").write_bytes(
+        f'[msb.sandbox]\ndocker_disk = "{size}"\ndocker_disk_persist = true\n'.encode()
     )
 
 
@@ -1021,6 +1040,56 @@ def test_destroy_force_skips_prompt(tmp_path, fake_msb):
     assert ["remove", "--force", name] in fake_msb["calls"]
 
 
+def test_destroy_keeps_docker_volume_by_default(tmp_path, fake_msb):
+    vol = sandbox_name_for_workspace(tmp_path) + "-docker"
+    fake_msb["volume_list"] = json.dumps(
+        [{"name": vol, "kind": "disk", "capacity_bytes": 10737418240}]
+    )
+    result = runner.invoke(app, ["destroy", "-f", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "Kept docker volume" in result.output
+    assert "10G" in result.output
+    assert not [c for c in fake_msb["calls"] if c[:2] == ["volume", "remove"]]
+
+
+def test_destroy_volumes_deletes_docker_volume(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    vol = name + "-docker"
+    fake_msb["volume_list"] = json.dumps(
+        [{"name": vol, "kind": "disk", "capacity_bytes": 10737418240}]
+    )
+    result = runner.invoke(
+        app, ["destroy", "-f", "--volumes", "--workspace", str(tmp_path)]
+    )
+    assert result.exit_code == 0
+    assert ["volume", "remove", vol] in fake_msb["calls"]
+    assert "✓ Deleted docker volume" in result.output
+    calls = fake_msb["calls"]
+    assert calls.index(["remove", "--force", name]) < calls.index(
+        ["volume", "remove", vol]
+    )
+
+
+def test_destroy_volumes_prompt_names_volume(tmp_path, fake_msb):
+    vol = sandbox_name_for_workspace(tmp_path) + "-docker"
+    fake_msb["volume_list"] = json.dumps(
+        [{"name": vol, "kind": "disk", "capacity_bytes": 10737418240}]
+    )
+    result = runner.invoke(
+        app, ["destroy", "--volumes", "--workspace", str(tmp_path)], input="n\n"
+    )
+    assert result.exit_code == 0
+    assert "delete docker volume" in result.output
+    assert not [c for c in fake_msb["calls"] if c[0] == "remove"]
+
+
+def test_destroy_without_docker_volume_prints_nothing_extra(tmp_path, fake_msb):
+    fake_msb["volume_list"] = "[]"
+    result = runner.invoke(app, ["destroy", "-f", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "docker volume" not in result.output
+
+
 def test_up_writes_pi_trust_for_workdir_and_additional_dirs(tmp_path, fake_msb):
     config_dir = tmp_path / ".agent-circus"
     config_dir.mkdir()
@@ -1434,3 +1503,137 @@ def test_up_installs_git_wrapper_without_mirror_root(tmp_path, fake_msb):
     script = _installed_git_wrapper(fake_msb["calls"])
     assert "MSB_CIRCUS_GUEST_ROOT-/workspace}" in script
     assert "MSB_CIRCUS_MIRROR_ROOT-''}" in script
+
+
+def test_format_capacity_gib_and_mib():
+    assert _format_capacity(5368709120) == "5G"
+    assert _format_capacity(536870912) == "512M"
+
+
+def test_up_boots_with_persistent_docker_volume(tmp_path, fake_msb):
+    vol = sandbox_name_for_workspace(tmp_path) + "-docker"
+    _enable_persistent_docker(tmp_path)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    assert len(run_calls) == 1
+    args = run_calls[0]
+    idx = args.index("--mount-named")
+    assert args[idx + 1] == f"{vol}:/var/lib/docker:kind=disk,size=10G"
+    assert "--mount-owned" not in args
+
+
+def test_up_reuses_matching_docker_volume(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    vol = name + "-docker"
+    _enable_persistent_docker(tmp_path)
+    fake_msb["volume_list"] = json.dumps(
+        [{"name": vol, "kind": "disk", "capacity_bytes": 10737418240}]
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert len([c for c in fake_msb["calls"] if c[0] == "run"]) == 1
+
+
+def test_up_fails_on_docker_volume_size_mismatch(tmp_path, fake_msb):
+    vol = sandbox_name_for_workspace(tmp_path) + "-docker"
+    _enable_persistent_docker(tmp_path)
+    fake_msb["volume_list"] = json.dumps(
+        [{"name": vol, "kind": "disk", "capacity_bytes": 5368709120}]
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 1
+    assert 'docker_disk = "5G"' in result.output
+    assert "msb volume rm" in result.output
+    assert not [c for c in fake_msb["calls"] if c[0] == "run"]
+
+
+def test_up_fails_on_docker_volume_kind_mismatch(tmp_path, fake_msb):
+    vol = sandbox_name_for_workspace(tmp_path) + "-docker"
+    _enable_persistent_docker(tmp_path)
+    fake_msb["volume_list"] = json.dumps(
+        [{"name": vol, "kind": "dir", "capacity_bytes": None}]
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 1
+    assert not [c for c in fake_msb["calls"] if c[0] == "run"]
+
+
+def test_up_removes_leftover_sandbox_when_docker_volume_in_use(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    _enable_persistent_docker(tmp_path)
+    fake_msb["run_stderr"] = (
+        'error: invalid config: volume "x" is already attached with '
+        "an incompatible disk mode"
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "in use by another" in result.output
+    assert ["remove", "--force", name] in fake_msb["calls"]
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    assert run_calls and "--mount-named" in run_calls[0]
+
+
+def test_up_without_persist_still_uses_mount_owned(tmp_path, fake_msb):
+    _enable_docker(tmp_path)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    assert len(run_calls) == 1
+    assert "--mount-owned" in run_calls[0]
+    assert "--mount-named" not in run_calls[0]
+    assert ["volume", "list", "--format", "json"] not in fake_msb["calls"]
+
+
+NAMED_DOCKER_MOUNT = {
+    "type": "Named",
+    "guest": "/var/lib/docker",
+    "options": {"readonly": False, "noexec": False},
+}
+
+
+def _inspect_with_named_docker_volume(vol: str) -> str:
+    return json.dumps(
+        {
+            "config": {
+                "spec": {
+                    "mounts": [
+                        {**NAMED_DOCKER_MOUNT, "name": vol},
+                    ]
+                }
+            }
+        }
+    )
+
+
+def test_up_warns_when_persist_enabled_but_sandbox_has_private_disk(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    _enable_persistent_docker(tmp_path)
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["inspect_json"] = DISK_INSPECT_MATCHING
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "differ" in result.output
+    assert "private disk" in result.output
+
+
+def test_up_warns_when_sandbox_has_volume_but_persist_disabled(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    vol = name + "-docker"
+    _enable_docker(tmp_path)
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["inspect_json"] = _inspect_with_named_docker_volume(vol)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "docker_disk_persist is not set" in result.output
+
+
+def test_up_does_not_warn_when_docker_volume_matches(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    vol = name + "-docker"
+    _enable_persistent_docker(tmp_path)
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["inspect_json"] = _inspect_with_named_docker_volume(vol)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "differ" not in result.output

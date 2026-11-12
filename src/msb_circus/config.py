@@ -63,6 +63,10 @@ DEFAULT_SANDBOX_NAME_PREFIX = "agents"
 DEFAULT_MOUNTS: dict[str, str] = {".": "/workspace"}
 ADDITIONAL_DIRS_GUEST_BASE = "/workspaces"
 
+#: Suffix of the persistent docker volume name (see
+#: :func:`docker_volume_name_for_workspace`).
+DOCKER_VOLUME_SUFFIX = "-docker"
+
 #: vsock port the host SSH agent is exposed on (guest connects to CID 2).
 SSH_AGENT_VSOCK_PORT = 22022
 #: Guest path of the bridged SSH agent socket.
@@ -159,6 +163,8 @@ class SandboxConfig:
         ``None`` keeps msb's managed default root.
     :ivar docker_disk: Optional size of a dedicated ext4 disk mounted at
         ``/var/lib/docker`` (the docker opt-in); ``None`` disables docker.
+    :ivar docker_disk_persist: Keep the docker data disk in a named msb
+        volume that survives sandbox removal; requires ``docker_disk``.
     :ivar init: Value for ``--init`` at sandbox creation (``"auto"``,
         ``"none"`` sends no flag, or an absolute path to another init);
         applies at creation only.
@@ -172,6 +178,7 @@ class SandboxConfig:
     cpus: int | None = None
     root_disk: str | None = None
     docker_disk: str | None = None
+    docker_disk_persist: bool = False
     init: str = DEFAULT_INIT
     stop_timeout: int = DEFAULT_STOP_TIMEOUT
     docker_stop_timeout: int = DEFAULT_DOCKER_STOP_TIMEOUT
@@ -687,6 +694,16 @@ def sandbox_name_for_workspace(workspace: Path) -> str:
     return f"{DEFAULT_SANDBOX_NAME_PREFIX}-{project}"
 
 
+def docker_volume_name_for_workspace(workspace: Path) -> str:
+    """Derive the persistent docker volume name for a workspace.
+
+    :param workspace: Workspace directory.
+    :returns: ``agents-<sanitized project name>-docker``.
+    :raises ConfigurationError: If the sanitized name is empty.
+    """
+    return f"{sandbox_name_for_workspace(workspace)}{DOCKER_VOLUME_SUFFIX}"
+
+
 def _parse_image(raw: Any) -> ImageConfig:
     """Parse the ``[msb.image]`` table.
 
@@ -742,6 +759,14 @@ def _parse_sandbox(raw: Any) -> SandboxConfig:
         raise ConfigurationError(
             'msb.sandbox.docker_disk must be a non-empty string (e.g. "10G")'
         )
+    docker_disk_persist = raw.get("docker_disk_persist", False)
+    if not isinstance(docker_disk_persist, bool):
+        raise ConfigurationError("msb.sandbox.docker_disk_persist must be a boolean")
+    if docker_disk_persist and docker_disk is None:
+        raise ConfigurationError(
+            "msb.sandbox.docker_disk_persist requires msb.sandbox.docker_disk "
+            '(e.g. "20G")'
+        )
     init = raw.get("init", DEFAULT_INIT)
     if (
         not isinstance(init, str)
@@ -775,6 +800,7 @@ def _parse_sandbox(raw: Any) -> SandboxConfig:
         cpus=cpus,
         root_disk=root_disk,
         docker_disk=docker_disk,
+        docker_disk_persist=docker_disk_persist,
         init=init,
         stop_timeout=timeouts["stop_timeout"],
         docker_stop_timeout=timeouts["docker_stop_timeout"],

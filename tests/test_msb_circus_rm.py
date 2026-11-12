@@ -1,5 +1,6 @@
 """Tests for the msb-circus remove (rm) command."""
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar
@@ -25,6 +26,10 @@ class FakeInvoker:
 
     def run(self, args, **kwargs):
         self.behavior.setdefault("calls", []).append(args)
+        if args[:2] == ["volume", "list"]:
+            return SimpleNamespace(
+                returncode=0, stdout=self.behavior.get("volume_list", "[]"), stderr=""
+            )
         if self.behavior.get("fail_for") and any(
             fail in args for fail in self.behavior["fail_for"]
         ):
@@ -52,7 +57,10 @@ def test_remove_defaults_to_workspace_sandbox(tmp_path, fake_msb):
     name = sandbox_name_for_workspace(tmp_path)
     result = runner.invoke(app, ["rm", "-f", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
-    assert fake_msb["calls"] == [["remove", "--force", name]]
+    assert fake_msb["calls"] == [
+        ["volume", "list", "--format", "json"],
+        ["remove", "--force", name],
+    ]
     assert f"✓ Removed {name}" in result.output
 
 
@@ -62,6 +70,7 @@ def test_remove_explicit_names_skip_workspace_default(tmp_path, fake_msb):
     )
     assert result.exit_code == 0
     assert fake_msb["calls"] == [
+        ["volume", "list", "--format", "json"],
         ["remove", "--force", "sandbox-a"],
         ["remove", "--force", "sandbox-b"],
     ]
@@ -71,14 +80,18 @@ def test_remove_without_force_uses_no_msb_force_flag(tmp_path, fake_msb):
     name = sandbox_name_for_workspace(tmp_path)
     result = runner.invoke(app, ["remove", "--workspace", str(tmp_path)], input="y\n")
     assert result.exit_code == 0
-    assert fake_msb["calls"] == [["remove", name]]
+    assert fake_msb["calls"] == [
+        ["volume", "list", "--format", "json"],
+        ["remove", name],
+    ]
 
 
 def test_remove_without_force_prompts_and_aborts_on_no(tmp_path, fake_msb):
     result = runner.invoke(app, ["rm", "--workspace", str(tmp_path)], input="n\n")
     assert result.exit_code == 0
     assert "Aborted." in result.output
-    assert "calls" not in fake_msb  # no msb invocation happened
+    # Only the volume list ran before the prompt; no msb removal happened.
+    assert fake_msb["calls"] == [["volume", "list", "--format", "json"]]
 
 
 def test_remove_failure_exits_nonzero(tmp_path, monkeypatch, fake_msb):
@@ -89,6 +102,40 @@ def test_remove_failure_exits_nonzero(tmp_path, monkeypatch, fake_msb):
     )
     assert result.exit_code == 1
     assert "Error:" in result.output
+
+
+def test_remove_keeps_docker_volume_by_default(tmp_path, fake_msb):
+    fake_msb["volume_list"] = json.dumps(
+        [{"name": "agents-a-docker", "kind": "disk", "capacity_bytes": 5368709120}]
+    )
+    result = runner.invoke(
+        app, ["remove", "-f", "agents-a", "--workspace", str(tmp_path)]
+    )
+    assert result.exit_code == 0
+    assert "Kept docker volume agents-a-docker" in result.output
+
+
+def test_remove_volumes_deletes_docker_volume(tmp_path, fake_msb):
+    fake_msb["volume_list"] = json.dumps(
+        [{"name": "agents-a-docker", "kind": "disk", "capacity_bytes": 5368709120}]
+    )
+    result = runner.invoke(
+        app, ["remove", "-f", "--volumes", "agents-a", "--workspace", str(tmp_path)]
+    )
+    assert result.exit_code == 0
+    assert ["volume", "remove", "agents-a-docker"] in fake_msb["calls"]
+
+
+def test_remove_volume_failure_exits_nonzero(tmp_path, fake_msb):
+    fake_msb["volume_list"] = json.dumps(
+        [{"name": "agents-a-docker", "kind": "disk", "capacity_bytes": 5368709120}]
+    )
+    fake_msb["fail_for"] = ["agents-a-docker"]
+    result = runner.invoke(
+        app, ["remove", "-f", "--volumes", "agents-a", "--workspace", str(tmp_path)]
+    )
+    assert result.exit_code == 1
+    assert "could not delete docker volume" in result.output
 
 
 def test_remove_failure_shows_remediation_hint(tmp_path, monkeypatch):

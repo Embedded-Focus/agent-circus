@@ -259,7 +259,7 @@ flowchart TB
         socat["circus-ssh-agent-bridge (longrun)<br/>only if CIRCUS_SSH_AGENT_VSOCK_PORT set<br/>/run/ssh-agent.sock <-> VSOCK 2:22022<br/>log: /tmp/ssh-agent-bridge.log"]
         execs["msb exec sessions:<br/>harnesses, ACP streams, setup scripts"]
         msbdir["/.msb: scripts/, tls/, heartbeat.json, rootfs"]
-        disks["/workspace (bind), /workspaces/&lt;name&gt; (bind),<br/>/root/.claude, /root/.codex (bind),<br/>/var/lib/docker (mount-owned ext4 disk)"]
+        disks["/workspace (bind), /workspaces/&lt;name&gt; (bind),<br/>/root/.claude, /root/.codex (bind),<br/>/var/lib/docker (mount-owned ext4 disk,<br/>or named volume with docker_disk_persist)"]
     end
     init --> agentd
     init --> ca --> dockerd
@@ -284,6 +284,15 @@ Notes:
   (`--mount-owned /var/lib/docker:kind=disk,size=...`) or a flat root
   (`root_disk = "flat:..."`). Otherwise the dockerd service logs an
   explanation and idles.
+- With `docker_disk_persist = true`, the docker disk is a named msb
+  volume `agents-<project>-docker`
+  (`--mount-named <vol>:/var/lib/docker:kind=disk,size=...`) that
+  outlives the sandbox. Before `msb run`, msb-circus reads
+  `msb volume list --format json` and stops on a kind or size mismatch
+  (`msb volume inspect` has no JSON output). msb attaches a disk volume
+  to one sandbox at a time; a refused `msb run` still leaves a sandbox
+  record, which msb-circus removes. `rm`/`destroy` keep the volume
+  unless `--volumes` is given.
 - Go programs (dockerd) cache the system cert pool per process, so CAs
   must be installed **before** dockerd starts.
 
