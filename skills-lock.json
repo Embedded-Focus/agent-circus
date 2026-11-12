@@ -5,7 +5,7 @@
       "source": "honeytreelabs/delegate-to-local-agent",
       "sourceType": "github",
       "skillPath": "skills/delegate-to-local-agent/SKILL.md",
-      "computedHash": "3e23d7bb71270733d8d9efc03e54e4bc4a989966d16930580deb58e3c611ece5"
+      "computedHash": "6740a26544a53fc45892051024dd403919f24e1815f9398fb5d659c5ed82bf48"
     },
     "simple-english": {
       "source": "AminBlg/SimpleEnglish",
