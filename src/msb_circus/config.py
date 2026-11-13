@@ -269,6 +269,39 @@ class PortForward:
     protocol: str = "tcp"
 
 
+#: Allowed daemon names: lowercase letters, digits and "-", starting with
+#: a letter or digit, at most 40 characters. The name is used in guest
+#: paths, so it must stay filesystem- and shell-safe.
+DAEMON_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+
+#: Valid environment variable names (POSIX shell identifiers).
+_ENV_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+@dataclass(frozen=True)
+class DaemonConfig:
+    """A long-running process supervised in the sandbox (``[[msb.daemons]]``).
+
+    :ivar name: Unique daemon name (see :data:`DAEMON_NAME_PATTERN`).
+    :ivar command: Command and arguments, run without a shell.
+    :ivar autostart: Start the daemon on every sandbox boot.
+    :ivar port: Optional guest TCP port the daemon listens on; used to
+        wait for readiness and to show a URL. It does not forward a port.
+    :ivar workdir: Optional guest working directory.
+    :ivar env: Extra environment variables for the daemon.
+    :ivar env_passthrough: Host environment variables passed to the
+        daemon (same matching rules as the top-level ``env_passthrough``).
+    """
+
+    name: str
+    command: tuple[str, ...]
+    autostart: bool = True
+    port: int | None = None
+    workdir: str | None = None
+    env: dict[str, str] = field(default_factory=dict)
+    env_passthrough: tuple[str, ...] = ()
+
+
 @dataclass(frozen=True)
 class AdditionalDir:
     """An entry of the ``[[additional_dirs]]`` array.
@@ -352,6 +385,8 @@ class MsbConfig:
         ``/workspaces/<name>`` (agent-circus compatible).
     :ivar port_forwards: Guest ports published on the host
         (``[[port_forwards]]``, agent-circus compatible).
+    :ivar daemons: Long-running processes supervised in the sandbox
+        (``[[msb.daemons]]``).
     :ivar env: Sandbox-level environment variables (non-secret defaults).
     :ivar env_passthrough: Host environment variables to pass into the
         sandbox. Literal names are required to exist on the host; entries
@@ -376,6 +411,7 @@ class MsbConfig:
     mounts: dict[str, str] = field(default_factory=dict)
     additional_dirs: tuple[AdditionalDir, ...] = ()
     port_forwards: tuple[PortForward, ...] = ()
+    daemons: tuple[DaemonConfig, ...] = ()
     env: dict[str, str] = field(default_factory=dict)
     env_passthrough: tuple[str, ...] = ()
     git_worktree_mirror: bool = False
@@ -950,6 +986,97 @@ def _parse_port_forwards(raw: Any) -> tuple[PortForward, ...]:
     return tuple(forwards)
 
 
+def _parse_daemons(raw: Any) -> tuple[DaemonConfig, ...]:
+    """Parse the ``[[msb.daemons]]`` array.
+
+    Each entry needs a unique ``name`` matching
+    :data:`DAEMON_NAME_PATTERN` and a non-empty ``command`` list. All
+    other fields are optional.
+
+    :param raw: Raw array value or ``None``.
+    :returns: Tuple of parsed daemon configs in configuration order.
+    :raises ConfigurationError: If an entry is malformed or a name is
+        used twice.
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ConfigurationError("msb.daemons must be a list of tables")
+    daemons: list[DaemonConfig] = []
+    names: set[str] = set()
+    for index, entry in enumerate(raw):
+        label = f"msb.daemons[{index}]"
+        if not isinstance(entry, dict):
+            raise ConfigurationError(f"{label} must be a table")
+        known_keys = (
+            "name",
+            "command",
+            "autostart",
+            "port",
+            "workdir",
+            "env",
+            "env_passthrough",
+        )
+        unknown = sorted(key for key in entry if key not in known_keys)
+        if unknown:
+            raise ConfigurationError(
+                f"{label} has unknown key(s): {', '.join(unknown)}"
+            )
+        name = entry.get("name")
+        if not isinstance(name, str) or not DAEMON_NAME_PATTERN.fullmatch(name):
+            raise ConfigurationError(
+                f"{label}.name must match [a-z0-9][a-z0-9-]* (at most 40 characters)"
+            )
+        if name in names:
+            raise ConfigurationError(f"{label}.name {name!r} is used more than once")
+        names.add(name)
+        command = entry.get("command")
+        if (
+            not isinstance(command, list)
+            or not command
+            or not all(isinstance(part, str) and part for part in command)
+        ):
+            raise ConfigurationError(
+                f"{label}.command must be a non-empty list of strings"
+            )
+        autostart = entry.get("autostart", True)
+        if not isinstance(autostart, bool):
+            raise ConfigurationError(f"{label}.autostart must be true or false")
+        port = entry.get("port")
+        if port is not None:
+            port = _validate_port(port, f"{label}.port")
+        workdir = entry.get("workdir")
+        if workdir is not None and (not isinstance(workdir, str) or not workdir):
+            raise ConfigurationError(f"{label}.workdir must be a non-empty string")
+        env = _parse_string_dict(entry.get("env"), f"{label}.env")
+        for key in env:
+            if not _ENV_NAME_PATTERN.fullmatch(key):
+                raise ConfigurationError(
+                    f"{label}.env key {key!r} is not a valid environment variable name"
+                )
+        env_passthrough = entry.get("env_passthrough")
+        if env_passthrough is None:
+            env_passthrough = ()
+        elif not isinstance(env_passthrough, list) or not all(
+            isinstance(item, str) and item for item in env_passthrough
+        ):
+            raise ConfigurationError(
+                f"{label}.env_passthrough must be a list of non-empty strings"
+            )
+        daemons.append(
+            DaemonConfig(
+                name=name,
+                command=tuple(command),
+                autostart=autostart,
+                port=port,
+                workdir=workdir,
+                env=env,
+                env_passthrough=tuple(env_passthrough),
+            )
+        )
+    return tuple(daemons)
+
+
 def _parse_agent(raw: Any) -> AgentConfig:
     """Parse the ``[msb.agent]`` table.
 
@@ -1193,6 +1320,7 @@ def parse_config(config: dict[str, Any]) -> MsbConfig:
         ),
         additional_dirs=_parse_additional_dirs(config.get("additional_dirs")),
         port_forwards=_parse_port_forwards(config.get("port_forwards")),
+        daemons=_parse_daemons(msb_raw.get("daemons")),
         env=_parse_string_dict(msb_raw.get("env"), "msb.env"),
         env_passthrough=_parse_env_passthrough(config.get("env_passthrough")),
         git_worktree_mirror=git.worktree_mirror if git is not None else False,

@@ -607,6 +607,15 @@ guest_port = 8000                       # or container_port (agent-circus style)
 command = ["pi"]                       # default exec target
 # workdir = "/workspace"               # default; host path with git.worktree_mirror
 
+[[msb.daemons]]                         # a supervised process; see "Daemons"
+name = "opencode-web"                   # lowercase letters, digits and "-"
+command = ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096"]
+# autostart = true                      # start on every boot
+# port = 4096                           # wait for it; show the URL
+# workdir = "/workspace"                # default: [msb.agent] workdir
+# env = { KEY = "value" }               # extra variables
+# env_passthrough = ["OPENAI_API_KEY"]  # host variables for this daemon
+
 [ssh]                                  # forward the host SSH agent; see
                                        # "SSH Agent Forwarding"
 # config_path = "~/.ssh/config"        # copied to /root/.ssh/config
@@ -625,7 +634,8 @@ patterns = []                          # globs or re:-prefixed regexes
 # worktree_mirror = false              # see "Git Worktrees"
 ```
 
-All fields are optional. The values above are the defaults.
+All fields are optional. The values above are the defaults. The
+`[[msb.daemons]]` entry is an example; there are no daemons by default.
 
 ## Secrets
 
@@ -648,6 +658,10 @@ must exist, or the command fails before msb starts. A glob (`LG_*`) or a
 regex with the `re:` prefix (`re:^LG_`, matched case-insensitively) expands
 to every matching variable that is set. Log output never contains secret
 values.
+
+Daemons are different: s6 starts them in the guest, not `msb-circus exec`,
+so their variables must be stored in the guest. See
+[Daemon Secrets](#daemon-secrets).
 
 ## Networking
 
@@ -712,6 +726,137 @@ before booting and fails with the conflicting `host:port -> guest/protocol`
 mapping when it is already bound (for example by a second VM); the probe is
 best-effort, so msb may still report a conflict grabbed between probe and
 boot.
+
+## Daemons
+
+A daemon is a long-running process that msb-circus starts and supervises
+in the sandbox, for example a web interface of a harness or a dev server.
+Without daemons, you start such a process by hand in a shell
+(`msb-circus exec -- bash`) and it stops when the shell ends. You define
+daemons in `.agent-circus/config.toml`, and msb-circus starts them on every
+boot.
+
+The sandbox image runs the process supervisor s6 as PID 1 (see
+[How It Works](#how-it-works)). msb-circus registers every daemon as an s6
+service. s6 restarts a daemon when it exits, and stops it with SIGTERM
+when the sandbox stops. The image's own s6 services (the Docker engine,
+the SSH agent bridge) are not daemons; you do not configure them.
+
+### OpenCode Web Interface
+
+This example runs the OpenCode server in the sandbox and makes it
+reachable from the host at `http://127.0.0.1:4096`:
+
+``` toml
+[[msb.daemons]]
+name = "opencode-web"
+command = ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096"]
+port = 4096
+env_passthrough = ["OPENCODE_PASSWORD"]
+
+[[port_forwards]]
+container_port = 4096
+```
+
+- `--hostname 0.0.0.0` is necessary. A server that binds to `127.0.0.1` in
+  the guest cannot be reached through a port forward (see
+  [Port Forwarding](#port-forwarding)).
+- `port` does not forward the port. It tells msb-circus to wait until the
+  daemon accepts connections, and to show the URL of a matching
+  `[[port_forwards]]` entry. Port forwards stay a separate setting.
+- OpenCode always requires a login: user `opencode` and a password.
+  `env_passthrough` reads the password from `OPENCODE_PASSWORD` in your
+  host shell. The variable must be set; otherwise msb-circus registers no
+  daemon at all and prints a warning.
+- Without the `env_passthrough` line, OpenCode makes up a new password at
+  every start, including restarts after a crash. Read it with
+  `msb-circus daemon logs opencode-web | grep 'server password'`. The
+  password then stays in plain text in the daemon log.
+- Do not put the password in `env`: `config.toml` is often in Git.
+
+Port mappings are fixed when the sandbox is created. If you add the
+`[[port_forwards]]` entry to an existing sandbox, re-create it with
+`msb-circus rm -f && msb-circus up`.
+
+### Daemon Settings
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `name` | (required) | Unique name: lowercase letters, digits and `-`, at most 40 characters |
+| `command` | (required) | Command and arguments, as a list. No shell runs it; use `["sh", "-c", "..."]` for shell syntax. |
+| `autostart` | `true` | Start the daemon on every boot. With `false`, start it with `msb-circus daemon start`. |
+| `port` | none | Guest TCP port. msb-circus waits up to 30 seconds for it after a start, and shows the URL. |
+| `workdir` | the `[msb.agent]` workdir | Guest working directory |
+| `env` | none | Extra environment variables |
+| `env_passthrough` | none | Host environment variables, with the same patterns as the top-level `env_passthrough` |
+
+A daemon also gets the variables of the top-level `env_passthrough`, and
+`SSH_AUTH_SOCK` when SSH agent forwarding is on. `env` wins over both.
+
+### Commands
+
+``` shell
+msb-circus daemons                    # list daemons: state, PID, uptime, URL
+msb-circus daemon start opencode-web  # start a stopped or failed daemon
+msb-circus daemon stop opencode-web   # stop it until the next start or boot
+msb-circus daemon restart opencode-web
+msb-circus daemon logs opencode-web       # last 100 lines
+msb-circus daemon logs -f -n 20 opencode-web  # follow new lines
+```
+
+`up` and `start` register the daemons from the configuration. `up` also
+applies configuration changes to a sandbox that is already running: it
+adds new daemons, updates changed ones and removes deleted ones. A changed
+daemon keeps running with its old settings until you restart it with
+`msb-circus daemon restart`. When you delete the last daemon from the
+configuration, it keeps running until the sandbox stops. `msb-circus exec`
+does not register daemons.
+
+The `STATE` column of `msb-circus daemons` shows one of these values:
+
+| State | Meaning |
+| --- | --- |
+| `running` | The process runs. |
+| `starting` | s6 starts or restarts the process. |
+| `stopping` | The process got SIGTERM and has not exited yet. |
+| `stopped` | The daemon is stopped (`daemon stop`, or `autostart = false`). |
+| `failed` | The daemon exited 5 times within 60 seconds, and s6 stopped restarting it. Read the log, fix the cause, then run `msb-circus daemon start`. |
+| `not registered` | The daemon is in the configuration but not in the sandbox. Run `msb-circus up`. |
+
+The logs are in the guest at `/var/log/circus-daemons/<name>/current`.
+They keep the daemon's stdout and stderr, with a timestamp per line, and
+survive a restart of the sandbox. s6 rotates them at 1 MB and keeps 10 old
+files.
+
+### Daemon Secrets
+
+`msb-circus exec` passes variables to one process, and they are gone when
+it ends. A daemon is started by s6, and s6 restarts it after a crash, so
+the variables must be stored in the guest. msb-circus therefore writes the
+environment of each daemon (`env`, `env_passthrough` and the top-level
+`env_passthrough`) to a file in the guest:
+
+- The file is `/run/circus-daemons/<name>/env.sh`. `/run/circus-daemons` is
+  a separate tmpfs (memory only) that only root can read. The values do not
+  reach the disk of the sandbox, and they are gone when the sandbox stops.
+  msb-circus writes them again at the next `up` or `start`.
+- Every process that runs as root in the sandbox can read the file. All
+  commands in the sandbox run as root, including the agents. An agent can
+  therefore read the secrets of every daemon, the same as it can read the
+  secrets of its own environment.
+- While msb-circus registers the daemons, the values are on the command
+  line of the `msb` process on the host, the same as for
+  `msb-circus exec -e`.
+
+Give a daemon only the secrets it needs.
+
+### Limitations of Daemons
+
+- Daemons need s6-overlay as PID 1. A custom image without s6 (see
+  [Images](#images)) cannot run daemons; msb-circus prints a warning and
+  boots the sandbox without them.
+- `port` only checks TCP on `127.0.0.1` in the guest.
+- A daemon runs as root, like every other command in the sandbox.
 
 ## Docker and Disks
 
@@ -1153,6 +1298,7 @@ One workspace maps to one sandbox, and all harnesses of a workspace share
 it. Commands in the sandbox run as root, because the Docker engine in the
 guest needs root. There is no per-agent user separation yet.
 
-msb-circus does not start sidecar services. Features of agent-circus that
+msb-circus does not start sidecar containers. Features of agent-circus that
 need companion containers, for example llama.cpp or claude-mem, have no
-msb-circus equivalent yet.
+msb-circus equivalent yet. A process that runs in the sandbox itself can
+run as a [daemon](#daemons).

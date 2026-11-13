@@ -23,6 +23,7 @@ from .config import (
     INIT_NONE,
     SSH_AGENT_GUEST_SOCKET,
     SSH_AGENT_VSOCK_PORT,
+    DaemonConfig,
     MsbConfig,
     docker_enabled,
     docker_volume_name_for_workspace,
@@ -33,6 +34,19 @@ from .config import (
     resolve_agent_workdir,
     resolve_mounts,
     sandbox_name_for_workspace,
+)
+from .daemons import (
+    build_install_script,
+    build_logs_command,
+    build_port_wait_script,
+    build_restart_script,
+    build_start_script,
+    build_status_script,
+    build_stop_all_script,
+    build_stop_script,
+    encode_env_files,
+    format_duration,
+    parse_status_output,
 )
 from .envs import parse_env_assignments, resolve_passthrough
 from .exceptions import ConfigurationError, MsbCircusError, MsbCommandError
@@ -126,6 +140,12 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
+daemon_app = typer.Typer(
+    help="Start, stop, restart and read the logs of a configured daemon.",
+    no_args_is_help=True,
+)
+app.add_typer(daemon_app, name="daemon")
+
 logger = logging.getLogger(__name__)
 
 #: Budget for the post-boot/start dockerd readiness probe.
@@ -138,6 +158,9 @@ SSH_AGENT_PROBE_DELAY = 0.5
 
 #: Seconds between ``msb list`` polls while waiting for an s6 shutdown.
 STOP_POLL_INTERVAL = 0.5
+
+#: Seconds msb-circus waits for an autostarted daemon's port to open.
+DAEMON_READY_TIMEOUT = 30
 
 
 def _monotonic() -> float:
@@ -863,7 +886,12 @@ def up(
     """
     config, invoker = _resolve_invoker(workspace)
     _ensure_sandbox_running(
-        invoker, config, workspace, allow_build=build, engine=engine
+        invoker,
+        config,
+        workspace,
+        allow_build=build,
+        engine=engine,
+        sync_daemons=True,
     )
 
 
@@ -1894,6 +1922,164 @@ def _check_docker_volume(invoker: MsbInvoker, config: MsbConfig, volume: str) ->
     )
 
 
+def _daemon_envs(config: MsbConfig) -> dict[str, dict[str, str]]:
+    """Return the merged environment of every configured daemon.
+
+    The environment of a daemon is, in increasing precedence: the
+    top-level ``env_passthrough`` variables, ``SSH_AUTH_SOCK`` (when
+    ``[ssh]`` is configured), the daemon's own ``env_passthrough``
+    variables, and its ``env`` entries.
+
+    :param config: Resolved msb-circus configuration.
+    :returns: Mapping of daemon name to its merged environment.
+    :raises ConfigurationError: If a passthrough variable is unset on the
+        host.
+    """
+    base = resolve_passthrough(config.env_passthrough)
+    if config.ssh:
+        base = {**base, "SSH_AUTH_SOCK": SSH_AGENT_GUEST_SOCKET}
+    return {
+        daemon.name: {
+            **base,
+            **resolve_passthrough(daemon.env_passthrough),
+            **daemon.env,
+        }
+        for daemon in config.daemons
+    }
+
+
+def _daemon_url(config: MsbConfig, port: int) -> str | None:
+    """Return the host URL that reaches a guest TCP port, if forwarded.
+
+    :param config: Resolved msb-circus configuration.
+    :param port: Guest TCP port the daemon listens on.
+    :returns: ``http://`` URL of the first matching TCP port forward, or
+        ``None`` when no TCP forward publishes the port.
+    """
+    forward = next(
+        (
+            f
+            for f in config.port_forwards
+            if f.protocol == "tcp" and f.guest_port == port
+        ),
+        None,
+    )
+    if forward is None:
+        return None
+    if forward.host in ("0.0.0.0", "::", ""):
+        host = "127.0.0.1"
+    elif ":" in forward.host:
+        host = f"[{forward.host}]"
+    else:
+        host = forward.host
+    return f"http://{host}:{forward.host_port}"
+
+
+def _wait_for_daemon_port(
+    invoker: MsbInvoker, config: MsbConfig, name: str, daemon: DaemonConfig
+) -> bool:
+    """Wait until an autostarted daemon's guest port accepts connections.
+
+    The daemon must have a ``port``; callers filter daemons without one.
+    The wait probes the guest port for :data:`DAEMON_READY_TIMEOUT`
+    seconds and never raises.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param config: Resolved msb-circus configuration.
+    :param name: Sandbox name.
+    :param daemon: Daemon to wait for; ``daemon.port`` must not be ``None``.
+    :returns: Whether the port opened in time.
+    """
+    port = daemon.port
+    if port is None:
+        return True
+    try:
+        result = invoker.run(
+            build_exec_args(
+                name,
+                ["sh", "-c", build_port_wait_script(port, DAEMON_READY_TIMEOUT)],
+                tty=None,
+            ),
+            check=False,
+            timeout=DAEMON_READY_TIMEOUT + 15,
+        )
+    except MsbCommandError as e:
+        logger.debug("Port wait for daemon %s in %s failed: %s", daemon.name, name, e)
+        result = None
+    url = _daemon_url(config, port)
+    if result is not None and result.returncode == 0:
+        logger.info(
+            "Daemon %s is ready on guest port %s%s",
+            daemon.name,
+            port,
+            f" ({url})" if url else "",
+        )
+        return True
+    logger.warning(
+        "Daemon %s did not open guest port %s within %s s. "
+        "See: msb-circus daemon logs %s",
+        daemon.name,
+        port,
+        DAEMON_READY_TIMEOUT,
+        daemon.name,
+    )
+    return False
+
+
+def _ensure_daemons(
+    invoker: MsbInvoker, config: MsbConfig, name: str, workspace: Path
+) -> None:
+    """Register the configured daemons with s6 inside the sandbox.
+
+    Runs the install script from :mod:`msb_circus.daemons` in the guest
+    and waits for the ports of autostarted daemons. Never raises: config
+    or msb failures warn and leave the sandbox running without daemons.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param config: Resolved msb-circus configuration.
+    :param name: Sandbox name.
+    :param workspace: Workspace directory (for the daemon workdir).
+    """
+    if not config.daemons:
+        return
+    try:
+        envs = _daemon_envs(config)
+        script = build_install_script(
+            config.daemons, resolve_agent_workdir(config, workspace)
+        )
+        result = invoker.run(
+            build_exec_args(
+                name,
+                ["sh", "-c", script],
+                env=encode_env_files(envs),
+                tty=None,
+            ),
+            check=False,
+        )
+    except (ConfigurationError, MsbCommandError, ValueError) as e:
+        logger.warning("Daemons are not registered in %s: %s", name, e)
+        return
+    if result.returncode == 3:
+        logger.warning(
+            "Daemons are not registered in %s: the sandbox image has no "
+            "s6-overlay as PID 1",
+            name,
+        )
+        return
+    if result.returncode != 0:
+        logger.warning(
+            "Daemons are not registered in %s (exit code %s): %s",
+            name,
+            result.returncode,
+            (result.stderr or "").strip(),
+        )
+        return
+    logger.info("Registered %d daemon(s) in %s", len(config.daemons), name)
+    for daemon in config.daemons:
+        if daemon.autostart and daemon.port is not None:
+            _wait_for_daemon_port(invoker, config, name, daemon)
+
+
 def _ensure_sandbox_running(
     invoker: MsbInvoker,
     config: MsbConfig,
@@ -1901,6 +2087,7 @@ def _ensure_sandbox_running(
     *,
     allow_build: bool = False,
     engine: str = "podman",
+    sync_daemons: bool = False,
 ) -> None:
     """Ensure the workspace sandbox exists and is running.
 
@@ -1915,6 +2102,8 @@ def _ensure_sandbox_running(
     :param allow_build: Build and import the image when it is missing
         instead of failing.
     :param engine: Host engine used when building.
+    :param sync_daemons: Also register daemons in an already-running
+        sandbox, to apply config changes.
     :raises typer.Exit: If the image is missing and building is not allowed,
         or the workspace is in a linked Git worktree.
     """
@@ -1985,6 +2174,8 @@ def _ensure_sandbox_running(
         _warn_on_mount_drift(invoker, config, name, workspace)
         _warn_on_trust_host_cas_drift(invoker, config, name)
         _check_dockerd(invoker, config, name)
+        if sync_daemons:
+            _ensure_daemons(invoker, config, name, workspace)
         return
 
     if existing is not None:
@@ -2072,6 +2263,7 @@ def _ensure_sandbox_running(
         _check_ssh_agent(invoker, config, name)
 
     _check_dockerd(invoker, config, name)
+    _ensure_daemons(invoker, config, name, workspace)
 
 
 def _stop_sandbox(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
@@ -2103,6 +2295,15 @@ def _stop_sandbox(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
         invoker.run(build_stop_args(name))
         return
     logger.info("Shutting down the services in %s...", name)
+    if config.daemons:
+        logger.info("Stopping the daemons in %s...", name)
+        try:
+            invoker.run(
+                build_exec_args(name, ["sh", "-c", build_stop_all_script()], tty=None),
+                check=False,
+            )
+        except MsbCommandError as e:
+            logger.debug("Stopping the daemons in %s failed: %s", name, e)
     try:
         invoker.run(build_init_shutdown_args(name), check=False)
     except MsbCommandError as e:
@@ -2195,6 +2396,7 @@ def start(
             typer.echo(_dockerd_warning(name, last_error), err=True)
     else:
         typer.echo(f"✓ Started {name} (docker is not enabled for this sandbox)")
+    _ensure_daemons(invoker, config, name, workspace)
 
 
 @app.command()
@@ -2463,6 +2665,319 @@ def exec_(
                 logger.warning("Could not finish the execution trace: %s", e)
     if returncode != 0:
         raise typer.Exit(code=returncode)
+
+
+def _format_columns(rows: list[list[str]]) -> str:
+    """Format table rows as aligned, space-separated columns.
+
+    Every column is padded with :meth:`str.ljust` to its widest cell
+    plus 2 spaces of separation; the last column is not padded. Trailing
+    spaces are stripped from each line.
+
+    :param rows: Table rows, header row first, all of equal width.
+    :returns: The rendered table, lines joined with newlines.
+    """
+    widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
+    lines = []
+    for row in rows:
+        cells = [cell.ljust(width) for cell, width in zip(row[:-1], widths[:-1])]
+        cells.append(row[-1])
+        lines.append("  ".join(cells).rstrip())
+    return "\n".join(lines)
+
+
+def _require_running_sandbox(invoker: MsbInvoker, name: str) -> None:
+    """Exit with an error when the sandbox is not running.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param name: Sandbox name to look for among the running sandboxes.
+    :raises typer.Exit: With code 1 when the list call fails or the
+        sandbox is not running.
+    """
+    try:
+        sandboxes = _list_sandboxes(invoker, running_only=True)
+    except (MsbCommandError, ConfigurationError):
+        sandboxes = []
+    if not any(sandbox.name == name for sandbox in sandboxes):
+        typer.echo(
+            f"Error: sandbox {name} is not running. Start it with: msb-circus up",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+
+def _require_daemon(config: MsbConfig, daemon_name: str) -> DaemonConfig:
+    """Return the configured daemon with the given name, or exit.
+
+    :param config: Resolved msb-circus configuration.
+    :param daemon_name: Daemon name to look up.
+    :returns: The matching daemon configuration.
+    :raises typer.Exit: With code 1 when no configured daemon matches.
+    """
+    for daemon in config.daemons:
+        if daemon.name == daemon_name:
+            return daemon
+    names = [daemon.name for daemon in config.daemons]
+    hint = f" (configured: {', '.join(names)})" if names else ""
+    typer.echo(
+        f"Error: no daemon named {daemon_name!r} in [[msb.daemons]]{hint}",
+        err=True,
+    )
+    raise typer.Exit(code=1)
+
+
+def _run_daemon_script(
+    invoker: MsbInvoker, name: str, daemon_name: str, script: str
+) -> None:
+    """Run a daemon control script in the sandbox or exit with an error.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param name: Sandbox name.
+    :param daemon_name: Daemon the script acts on (for error messages).
+    :param script: Shell script text to run in the guest.
+    :raises typer.Exit: With code 1 when the exec fails, the daemon is
+        not registered (script exit code 4), or the script fails.
+    """
+    try:
+        result = invoker.run(
+            build_exec_args(name, ["sh", "-c", script], tty=None), check=False
+        )
+    except MsbCommandError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    if result.returncode == 4:
+        typer.echo(
+            f"Error: daemon {daemon_name} is not registered in {name}. "
+            "Register it with: msb-circus up",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if result.returncode != 0:
+        typer.echo(
+            f"Error: the daemon command failed (exit code {result.returncode}): "
+            f"{(result.stderr or '').strip()}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+
+def _print_daemon_ready(
+    invoker: MsbInvoker, config: MsbConfig, name: str, daemon: DaemonConfig
+) -> None:
+    """Wait for a daemon's port and print its host URL when it opened.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param config: Resolved msb-circus configuration.
+    :param name: Sandbox name.
+    :param daemon: Daemon that was started or restarted.
+    """
+    if daemon.port is None:
+        return
+    if not _wait_for_daemon_port(invoker, config, name, daemon):
+        return
+    url = _daemon_url(config, daemon.port)
+    if url:
+        print(f"  {url}")
+
+
+@app.command(name="daemons")
+def daemons_list(
+    workspace: Annotated[
+        Path,
+        typer.Option(
+            "--workspace",
+            "-w",
+            help="Workspace directory path.",
+            exists=True,
+            file_okay=False,
+            resolve_path=True,
+        ),
+    ] = Path("."),
+) -> None:
+    """List the configured daemons and their state in the workspace sandbox."""
+    config, invoker = _resolve_invoker(workspace)
+    name = sandbox_name_for_workspace(workspace)
+    _require_running_sandbox(invoker, name)
+    try:
+        result = invoker.run(
+            build_exec_args(name, ["sh", "-c", build_status_script()], tty=None),
+            check=False,
+        )
+    except MsbCommandError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    if result.returncode != 0:
+        typer.echo(
+            f"Error: the daemon status check failed (exit code {result.returncode}): "
+            f"{(result.stderr or '').strip()}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    statuses = parse_status_output(result.stdout or "")
+    if not config.daemons and not statuses:
+        typer.echo(
+            "No daemons configured. Add them under [[msb.daemons]] "
+            "in .agent-circus/config.toml."
+        )
+        return
+    configured = {daemon.name for daemon in config.daemons}
+    rows = [["NAME", "STATE", "PID", "UPTIME", "PORT", "URL"]]
+    for daemon in config.daemons:
+        status = statuses.get(daemon.name)
+        url = _daemon_url(config, daemon.port) if daemon.port is not None else None
+        rows.append(
+            [
+                daemon.name,
+                status.state if status is not None else "not registered",
+                str(status.pid)
+                if status is not None and status.pid is not None
+                else "-",
+                format_duration(status.seconds) if status is not None else "-",
+                str(daemon.port) if daemon.port is not None else "-",
+                url or "-",
+            ]
+        )
+    for status_name, status in statuses.items():
+        if status_name in configured:
+            continue
+        rows.append(
+            [
+                status_name,
+                f"{status.state} (not in config)",
+                str(status.pid) if status.pid is not None else "-",
+                format_duration(status.seconds),
+                "-",
+                "-",
+            ]
+        )
+    print(_format_columns(rows))
+
+
+@daemon_app.command(name="start")
+def daemon_start(
+    daemon_name: Annotated[
+        str, typer.Argument(help="Daemon name from [[msb.daemons]].")
+    ],
+    workspace: Annotated[
+        Path,
+        typer.Option(
+            "--workspace",
+            "-w",
+            help="Workspace directory path.",
+            exists=True,
+            file_okay=False,
+            resolve_path=True,
+        ),
+    ] = Path("."),
+) -> None:
+    """Start a configured daemon in the workspace sandbox."""
+    config, invoker = _resolve_invoker(workspace)
+    name = sandbox_name_for_workspace(workspace)
+    daemon = _require_daemon(config, daemon_name)
+    _require_running_sandbox(invoker, name)
+    _run_daemon_script(invoker, name, daemon_name, build_start_script(daemon_name))
+    print(f"✓ Started daemon {daemon_name}")
+    _print_daemon_ready(invoker, config, name, daemon)
+
+
+@daemon_app.command(name="stop")
+def daemon_stop(
+    daemon_name: Annotated[
+        str, typer.Argument(help="Daemon name from [[msb.daemons]].")
+    ],
+    workspace: Annotated[
+        Path,
+        typer.Option(
+            "--workspace",
+            "-w",
+            help="Workspace directory path.",
+            exists=True,
+            file_okay=False,
+            resolve_path=True,
+        ),
+    ] = Path("."),
+) -> None:
+    """Stop a configured daemon in the workspace sandbox."""
+    config, invoker = _resolve_invoker(workspace)
+    name = sandbox_name_for_workspace(workspace)
+    _require_daemon(config, daemon_name)
+    _require_running_sandbox(invoker, name)
+    _run_daemon_script(invoker, name, daemon_name, build_stop_script(daemon_name))
+    print(f"✓ Stopped daemon {daemon_name}")
+
+
+@daemon_app.command(name="restart")
+def daemon_restart(
+    daemon_name: Annotated[
+        str, typer.Argument(help="Daemon name from [[msb.daemons]].")
+    ],
+    workspace: Annotated[
+        Path,
+        typer.Option(
+            "--workspace",
+            "-w",
+            help="Workspace directory path.",
+            exists=True,
+            file_okay=False,
+            resolve_path=True,
+        ),
+    ] = Path("."),
+) -> None:
+    """Restart a configured daemon in the workspace sandbox."""
+    config, invoker = _resolve_invoker(workspace)
+    name = sandbox_name_for_workspace(workspace)
+    daemon = _require_daemon(config, daemon_name)
+    _require_running_sandbox(invoker, name)
+    _run_daemon_script(invoker, name, daemon_name, build_restart_script(daemon_name))
+    print(f"✓ Restarted daemon {daemon_name}")
+    _print_daemon_ready(invoker, config, name, daemon)
+
+
+@daemon_app.command(name="logs")
+def daemon_logs(
+    daemon_name: Annotated[
+        str, typer.Argument(help="Daemon name from [[msb.daemons]].")
+    ],
+    lines: Annotated[
+        int,
+        typer.Option("--lines", "-n", min=1, help="Number of lines to show."),
+    ] = 100,
+    follow: Annotated[
+        bool,
+        typer.Option("--follow", "-f", help="Keep printing new log lines."),
+    ] = False,
+    workspace: Annotated[
+        Path,
+        typer.Option(
+            "--workspace",
+            "-w",
+            help="Workspace directory path.",
+            exists=True,
+            file_okay=False,
+            resolve_path=True,
+        ),
+    ] = Path("."),
+) -> None:
+    """Show the log output of a configured daemon."""
+    config, invoker = _resolve_invoker(workspace)
+    name = sandbox_name_for_workspace(workspace)
+    _require_daemon(config, daemon_name)
+    _require_running_sandbox(invoker, name)
+    try:
+        result = invoker.run(
+            build_exec_args(
+                name, build_logs_command(daemon_name, lines, follow), tty=None
+            ),
+            check=False,
+            capture_output=False,
+        )
+    except KeyboardInterrupt:
+        raise typer.Exit(code=130) from None
+    except MsbCommandError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    if result.returncode != 0:
+        raise typer.Exit(code=result.returncode)
 
 
 def run_cli() -> None:

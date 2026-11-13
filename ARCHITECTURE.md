@@ -241,6 +241,7 @@ sequenceDiagram
     CLI->>Guest: msb exec: ssh-add -l probe ([ssh], warn only)
     CLI->>MSB: msb inspect: drift warnings (config mounts, ports, disks, worktree mirror)
     CLI->>Guest: msb exec: docker info until ready (if docker enabled)
+    CLI->>Guest: msb exec: register [[msb.daemons]] with s6, wait for their ports
 ```
 
 All per-boot guest steps are **best-effort**: failures log warnings and
@@ -258,6 +259,7 @@ flowchart TB
         dockerd["circus-dockerd (longrun)<br/>only if /var/lib/docker is usable<br/>log: /tmp/dockerd.log"]
         socat["circus-ssh-agent-bridge (longrun)<br/>only if CIRCUS_SSH_AGENT_VSOCK_PORT set<br/>/run/ssh-agent.sock <-> VSOCK 2:22022<br/>log: /tmp/ssh-agent-bridge.log"]
         execs["msb exec sessions:<br/>harnesses, ACP streams, setup scripts"]
+        daemons["circus-daemon-&lt;name&gt; (runtime s6 services, [[msb.daemons]])<br/>/run/service/circus-daemon-&lt;name&gt;<br/>env: /run/circus-daemons (tmpfs, 0700)<br/>log: /var/log/circus-daemons/&lt;name&gt;"]
         msbdir["/.msb: scripts/, tls/, heartbeat.json, rootfs"]
         disks["/workspace (bind), /workspaces/&lt;name&gt; (bind),<br/>/root/.claude, /root/.codex (bind),<br/>/var/lib/docker (mount-owned ext4 disk,<br/>or named volume with docker_disk_persist)"]
     end
@@ -265,6 +267,7 @@ flowchart TB
     init --> ca --> dockerd
     init --> socat
     init --> execs
+    init --> daemons
     msbdir -. read by .-> ca
 ```
 
@@ -295,6 +298,20 @@ Notes:
   unless `--volumes` is given.
 - Go programs (dockerd) cache the system cert pool per process, so CAs
   must be installed **before** dockerd starts.
+- Daemons (`[[msb.daemons]]`, `daemons.py`) are not baked into the
+  image. After every boot (`up`, `start`; `up` also on a running
+  sandbox), msb-circus runs one install script: it mounts a private
+  tmpfs at `/run/circus-daemons` for the environment files (secrets),
+  writes `/run/service/circus-daemon-<name>/` (`run`, `finish`,
+  `timeout-kill`, `down` when `autostart = false`, `log/run` with
+  s6-log), removes daemons that left the config, and runs
+  `s6-svscanctl -an /run/service`. `/run` is on the root disk, but
+  s6-overlay resets `/run/service` on every boot. Environment files
+  travel base64-encoded in `--env CIRCUS_DAEMON_ENV_<NAME>` of that
+  exec. The `finish` script exits 125 (s6: do not restart) after 5
+  exits within 60 s and leaves a `failed` marker. `msb-circus stop`
+  stops all daemons with `s6-svc -wD -d` before `kill -TERM 1`, because
+  a test daemon got no clean SIGTERM from the s6-overlay shutdown alone.
 
 ### 5.5 Internal view: SSH agent forwarding
 
@@ -406,6 +423,7 @@ KVM, docker socket, or msb runtime.
 | Host entries | implemented (`809068f`) |
 | CA certificates (`[ca_certs]`) | in analysis, see §9 |
 | Init system (s6-overlay) | implemented; pending live verification (plan-msb-s6.md) |
+| Daemons (`[[msb.daemons]]`, runtime s6 services) | implemented, pending live verification |
 
 ## 9. Work in progress
 

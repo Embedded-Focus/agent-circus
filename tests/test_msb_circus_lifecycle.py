@@ -14,7 +14,7 @@ from typer.testing import CliRunner
 
 import msb_circus.cli as cli_module
 from msb_circus.cli import _format_capacity, app
-from msb_circus.config import sandbox_name_for_workspace
+from msb_circus.config import parse_config, sandbox_name_for_workspace
 from msb_circus.exceptions import MsbCommandError
 from msb_circus.gitconfig import (
     GIT_GUEST_DIR,
@@ -1637,3 +1637,147 @@ def test_up_does_not_warn_when_docker_volume_matches(tmp_path, fake_msb):
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
     assert "differ" not in result.output
+
+
+def _enable_daemons(tmp_path: Path, extra: str = "") -> None:
+    """Write a config with one daemon (port 4096) and a matching port forward.
+
+    :param tmp_path: Workspace directory to place ``.agent-circus`` in.
+    :param extra: Extra TOML appended to the generated config.
+    """
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir(exist_ok=True)
+    (config_dir / "config.toml").write_bytes(
+        (
+            "[[msb.daemons]]\n"
+            'name = "web"\n'
+            'command = ["python", "-m", "http.server", "4096"]\n'
+            "port = 4096\n"
+            'env = { A = "1" }\n'
+            "[[port_forwards]]\n"
+            "container_port = 4096\n"
+            "host_port = 14096\n" + extra
+        ).encode()
+    )
+
+
+def _install_calls(fake_msb: dict) -> list[list[str]]:
+    """Return the daemon-install exec calls recorded by the fake invoker.
+
+    :param fake_msb: Behavior dict of the ``fake_msb`` fixture.
+    :returns: Exec argv lists that install the ``web`` daemon.
+    """
+    return [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "exec"
+        and any("circus-daemon-web" in a for a in c)
+        and "s6-svscanctl" in c[-1]
+    ]
+
+
+def test_up_registers_daemons_on_new_sandbox(tmp_path, fake_msb):
+    _enable_daemons(tmp_path)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    installs = _install_calls(fake_msb)
+    assert len(installs) == 1
+    envs = [installs[0][i + 1] for i, a in enumerate(installs[0]) if a == "--env"]
+    assert any(v.startswith("CIRCUS_DAEMON_ENV_WEB=") for v in envs)
+    waits = [
+        c for c in fake_msb["calls"] if c[0] == "exec" and "TCP:127.0.0.1:4096" in c[-1]
+    ]
+    assert len(waits) == 1
+
+
+def test_up_without_daemons_does_not_touch_s6_services(tmp_path, fake_msb):
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert not [c for c in fake_msb["calls"] if any("s6-svscanctl" in a for a in c)]
+
+
+def test_up_registers_daemons_in_already_running_sandbox(tmp_path, fake_msb):
+    _enable_daemons(tmp_path)
+    name = sandbox_name_for_workspace(tmp_path)
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert not [c for c in fake_msb["calls"] if c[0] in ("run", "start")]
+    assert len(_install_calls(fake_msb)) == 1
+
+
+def test_exec_does_not_register_daemons(tmp_path, fake_msb):
+    _enable_daemons(tmp_path)
+    name = sandbox_name_for_workspace(tmp_path)
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    result = runner.invoke(app, ["exec", "--workspace", str(tmp_path), "--", "true"])
+    assert result.exit_code == 0
+    assert not _install_calls(fake_msb)
+
+
+def test_stop_stops_daemons_before_init_shutdown(tmp_path, fake_msb):
+    _enable_daemons(tmp_path)
+    name = sandbox_name_for_workspace(tmp_path)
+    fake_msb["pid1"] = "s6-svscan\n"
+    fake_msb["list_outputs"] = [
+        json.dumps([{"name": name, "status": "Running"}]),
+        json.dumps([{"name": name, "status": "Stopped"}]),
+    ]
+    result = runner.invoke(app, ["stop", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    calls = fake_msb["calls"]
+    stop_all = [
+        i
+        for i, c in enumerate(calls)
+        if c[0] == "exec" and "s6-svc -wD" in c[-1] and "kill -TERM 1" not in c[-1]
+    ]
+    kill = [i for i, c in enumerate(calls) if c[-3:] == ["sh", "-c", "kill -TERM 1"]]
+    assert stop_all and kill
+    assert stop_all[0] < kill[0]
+
+
+def test_daemon_url_maps_wildcard_host_to_loopback():
+    config = parse_config(
+        {"port_forwards": [{"guest_port": 4096, "host_port": 14096, "host": "0.0.0.0"}]}
+    )
+    assert cli_module._daemon_url(config, 4096) == "http://127.0.0.1:14096"
+
+
+def test_daemon_url_wraps_ipv6_host_in_brackets():
+    config = parse_config(
+        {"port_forwards": [{"guest_port": 4096, "host_port": 14096, "host": "::1"}]}
+    )
+    assert cli_module._daemon_url(config, 4096) == "http://[::1]:14096"
+
+
+def test_daemon_url_returns_none_without_matching_forward():
+    config = parse_config({})
+    assert cli_module._daemon_url(config, 4096) is None
+
+
+def test_daemon_url_returns_none_for_udp_forward():
+    config = parse_config(
+        {"port_forwards": [{"guest_port": 4096, "host_port": 14096, "protocol": "udp"}]}
+    )
+    assert cli_module._daemon_url(config, 4096) is None
+
+
+def test_daemon_envs_daemon_env_overrides_passthrough(monkeypatch):
+    monkeypatch.setenv("CIRCUS_TEST_VAR", "from-host")
+    config = parse_config(
+        {
+            "env_passthrough": ["CIRCUS_TEST_VAR"],
+            "msb": {
+                "daemons": [
+                    {
+                        "name": "web",
+                        "command": ["x"],
+                        "env_passthrough": ["CIRCUS_TEST_VAR"],
+                        "env": {"CIRCUS_TEST_VAR": "from-daemon"},
+                    }
+                ]
+            },
+        }
+    )
+    envs = cli_module._daemon_envs(config)
+    assert envs["web"]["CIRCUS_TEST_VAR"] == "from-daemon"
