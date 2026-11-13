@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import base64
 import subprocess
+from pathlib import Path
 
 from msb_circus.config import DaemonConfig
 from msb_circus.daemons import (
+    EXIT_SVSCAN_NOT_READY,
     build_install_script,
     encode_env_files,
     env_transport_var,
@@ -162,3 +164,60 @@ def test_rendered_scripts_pass_shell_syntax_check() -> None:
     ]
     for script in scripts:
         assert subprocess.run(["sh", "-n", "-c", script], check=False).returncode == 0
+
+
+def _svscan_wait_loop(script: str, command_dir: Path) -> str:
+    """Cut the s6-svscan readiness loop out of an install script.
+
+    :param script: Rendered install script.
+    :param command_dir: Directory that replaces ``/command`` in the loop.
+    :returns: The loop as a standalone ``sh`` script.
+    """
+    lines = script.splitlines()
+    start = lines.index("i=0")
+    end = lines.index("done", start)
+    loop = "\n".join(lines[start : end + 1]).replace("/command/", f"{command_dir}/")
+    return f"set -eu\n{loop}\necho ready\n"
+
+
+def test_install_script_waits_for_svscan_before_installing() -> None:
+    script = build_install_script(
+        [DaemonConfig(name="web", command=("sleep", "1"))], "/workspace"
+    )
+    probe = script.index("until /command/s6-svscanctl -a /run/service")
+    assert probe < script.index("mkdir -p /run/circus-daemons")
+    assert probe < script.index("# daemon web")
+
+
+def test_install_script_wait_loop_retries_until_svscan_is_up(tmp_path: Path) -> None:
+    counter = tmp_path / "calls"
+    fake = tmp_path / "s6-svscanctl"
+    # Fail twice with exit code 100 (no s6-svscan running), then succeed.
+    fake.write_text(
+        "#!/bin/sh\n"
+        f"n=$(cat {counter} 2>/dev/null || echo 0); n=$((n + 1)); echo $n > {counter}\n"
+        '[ "$n" -ge 3 ] || exit 100\n'
+    )
+    fake.chmod(0o755)
+    loop = _svscan_wait_loop(build_install_script([], "/workspace"), tmp_path)
+    result = subprocess.run(
+        ["sh", "-c", loop], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0
+    assert result.stdout == "ready\n"
+    assert counter.read_text().strip() == "3"
+
+
+def test_install_script_wait_loop_times_out_with_dedicated_code(
+    tmp_path: Path,
+) -> None:
+    fake = tmp_path / "s6-svscanctl"
+    fake.write_text("#!/bin/sh\nexit 100\n")
+    fake.chmod(0o755)
+    loop = _svscan_wait_loop(build_install_script([], "/workspace"), tmp_path)
+    loop = loop.replace("sleep 0.2", "true")
+    result = subprocess.run(
+        ["sh", "-c", loop], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == EXIT_SVSCAN_NOT_READY
+    assert "s6-svscan is not running on /run/service" in result.stderr

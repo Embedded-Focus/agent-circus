@@ -36,6 +36,9 @@ from .config import (
     sandbox_name_for_workspace,
 )
 from .daemons import (
+    EXIT_SVSCAN_NOT_READY,
+    SVSCAN_WAIT_INTERVAL_S,
+    SVSCAN_WAIT_TRIES,
     build_install_script,
     build_logs_command,
     build_port_wait_script,
@@ -2064,6 +2067,13 @@ def _ensure_daemons(
             "Daemons are not registered in %s: the sandbox image has no "
             "s6-overlay as PID 1",
             name,
+        )
+        return
+    if result.returncode == EXIT_SVSCAN_NOT_READY:
+        logger.warning(
+            "Daemons are not registered in %s: s6-svscan did not start within %.0f s",
+            name,
+            SVSCAN_WAIT_TRIES * SVSCAN_WAIT_INTERVAL_S,
         )
         return
     if result.returncode != 0:

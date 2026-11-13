@@ -26,6 +26,12 @@ if TYPE_CHECKING:
 S6_SCANDIR = "/run/service"
 #: Prefix of the s6 service directory for a daemon.
 SERVICE_PREFIX = "circus-daemon-"
+#: Seconds between readiness probes of s6-svscan in the install script.
+SVSCAN_WAIT_INTERVAL_S = 0.2
+#: Number of readiness probes before the install script gives up (~20 s).
+SVSCAN_WAIT_TRIES = 100
+#: Install script exit code when s6-svscan does not come up in time.
+EXIT_SVSCAN_NOT_READY = 5
 #: Guest root of the private tmpfs holding daemon secrets.
 SECRET_ROOT = "/run/circus-daemons"
 #: Guest root of s6-log directories for daemons.
@@ -193,7 +199,10 @@ def build_install_script(daemons: Sequence[DaemonConfig], workdir: str) -> str:
 
     The script is meant to run inside the guest as root, with one
     environment variable per daemon carrying the base64-encoded
-    environment file.  It installs or updates each service directory,
+    environment file.  It first waits until s6-svscan watches the scan
+    directory, because s6-overlay may still be starting it right after
+    boot (exit code :data:`EXIT_SVSCAN_NOT_READY` on timeout).  It then
+    installs or updates each service directory,
     marks non-autostart daemons down, removes daemons that are no longer
     configured and finally tells s6 to scan for new services.
 
@@ -204,10 +213,22 @@ def build_install_script(daemons: Sequence[DaemonConfig], workdir: str) -> str:
     lines: list[str] = [
         "set -eu",
         "umask 077",
-        "if [ ! -d /run/service ] || [ ! -x /command/s6-svscanctl ]; then",
+        "if [ ! -x /command/s6-svscanctl ]; then",
         '    echo "msb-circus daemons need s6-overlay as PID 1 in the sandbox image" >&2',
         "    exit 3",
         "fi",
+        # Right after boot, s6-overlay may not have started s6-svscan yet;
+        # s6-svscanctl then exits 100. A rescan request (-a) is harmless,
+        # so use it as a readiness probe before touching the scan directory.
+        "i=0",
+        f"until /command/s6-svscanctl -a {S6_SCANDIR} 2>/dev/null; do",
+        "    i=$((i + 1))",
+        f'    if [ "$i" -ge {SVSCAN_WAIT_TRIES} ]; then',
+        f'        echo "s6-svscan is not running on {S6_SCANDIR}" >&2',
+        f"        exit {EXIT_SVSCAN_NOT_READY}",
+        "    fi",
+        f"    sleep {SVSCAN_WAIT_INTERVAL_S}",
+        "done",
         "mkdir -p /run/circus-daemons",
         "if ! mountpoint -q /run/circus-daemons; then",
         "    mount -t tmpfs -o size=1m,mode=0700 tmpfs /run/circus-daemons",
