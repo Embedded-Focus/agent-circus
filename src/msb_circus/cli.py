@@ -7,6 +7,7 @@ import os
 import subprocess
 import tempfile
 import time
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import Annotated
@@ -24,11 +25,13 @@ from .config import (
     SSH_AGENT_GUEST_SOCKET,
     SSH_AGENT_VSOCK_PORT,
     DaemonConfig,
+    HookConfig,
     MsbConfig,
     docker_enabled,
     docker_volume_name_for_workspace,
     effective_mounts,
     load_config,
+    load_hook_script,
     resolve_agent_config_mounts,
     resolve_agent_skill_mounts,
     resolve_agent_workdir,
@@ -86,6 +89,17 @@ from .gitworktree import (
     git_wrapper_script,
     has_sandbox_worktrees,
 )
+from .hooks import (
+    EXIT_RUNNER_FAILED,
+    EXIT_TIMEOUT,
+    build_check_env,
+    build_check_script,
+    build_run_env,
+    hook_key_hash,
+    log_path,
+    parse_check_output,
+)
+from .hooks import build_run_args as build_hook_run_args
 from .hostports import find_occupied_ports
 from .hosts import (
     loopback_names,
@@ -1925,6 +1939,33 @@ def _check_docker_volume(invoker: MsbInvoker, config: MsbConfig, volume: str) ->
     )
 
 
+def _merged_env(
+    config: MsbConfig,
+    env_passthrough: tuple[str, ...],
+    env: Mapping[str, str],
+) -> dict[str, str]:
+    """Return the environment of a daemon or hook.
+
+    In increasing precedence: the top-level ``env_passthrough`` variables,
+    ``SSH_AUTH_SOCK`` (when ``[ssh]`` is configured), *env_passthrough*,
+    and *env*.
+
+    :param config: Resolved msb-circus configuration.
+    :param env_passthrough: Extra passthrough patterns of the entry.
+    :param env: Extra variables of the entry.
+    :returns: Merged environment.
+    :raises ConfigurationError: If a passthrough variable is unset on the host.
+    """
+    base = resolve_passthrough(config.env_passthrough)
+    if config.ssh:
+        base = {**base, "SSH_AUTH_SOCK": SSH_AGENT_GUEST_SOCKET}
+    return {
+        **base,
+        **resolve_passthrough(env_passthrough),
+        **env,
+    }
+
+
 def _daemon_envs(config: MsbConfig) -> dict[str, dict[str, str]]:
     """Return the merged environment of every configured daemon.
 
@@ -1938,15 +1979,8 @@ def _daemon_envs(config: MsbConfig) -> dict[str, dict[str, str]]:
     :raises ConfigurationError: If a passthrough variable is unset on the
         host.
     """
-    base = resolve_passthrough(config.env_passthrough)
-    if config.ssh:
-        base = {**base, "SSH_AUTH_SOCK": SSH_AGENT_GUEST_SOCKET}
     return {
-        daemon.name: {
-            **base,
-            **resolve_passthrough(daemon.env_passthrough),
-            **daemon.env,
-        }
+        daemon.name: _merged_env(config, daemon.env_passthrough, daemon.env)
         for daemon in config.daemons
     }
 
@@ -2090,6 +2124,200 @@ def _ensure_daemons(
             _wait_for_daemon_port(invoker, config, name, daemon)
 
 
+def _hook_failed(hook: HookConfig, reason: str) -> bool:
+    """Log a failed hook; return ``False`` only for a required hook.
+
+    :param hook: The failed hook.
+    :param reason: Short reason for the log message.
+    :returns: ``True`` when the command may continue.
+    """
+    hint = f"see 'msb-circus hook logs {hook.name}'"
+    if hook.required:
+        logger.error("The required %s hook failed (%s); %s.", hook.name, reason, hint)
+        return False
+    logger.warning("The %s hook failed (%s); %s.", hook.name, reason, hint)
+    return True
+
+
+def _run_hook(
+    invoker: MsbInvoker,
+    config: MsbConfig,
+    name: str,
+    workspace: Path,
+    hook: HookConfig,
+    content: str,
+    *,
+    force: bool,
+    quiet: bool,
+) -> bool:
+    """Run one hook in the sandbox.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param config: Resolved msb-circus configuration.
+    :param name: Sandbox name.
+    :param workspace: Workspace directory (for the default workdir).
+    :param hook: Hook to run.
+    :param content: Script content (from :func:`load_hook_script`).
+    :param force: Run even when the hook is up to date.
+    :param quiet: Capture the output instead of showing it (ACP mode).
+    :returns: ``True`` when the command may continue (success, or failure
+        of an optional hook).
+    """
+    key = hook_key_hash(content) if hook.name == "provision" else None
+    try:
+        env = {
+            **_merged_env(config, hook.env_passthrough, hook.env),
+            **build_run_env(content, key, hook.timeout),
+        }
+    except ConfigurationError as e:
+        return _hook_failed(hook, str(e))
+    workdir = hook.workdir or resolve_agent_workdir(config, workspace)
+    logger.info(
+        "Running the %s hook in %s (log in the sandbox: %s)...",
+        hook.name,
+        name,
+        log_path(hook.name),
+    )
+    try:
+        result = invoker.run(
+            build_exec_args(
+                name,
+                build_hook_run_args(hook.name, force),
+                env=env,
+                workdir=workdir,
+                tty=None,
+            ),
+            capture_output=quiet,
+            check=False,
+        )
+    except MsbCommandError as e:
+        return _hook_failed(hook, str(e))
+    rc = result.returncode
+    if rc == 0:
+        logger.info("The %s hook finished in %s.", hook.name, name)
+        return True
+    if rc == EXIT_TIMEOUT and hook.timeout:
+        reason = f"timed out after {hook.timeout} s"
+    elif rc == EXIT_RUNNER_FAILED:
+        reason = "the hook runner failed in the sandbox"
+    else:
+        reason = f"exit code {rc}"
+    return _hook_failed(hook, reason)
+
+
+def _ensure_hooks(
+    invoker: MsbInvoker,
+    config: MsbConfig,
+    name: str,
+    workspace: Path,
+    *,
+    run_provision: bool,
+    quiet: bool,
+) -> bool:
+    """Run the due project hooks (``[msb.hooks]``) in the sandbox.
+
+    ``provision`` runs first, then ``startup``. With *run_provision*
+    false, a due ``provision`` hook is only reported. A failing check
+    never blocks the sandbox.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param config: Resolved msb-circus configuration.
+    :param name: Sandbox name.
+    :param workspace: Workspace directory.
+    :param run_provision: Run a due ``provision`` hook (else warn only).
+    :param quiet: Capture hook output instead of showing it (ACP mode).
+    :returns: ``False`` if a required hook failed, else ``True``.
+    """
+    hooks = [h for h in (config.hooks.provision, config.hooks.startup) if h is not None]
+    if not hooks:
+        return True
+    contents: dict[str, str] = {}
+    for hook in hooks:
+        try:
+            contents[hook.name] = load_hook_script(hook, workspace)
+        except ConfigurationError as e:
+            if not _hook_failed(hook, str(e)):
+                return False
+    if not contents:
+        return True
+    provision_hash = (
+        hook_key_hash(contents["provision"]) if "provision" in contents else None
+    )
+    try:
+        check = invoker.run(
+            build_exec_args(
+                name,
+                ["sh", "-c", build_check_script()],
+                env=build_check_env(provision_hash, "startup" in contents),
+                tty=None,
+            ),
+            check=False,
+        )
+    except MsbCommandError as e:
+        logger.warning("Could not check the hooks in %s: %s", name, e)
+        return True
+    if check.returncode != 0:
+        logger.warning(
+            "Could not check the hooks in %s (exit code %s).",
+            name,
+            check.returncode,
+        )
+        return True
+    due = parse_check_output(check.stdout or "")
+    provision = config.hooks.provision
+    if "provision" in due and provision is not None and "provision" in contents:
+        if not run_provision:
+            logger.warning(
+                "The provision hook in %s is new or changed; run 'msb-circus up' "
+                "to run it.",
+                name,
+            )
+        else:
+            if due["provision"] == "changed":
+                logger.info(
+                    "The provision script changed since the last run in %s.", name
+                )
+            if not _run_hook(
+                invoker,
+                config,
+                name,
+                workspace,
+                provision,
+                contents["provision"],
+                force=False,
+                quiet=quiet,
+            ):
+                return False
+    startup = config.hooks.startup
+    if "startup" in due and startup is not None and "startup" in contents:
+        ran = _run_hook(
+            invoker,
+            config,
+            name,
+            workspace,
+            startup,
+            contents["startup"],
+            force=False,
+            quiet=quiet,
+        )
+        if not ran:
+            return False
+    return True
+
+
+def _exit_on_hook_failure() -> None:
+    """Exit after a required hook failed; the sandbox keeps running.
+
+    :raises typer.Exit: Always, with exit code 1.
+    """
+    typer.echo(
+        "Error: a required hook failed. The sandbox keeps running. Fix the "
+        "hook and run 'msb-circus up' again.",
+        err=True,
+    )
+    raise typer.Exit(code=1)
+
+
 def _ensure_sandbox_running(
     invoker: MsbInvoker,
     config: MsbConfig,
@@ -2098,6 +2326,7 @@ def _ensure_sandbox_running(
     allow_build: bool = False,
     engine: str = "podman",
     sync_daemons: bool = False,
+    quiet: bool = False,
 ) -> None:
     """Ensure the workspace sandbox exists and is running.
 
@@ -2114,8 +2343,10 @@ def _ensure_sandbox_running(
     :param engine: Host engine used when building.
     :param sync_daemons: Also register daemons in an already-running
         sandbox, to apply config changes.
+    :param quiet: Capture hook output (ACP mode).
     :raises typer.Exit: If the image is missing and building is not allowed,
-        or the workspace is in a linked Git worktree.
+        or the workspace is in a linked Git worktree, or a required hook
+        fails. Hooks run after the dockerd check and before daemons.
     """
     _fail_on_linked_worktree(workspace)
     _warn_on_missing_worktrees(workspace)
@@ -2184,6 +2415,10 @@ def _ensure_sandbox_running(
         _warn_on_mount_drift(invoker, config, name, workspace)
         _warn_on_trust_host_cas_drift(invoker, config, name)
         _check_dockerd(invoker, config, name)
+        if not _ensure_hooks(
+            invoker, config, name, workspace, run_provision=sync_daemons, quiet=quiet
+        ):
+            _exit_on_hook_failure()
         if sync_daemons:
             _ensure_daemons(invoker, config, name, workspace)
         return
@@ -2273,6 +2508,10 @@ def _ensure_sandbox_running(
         _check_ssh_agent(invoker, config, name)
 
     _check_dockerd(invoker, config, name)
+    if not _ensure_hooks(
+        invoker, config, name, workspace, run_provision=True, quiet=quiet
+    ):
+        _exit_on_hook_failure()
     _ensure_daemons(invoker, config, name, workspace)
 
 
@@ -2406,6 +2645,10 @@ def start(
             typer.echo(_dockerd_warning(name, last_error), err=True)
     else:
         typer.echo(f"✓ Started {name} (docker is not enabled for this sandbox)")
+    if not _ensure_hooks(
+        invoker, config, name, workspace, run_provision=True, quiet=False
+    ):
+        _exit_on_hook_failure()
     _ensure_daemons(invoker, config, name, workspace)
 
 
@@ -2587,7 +2830,7 @@ def exec_(
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
 
-    _ensure_sandbox_running(invoker, config, workspace)
+    _ensure_sandbox_running(invoker, config, workspace, quiet=acp)
 
     tracing = replace(
         config.tracing,
