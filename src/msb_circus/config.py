@@ -302,6 +302,55 @@ class DaemonConfig:
     env_passthrough: tuple[str, ...] = ()
 
 
+#: Hook names in run order.
+HOOK_NAMES: tuple[str, ...] = ("provision", "startup")
+
+#: Largest accepted hook script in bytes (UTF-8). The script travels as one
+#: ``msb exec`` argument, and Linux limits one argument to 128 KiB.
+MAX_HOOK_SCRIPT_BYTES = 64 * 1024
+
+#: Default of ``required`` per hook name.
+HOOK_REQUIRED_DEFAULTS: dict[str, bool] = {"provision": True, "startup": False}
+
+
+@dataclass(frozen=True)
+class HookConfig:
+    """A project hook (``[msb.hooks]`` ``provision`` or ``startup``).
+
+    :ivar name: ``provision`` or ``startup``.
+    :ivar script: Inline script, or ``None`` when *file* is set.
+    :ivar file: Host path of the script file, or ``None`` when *script* is set.
+        Relative paths are resolved against the workspace root.
+    :ivar required: Fail the command when the hook fails.
+    :ivar timeout: Guest timeout in seconds, or ``None`` for no timeout.
+    :ivar workdir: Guest working directory, or ``None`` for the agent workdir.
+    :ivar env: Extra environment variables for the hook.
+    :ivar env_passthrough: Extra host variables for the hook (same matching
+        rules as the top-level ``env_passthrough``).
+    """
+
+    name: str
+    script: str | None = None
+    file: str | None = None
+    required: bool = False
+    timeout: int | None = None
+    workdir: str | None = None
+    env: dict[str, str] = field(default_factory=dict)
+    env_passthrough: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class HooksConfig:
+    """Project hooks (``[msb.hooks]``).
+
+    :ivar provision: Hook run once per sandbox and when its script changes.
+    :ivar startup: Hook run once per guest boot.
+    """
+
+    provision: HookConfig | None = None
+    startup: HookConfig | None = None
+
+
 @dataclass(frozen=True)
 class AdditionalDir:
     """An entry of the ``[[additional_dirs]]`` array.
@@ -387,6 +436,7 @@ class MsbConfig:
         (``[[port_forwards]]``, agent-circus compatible).
     :ivar daemons: Long-running processes supervised in the sandbox
         (``[[msb.daemons]]``).
+    :ivar hooks: Project hooks (``[msb.hooks]``).
     :ivar env: Sandbox-level environment variables (non-secret defaults).
     :ivar env_passthrough: Host environment variables to pass into the
         sandbox. Literal names are required to exist on the host; entries
@@ -412,6 +462,7 @@ class MsbConfig:
     additional_dirs: tuple[AdditionalDir, ...] = ()
     port_forwards: tuple[PortForward, ...] = ()
     daemons: tuple[DaemonConfig, ...] = ()
+    hooks: HooksConfig = field(default_factory=HooksConfig)
     env: dict[str, str] = field(default_factory=dict)
     env_passthrough: tuple[str, ...] = ()
     git_worktree_mirror: bool = False
@@ -1077,6 +1128,162 @@ def _parse_daemons(raw: Any) -> tuple[DaemonConfig, ...]:
     return tuple(daemons)
 
 
+def _parse_hooks(raw: Any) -> HooksConfig:
+    """Parse the ``[msb.hooks]`` table.
+
+    Each hook accepts either a plain string (an inline script) or a table
+    with one of ``script`` / ``file`` plus optional settings. Unknown hook
+    names and unknown keys are rejected.
+
+    :param raw: Raw table value or ``None``.
+    :returns: Parsed hooks configuration.
+    :raises ConfigurationError: If the table or a hook entry is malformed.
+    """
+    if raw is None:
+        return HooksConfig()
+    if not isinstance(raw, dict):
+        raise ConfigurationError("msb.hooks must be a table")
+    unknown = sorted(key for key in raw if key not in HOOK_NAMES)
+    if unknown:
+        raise ConfigurationError(f"msb.hooks has unknown key(s): {', '.join(unknown)}")
+    hooks: dict[str, HookConfig | None] = {}
+    for name in HOOK_NAMES:
+        if name not in raw:
+            hooks[name] = None
+            continue
+        label = f"msb.hooks.{name}"
+        value = raw[name]
+        if isinstance(value, str):
+            if not value.strip():
+                raise ConfigurationError(f"{label} must not be empty")
+            hook = HookConfig(
+                name=name, script=value, required=HOOK_REQUIRED_DEFAULTS[name]
+            )
+        elif isinstance(value, dict):
+            hook = _parse_hook_table(name, label, value)
+        else:
+            raise ConfigurationError(f"{label} must be a string or a table")
+        if hook.script is not None and (
+            len(hook.script.encode("utf-8")) > MAX_HOOK_SCRIPT_BYTES
+        ):
+            raise ConfigurationError(f"{label} script is larger than 64 KiB")
+        hooks[name] = hook
+    return HooksConfig(provision=hooks["provision"], startup=hooks["startup"])
+
+
+def _parse_hook_table(name: str, label: str, value: dict[str, Any]) -> HookConfig:
+    """Parse one ``[msb.hooks.<name>]`` table.
+
+    :param name: Hook name (``provision`` or ``startup``).
+    :param label: Config key label used in error messages.
+    :param value: Raw hook table.
+    :returns: Parsed hook config.
+    :raises ConfigurationError: If the table is malformed.
+    """
+    known_keys = (
+        "script",
+        "file",
+        "required",
+        "timeout",
+        "workdir",
+        "env",
+        "env_passthrough",
+    )
+    unknown = sorted(key for key in value if key not in known_keys)
+    if unknown:
+        raise ConfigurationError(f"{label} has unknown key(s): {', '.join(unknown)}")
+    script = value.get("script")
+    file = value.get("file")
+    if script is not None and file is not None:
+        raise ConfigurationError(f"{label}: set either script or file, not both")
+    if script is None and file is None:
+        raise ConfigurationError(f"{label} needs script or file")
+    if script is not None:
+        if not isinstance(script, str) or not script.strip():
+            raise ConfigurationError(f"{label}.script must be a non-empty string")
+    else:
+        if not isinstance(file, str) or not file:
+            raise ConfigurationError(f"{label}.file must be a non-empty string")
+    required = value.get("required", HOOK_REQUIRED_DEFAULTS[name])
+    if not isinstance(required, bool):
+        raise ConfigurationError(f"{label}.required must be true or false")
+    timeout = value.get("timeout")
+    if timeout is not None and (
+        isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0
+    ):
+        raise ConfigurationError(
+            f"{label}.timeout must be a positive integer (seconds)"
+        )
+    workdir = value.get("workdir")
+    if workdir is not None and (not isinstance(workdir, str) or not workdir):
+        raise ConfigurationError(f"{label}.workdir must be a non-empty string")
+    env = _parse_string_dict(value.get("env"), f"{label}.env")
+    for key in env:
+        if not _ENV_NAME_PATTERN.fullmatch(key):
+            raise ConfigurationError(
+                f"{label}.env key {key!r} is not a valid environment variable name"
+            )
+    env_passthrough = value.get("env_passthrough")
+    if env_passthrough is None:
+        env_passthrough = ()
+    elif not isinstance(env_passthrough, list) or not all(
+        isinstance(item, str) and item for item in env_passthrough
+    ):
+        raise ConfigurationError(
+            f"{label}.env_passthrough must be a list of non-empty strings"
+        )
+    return HookConfig(
+        name=name,
+        script=script,
+        file=file,
+        required=required,
+        timeout=timeout,
+        workdir=workdir,
+        env=env,
+        env_passthrough=tuple(env_passthrough),
+    )
+
+
+def load_hook_script(hook: HookConfig, workspace: Path) -> str:
+    """Return the hook script text for a hook.
+
+    Inline scripts are returned verbatim; ``file`` hooks are read from the
+    host. Relative file paths resolve against *workspace*.
+
+    :param hook: Parsed hook configuration.
+    :param workspace: Workspace directory used to resolve relative paths.
+    :returns: The hook script text.
+    :raises ConfigurationError: If the file cannot be read, is too large,
+        is not UTF-8 text, or is empty.
+    """
+    if hook.script is not None:
+        return hook.script
+    if hook.file is None:
+        raise ConfigurationError(f"msb.hooks.{hook.name} needs script or file")
+    path = Path(hook.file).expanduser()
+    if not path.is_absolute():
+        path = workspace / path
+    try:
+        data = path.read_bytes()
+    except OSError as e:
+        raise ConfigurationError(
+            f"msb.hooks.{hook.name}.file {str(path)!r} cannot be read: {e}"
+        ) from e
+    if len(data) > MAX_HOOK_SCRIPT_BYTES:
+        raise ConfigurationError(
+            f"msb.hooks.{hook.name}.file {str(path)!r} is larger than 64 KiB"
+        )
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise ConfigurationError(
+            f"msb.hooks.{hook.name}.file {str(path)!r} is not UTF-8 text"
+        ) from e
+    if not text.strip():
+        raise ConfigurationError(f"msb.hooks.{hook.name}.file {str(path)!r} is empty")
+    return text
+
+
 def _parse_agent(raw: Any) -> AgentConfig:
     """Parse the ``[msb.agent]`` table.
 
@@ -1303,6 +1510,11 @@ def parse_config(config: dict[str, Any]) -> MsbConfig:
     if msb_raw is not None and not isinstance(msb_raw, dict):
         raise ConfigurationError("msb must be a table")
     msb_raw = msb_raw or {}
+    if "hooks" in config and "hooks" not in msb_raw:
+        logger.info(
+            "[hooks] is an agent-circus setting and is not used by msb-circus; "
+            "see [msb.hooks] in README.msb-circus.md."
+        )
     binary = msb_raw.get("binary")
     if binary is not None and not isinstance(binary, str):
         raise ConfigurationError("msb.binary must be a string")
@@ -1321,6 +1533,7 @@ def parse_config(config: dict[str, Any]) -> MsbConfig:
         additional_dirs=_parse_additional_dirs(config.get("additional_dirs")),
         port_forwards=_parse_port_forwards(config.get("port_forwards")),
         daemons=_parse_daemons(msb_raw.get("daemons")),
+        hooks=_parse_hooks(msb_raw.get("hooks")),
         env=_parse_string_dict(msb_raw.get("env"), "msb.env"),
         env_passthrough=_parse_env_passthrough(config.get("env_passthrough")),
         git_worktree_mirror=git.worktree_mirror if git is not None else False,
