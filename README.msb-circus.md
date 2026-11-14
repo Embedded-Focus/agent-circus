@@ -168,7 +168,10 @@ Your workspace files come from the host and stay on the host, so `rm` and
 `msb image prune`.
 
 `ps` prints a `docker compose ps`-style table (`NAME`, `ID`, `CREATED`,
-`STATUS`) with relative creation ages. `ps --all` lists every sandbox
+`STATUS`, `PORTS`) with relative creation ages. The `PORTS` column shows
+the persisted port forwards in `podman ps` style (for example
+`127.0.0.1:8000->8000/tcp`), comma-joined, and stays empty when the
+sandbox publishes no ports. `ps --all` lists every sandbox
 that msb knows about, not only the sandbox of this workspace.
 `ps --running` lists only running sandboxes.
 
@@ -183,8 +186,10 @@ it. If that happened to you, run
 `msb stop --force agents-<project>`.
 
 For scripts, `ps --format json` prints a JSON array with `name`, `id`,
-`status`, `created_at` and `updated_at` per sandbox, and `ps --quiet`
-prints sandbox names only. Both stay silent when no sandbox matches.
+`status`, `created_at`, `updated_at` and a typed `ports` array (objects
+of `host`, `host_port`, `guest_port`, `protocol`) per sandbox, and
+`ps --quiet` prints sandbox names only. Both stay silent when no
+sandbox matches.
 
 ## Running Agents
 

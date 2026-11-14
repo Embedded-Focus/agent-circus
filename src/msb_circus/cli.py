@@ -138,6 +138,7 @@ from .sandbox import (
     parse_inspect_bind_mounts,
     parse_inspect_disk_config,
     parse_inspect_ports,
+    parse_inspect_ports_ordered,
     parse_root_disk_spec,
     parse_sandbox_list_output,
     parse_size_mib,
@@ -395,6 +396,14 @@ def ps(
         for sandbox in selected:
             print(sandbox.name)
         return
+
+    # Both readable formats carry the ports (table column / JSON key).
+    # One msb inspect per sandbox; failures degrade to no ports.
+    selected = [
+        replace(sandbox, ports=_fetch_sandbox_ports(invoker, sandbox.name))
+        for sandbox in selected
+    ]
+
     if format_ == "json":
         print(format_sandbox_json(selected))
         return
@@ -953,6 +962,28 @@ def _warn_on_port_drift(invoker: MsbInvoker, config: MsbConfig, name: str) -> No
         name,
         sorted(published),
     )
+
+
+def _fetch_sandbox_ports(
+    invoker: MsbInvoker, name: str
+) -> tuple[tuple[str, int, int, str], ...]:
+    """Fetch a sandbox's published ports via ``msb inspect``.
+
+    Failures are non-fatal: an unreadable inspect output is logged at
+    debug level and reported as no ports.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param name: Sandbox name to inspect.
+    :returns: ``(host, host_port, guest_port, protocol)`` tuples in
+        msb's order; empty when the sandbox publishes nothing or the
+        inspect output could not be read.
+    """
+    try:
+        result = invoker.run(build_inspect_args(name))
+        return tuple(parse_inspect_ports_ordered(result.stdout))
+    except (MsbCommandError, ConfigurationError) as e:
+        logger.debug("Port lookup for %s failed: %s", name, e)
+        return ()
 
 
 def _warn_on_disk_drift(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:

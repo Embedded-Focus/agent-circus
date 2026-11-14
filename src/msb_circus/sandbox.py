@@ -220,7 +220,7 @@ def build_volume_remove_args(name: str) -> list[str]:
     return ["volume", "remove", name]
 
 
-def parse_inspect_ports(output: str) -> frozenset[tuple[str, int, int, str]]:
+def parse_inspect_ports_ordered(output: str) -> list[tuple[str, int, int, str]]:
     """Extract published ports from ``msb inspect --format json`` output.
 
     msb reports port mappings under ``config.network.ports`` (with an
@@ -230,8 +230,9 @@ def parse_inspect_ports(output: str) -> frozenset[tuple[str, int, int, str]]:
     and its schema may change between releases.
 
     :param output: Raw stdout of the inspect command.
-    :returns: Set of ``(host, host_port, guest_port, protocol)`` tuples;
-        an empty set when no ports are published.
+    :returns: ``(host, host_port, guest_port, protocol)`` tuples in
+        msb's order (duplicates preserved); an empty list when no ports
+        are published.
     :raises ConfigurationError: If the output is not valid JSON, has an
         unexpected shape, or contains a malformed port entry.
     """
@@ -240,10 +241,10 @@ def parse_inspect_ports(output: str) -> frozenset[tuple[str, int, int, str]]:
     ports = network.get("ports") if isinstance(network, dict) else None
     if ports is None:
         # A sandbox without published ports may omit the table entirely.
-        return frozenset()
+        return []
     if not isinstance(ports, list):
         raise ConfigurationError("Unexpected msb inspect output: network.ports")
-    published: set[tuple[str, int, int, str]] = set()
+    published: list[tuple[str, int, int, str]] = []
     for index, entry in enumerate(ports):
         if not isinstance(entry, dict):
             raise ConfigurationError(
@@ -264,8 +265,23 @@ def parse_inspect_ports(output: str) -> frozenset[tuple[str, int, int, str]]:
             raise ConfigurationError(
                 f"Malformed msb inspect port entry at index {index}"
             )
-        published.add((host, host_port, guest_port, protocol))
-    return frozenset(published)
+        published.append((host, host_port, guest_port, protocol))
+    return published
+
+
+def parse_inspect_ports(output: str) -> frozenset[tuple[str, int, int, str]]:
+    """Extract published ports as a set, for order-insensitive compares.
+
+    Thin wrapper around :func:`parse_inspect_ports_ordered` for callers
+    that compare against :func:`configured_ports`.
+
+    :param output: Raw stdout of the inspect command.
+    :returns: Set of ``(host, host_port, guest_port, protocol)`` tuples;
+        an empty set when no ports are published.
+    :raises ConfigurationError: If the output is not valid JSON, has an
+        unexpected shape, or contains a malformed port entry.
+    """
+    return frozenset(parse_inspect_ports_ordered(output))
 
 
 def configured_ports(
@@ -518,6 +534,9 @@ class SandboxInfo:
     :ivar id: Sandbox identifier, if present.
     :ivar created_at: Creation timestamp (epoch seconds), if present.
     :ivar updated_at: Last-update timestamp (epoch seconds), if present.
+    :ivar ports: Published port mappings as ``(host, host_port,
+        guest_port, protocol)`` tuples in msb's order; only populated
+        by commands that inspect the sandbox (e.g. ``ps``).
     :ivar raw: The original JSON entry.
     """
 
@@ -526,6 +545,7 @@ class SandboxInfo:
     id: str | None = None
     created_at: float | None = None
     updated_at: float | None = None
+    ports: tuple[tuple[str, int, int, str], ...] = ()
     raw: dict[str, Any] = field(default_factory=dict)
 
 

@@ -4,6 +4,7 @@ import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner
@@ -102,8 +103,13 @@ def test_parse_rejects_malformed_output(output):
 
 @pytest.fixture
 def fake_msb(monkeypatch):
-    """Patch the CLI to use a fake msb binary returning canned JSON."""
-    calls = {}
+    """Patch the CLI to use a fake msb binary returning canned JSON.
+
+    ``list`` calls return ``calls["stdout"]``, ``inspect`` calls return
+    ``calls["inspect_stdout"]`` (default: no ports). Every invocation is
+    recorded in ``calls["invocations"]``.
+    """
+    calls: dict[str, Any] = {"invocations": []}
 
     class FakeInvoker:
         def __init__(self, binary: Path) -> None:
@@ -111,10 +117,17 @@ def fake_msb(monkeypatch):
 
         def run(self, args, **kwargs):
             calls["args"] = args
-            return SimpleNamespace(returncode=0, stdout=calls["stdout"], stderr="")
+            calls["invocations"].append(args)
+            stdout = (
+                calls["inspect_stdout"]
+                if args and args[0] == "inspect"
+                else calls["stdout"]
+            )
+            return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
 
     def setup(stdout: str) -> None:
         calls["stdout"] = stdout
+        calls.setdefault("inspect_stdout", '{"config": {}}')
         monkeypatch.setattr(cli_module, "resolve_msb_binary", lambda b: Path("/fake"))
         monkeypatch.setattr(cli_module, "check_version", lambda binary: "0.7.12")
         monkeypatch.setattr(cli_module, "MsbInvoker", FakeInvoker)
@@ -186,6 +199,7 @@ def test_ps_json_format_is_parseable(tmp_path, fake_msb):
             "status": "Running",
             "created_at": 1730000000,
             "updated_at": 1730000100,
+            "ports": [],
         }
     ]
 
@@ -196,6 +210,162 @@ def test_ps_json_format_is_silent_without_sandbox(tmp_path, fake_msb):
     )
     assert result.exit_code == 0
     assert json.loads(result.output) == []
+
+
+def test_format_port_entry_matches_podman_style():
+    from msb_circus.ps import format_port_entry
+
+    assert (
+        format_port_entry("127.0.0.1", 8000, 8000, "tcp") == "127.0.0.1:8000->8000/tcp"
+    )
+    assert format_port_entry("0.0.0.0", 5353, 53, "udp") == "0.0.0.0:5353->53/udp"
+
+
+def test_format_sandbox_table_renders_ports_podman_style():
+    from msb_circus.ps import format_sandbox_table
+
+    sandboxes = [
+        SandboxInfo(
+            name="agents-demo",
+            status="Running",
+            ports=(
+                ("127.0.0.1", 8000, 8000, "tcp"),
+                ("0.0.0.0", 5353, 53, "udp"),
+            ),
+        ),
+        SandboxInfo(name="bare", status="Stopped"),
+    ]
+    table = format_sandbox_table(sandboxes, now=100)
+    lines = table.splitlines()
+    assert lines[0].split() == ["NAME", "ID", "CREATED", "STATUS", "PORTS"]
+    # Multiple ports are comma-joined; the sandbox without ports keeps
+    # an empty cell (podman parity, not the '-' placeholder).
+    assert "127.0.0.1:8000->8000/tcp, 0.0.0.0:5353->53/udp" in lines[1]
+    assert lines[2].rstrip().endswith("Stopped")
+    assert lines[2].split() == ["bare", "-", "-", "Stopped"]
+
+
+def test_ps_table_shows_ports_column(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    fake_msb["stdout"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["inspect_stdout"] = json.dumps(
+        {
+            "config": {
+                "network": {
+                    "ports": [
+                        {
+                            "guest_port": 8000,
+                            "host_bind": "127.0.0.1",
+                            "host_port": 8000,
+                            "protocol": "tcp",
+                        },
+                        {
+                            "guest_port": 53,
+                            "host_bind": "0.0.0.0",
+                            "host_port": 5353,
+                            "protocol": "udp",
+                        },
+                    ]
+                }
+            }
+        }
+    )
+    result = runner.invoke(app, ["ps", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "127.0.0.1:8000->8000/tcp, 0.0.0.0:5353->53/udp" in result.output
+
+
+def test_ps_inspects_ports_in_msb_order(tmp_path, fake_msb):
+    """Ports keep msb's inspect order (duplicates preserved)."""
+    name = sandbox_name_for_workspace(tmp_path)
+    fake_msb["stdout"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["inspect_stdout"] = json.dumps(
+        {
+            "config": {
+                "network": {
+                    "ports": [
+                        {
+                            "guest_port": 9000,
+                            "host_bind": "127.0.0.1",
+                            "host_port": 9000,
+                            "protocol": "tcp",
+                        },
+                        {
+                            "guest_port": 8000,
+                            "host_bind": "127.0.0.1",
+                            "host_port": 8000,
+                            "protocol": "tcp",
+                        },
+                    ]
+                }
+            }
+        }
+    )
+    result = runner.invoke(app, ["ps", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    ports_cell = result.output.splitlines()[1].split("  ")[-1]
+    assert ports_cell == "127.0.0.1:9000->9000/tcp, 127.0.0.1:8000->8000/tcp"
+
+
+def test_ps_inspect_failure_degrades_to_empty_ports(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    fake_msb["stdout"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["inspect_stdout"] = "not json"
+    result = runner.invoke(app, ["ps", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    lines = result.output.splitlines()
+    assert lines[0].split() == ["NAME", "ID", "CREATED", "STATUS", "PORTS"]
+    assert lines[1].split() == [name, "-", "-", "Running"]
+
+
+def test_ps_json_includes_typed_ports(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    fake_msb["stdout"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["inspect_stdout"] = json.dumps(
+        {
+            "config": {
+                "network": {
+                    "ports": [
+                        {
+                            "guest_port": 53,
+                            "host_bind": "0.0.0.0",
+                            "host_port": 5353,
+                            "protocol": "udp",
+                        }
+                    ]
+                }
+            }
+        }
+    )
+    result = runner.invoke(
+        app, ["ps", "--workspace", str(tmp_path), "--format", "json"]
+    )
+    assert result.exit_code == 0
+    entries = json.loads(result.output)
+    assert entries[0]["ports"] == [
+        {"host": "0.0.0.0", "host_port": 5353, "guest_port": 53, "protocol": "udp"}
+    ]
+
+
+def test_ps_quiet_skips_inspect_calls(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    fake_msb["stdout"] = json.dumps([{"name": name, "status": "Running"}])
+    result = runner.invoke(app, ["ps", "--workspace", str(tmp_path), "--quiet"])
+    assert result.exit_code == 0
+    assert [args[0] for args in fake_msb["invocations"]] == ["list"]
+
+
+def test_ps_without_forwards_makes_one_inspect_per_sandbox(tmp_path, fake_msb):
+    fake_msb["stdout"] = json.dumps(
+        [
+            {"name": "agents-a", "status": "Running"},
+            {"name": "agents-b", "status": "Stopped"},
+        ]
+    )
+    result = runner.invoke(app, ["ps", "--workspace", str(tmp_path), "--all"])
+    assert result.exit_code == 0
+    inspected = [args[1] for args in fake_msb["invocations"] if args[0] == "inspect"]
+    assert inspected == ["agents-a", "agents-b"]
 
 
 def test_ps_json_format_rejects_unknown_format(tmp_path, fake_msb):
@@ -231,13 +401,13 @@ def test_ps_empty_workspace_shows_header_only(tmp_path, fake_msb):
     result = runner.invoke(app, ["ps", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
     assert result.output.startswith("NAME")
-    assert result.output.strip() == "NAME  ID  CREATED  STATUS"
+    assert result.output.strip() == "NAME  ID  CREATED  STATUS  PORTS"
 
 
 def test_ps_all_empty_shows_header_only(tmp_path, fake_msb):
     result = runner.invoke(app, ["ps", "--workspace", str(tmp_path), "--all"])
     assert result.exit_code == 0
-    assert result.output.strip() == "NAME  ID  CREATED  STATUS"
+    assert result.output.strip() == "NAME  ID  CREATED  STATUS  PORTS"
 
 
 def test_human_duration_wording_matches_docker():
@@ -270,7 +440,7 @@ def test_format_sandbox_table_is_column_aligned():
     ]
     table = format_sandbox_table(sandboxes, now=160)
     lines = table.splitlines()
-    assert lines[0].split() == ["NAME", "ID", "CREATED", "STATUS"]
+    assert lines[0].split() == ["NAME", "ID", "CREATED", "STATUS", "PORTS"]
     # Columns align across rows and the ID is truncated like docker ps does.
     assert lines[2].startswith("much-longer-name  deadbeefdead")
     assert lines[2].split() == [

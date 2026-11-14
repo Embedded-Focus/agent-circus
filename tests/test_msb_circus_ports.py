@@ -9,6 +9,7 @@ from msb_circus.sandbox import (
     build_run_args,
     configured_ports,
     parse_inspect_ports,
+    parse_inspect_ports_ordered,
 )
 
 
@@ -189,6 +190,54 @@ def test_parse_inspect_ports_empty_when_omitted():
 def test_parse_inspect_ports_rejects_malformed_output(output):
     with pytest.raises(ConfigurationError):
         parse_inspect_ports(output)
+
+
+def test_parse_inspect_ports_ordered_preserves_msb_order():
+    """The ordered variant keeps msb's order, unlike the set wrapper."""
+    output = """
+    {
+      "config": {"network": {"ports": [
+        {"guest_port": 9000, "host_bind": "127.0.0.1", "host_port": 9000, "protocol": "tcp"},
+        {"guest_port": 8000, "host_bind": "127.0.0.1", "host_port": 8000, "protocol": "tcp"}
+      ]}}
+    }
+    """
+    assert parse_inspect_ports_ordered(output) == [
+        ("127.0.0.1", 9000, 9000, "tcp"),
+        ("127.0.0.1", 8000, 8000, "tcp"),
+    ]
+
+
+def test_parse_inspect_ports_ordered_keeps_duplicates():
+    output = """
+    {
+      "config": {"network": {"ports": [
+        {"guest_port": 8000, "host_bind": "127.0.0.1", "host_port": 8000, "protocol": "tcp"},
+        {"guest_port": 8000, "host_bind": "127.0.0.1", "host_port": 8000, "protocol": "tcp"}
+      ]}}
+    }
+    """
+    entries = parse_inspect_ports_ordered(output)
+    assert entries == [("127.0.0.1", 8000, 8000, "tcp")] * 2
+    # The set wrapper collapses duplicates.
+    assert parse_inspect_ports(output) == frozenset({("127.0.0.1", 8000, 8000, "tcp")})
+
+
+def test_parse_inspect_ports_ordered_empty_when_omitted():
+    assert parse_inspect_ports_ordered('{"config": {}}') == []
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "not json",
+        '{"config": {"network": {"ports": {}}}}',
+        '{"config": {"network": {"ports": [42]}}}',
+    ],
+)
+def test_parse_inspect_ports_ordered_rejects_malformed_output(output):
+    with pytest.raises(ConfigurationError):
+        parse_inspect_ports_ordered(output)
 
 
 def test_configured_ports_matches_parsed_inspect_shape():
