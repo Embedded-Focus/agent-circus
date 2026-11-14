@@ -21,6 +21,7 @@ from .config import (
     DEFAULT_WORKDIR,
     DOCKER_VOLUME_SUFFIX,
     DOCKERD_SHUTDOWN_TIMEOUT_ENV_VAR,
+    HOOK_NAMES,
     INIT_NONE,
     SSH_AGENT_GUEST_SOCKET,
     SSH_AGENT_VSOCK_PORT,
@@ -99,7 +100,10 @@ from .hooks import (
     log_path,
     parse_check_output,
 )
+from .hooks import build_logs_command as build_hook_logs_command
 from .hooks import build_run_args as build_hook_run_args
+from .hooks import build_status_script as build_hook_status_script
+from .hooks import parse_status_output as parse_hook_status_output
 from .hostports import find_occupied_ports
 from .hosts import (
     loopback_names,
@@ -162,6 +166,12 @@ daemon_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(daemon_app, name="daemon")
+
+hook_app = typer.Typer(
+    help="Run a project hook or read its log.",
+    no_args_is_help=True,
+)
+app.add_typer(hook_app, name="hook")
 
 logger = logging.getLogger(__name__)
 
@@ -2149,6 +2159,7 @@ def _run_hook(
     *,
     force: bool,
     quiet: bool,
+    strict: bool = False,
 ) -> bool:
     """Run one hook in the sandbox.
 
@@ -2160,9 +2171,17 @@ def _run_hook(
     :param content: Script content (from :func:`load_hook_script`).
     :param force: Run even when the hook is up to date.
     :param quiet: Capture the output instead of showing it (ACP mode).
+    :param strict: Treat every failure as fatal, even for an optional
+        hook (interactive ``hook run`` mode).
     :returns: ``True`` when the command may continue (success, or failure
-        of an optional hook).
+        of an optional hook); always ``False`` on failure in strict mode.
     """
+
+    def fail(reason: str) -> bool:
+        """Log the failure; honor strict mode."""
+        ok = _hook_failed(hook, reason)
+        return ok and not strict
+
     key = hook_key_hash(content) if hook.name == "provision" else None
     try:
         env = {
@@ -2170,7 +2189,7 @@ def _run_hook(
             **build_run_env(content, key, hook.timeout),
         }
     except ConfigurationError as e:
-        return _hook_failed(hook, str(e))
+        return fail(str(e))
     workdir = hook.workdir or resolve_agent_workdir(config, workspace)
     logger.info(
         "Running the %s hook in %s (log in the sandbox: %s)...",
@@ -2191,7 +2210,7 @@ def _run_hook(
             check=False,
         )
     except MsbCommandError as e:
-        return _hook_failed(hook, str(e))
+        return fail(str(e))
     rc = result.returncode
     if rc == 0:
         logger.info("The %s hook finished in %s.", hook.name, name)
@@ -2202,7 +2221,7 @@ def _run_hook(
         reason = "the hook runner failed in the sandbox"
     else:
         reason = f"exit code {rc}"
-    return _hook_failed(hook, reason)
+    return fail(reason)
 
 
 def _ensure_hooks(
@@ -2979,6 +2998,31 @@ def _require_daemon(config: MsbConfig, daemon_name: str) -> DaemonConfig:
     raise typer.Exit(code=1)
 
 
+def _require_hook(config: MsbConfig, hook_name: str) -> HookConfig:
+    """Return the configured hook with the given name, or exit.
+
+    :param config: Resolved msb-circus configuration.
+    :param hook_name: Hook name to look up (``provision`` or ``startup``).
+    :returns: The matching hook configuration.
+    :raises typer.Exit: With code 1 when the name is unknown or the hook
+        is not configured.
+    """
+    if hook_name not in HOOK_NAMES:
+        typer.echo(
+            f"Error: unknown hook {hook_name!r}; use provision or startup.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    hook = getattr(config.hooks, hook_name)
+    if hook is None:
+        typer.echo(
+            f"Error: the {hook_name} hook is not configured in [msb.hooks].",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    return hook
+
+
 def _run_daemon_script(
     invoker: MsbInvoker, name: str, daemon_name: str, script: str
 ) -> None:
@@ -3106,6 +3150,78 @@ def daemons_list(
     print(_format_columns(rows))
 
 
+@app.command(name="hooks")
+def hooks_list(
+    workspace: Annotated[
+        Path,
+        typer.Option(
+            "--workspace",
+            "-w",
+            help="Workspace directory path.",
+            exists=True,
+            file_okay=False,
+            resolve_path=True,
+        ),
+    ] = Path("."),
+) -> None:
+    """List the configured hooks and their state in the workspace sandbox."""
+    config, invoker = _resolve_invoker(workspace)
+    name = sandbox_name_for_workspace(workspace)
+    if config.hooks.provision is None and config.hooks.startup is None:
+        typer.echo(
+            "No hooks configured. Add them under [msb.hooks] "
+            "in .agent-circus/config.toml."
+        )
+        return
+    _require_running_sandbox(invoker, name)
+    try:
+        result = invoker.run(
+            build_exec_args(name, ["sh", "-c", build_hook_status_script()], tty=None),
+            check=False,
+        )
+    except MsbCommandError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    if result.returncode != 0:
+        typer.echo(
+            f"Error: the hook status check failed (exit code {result.returncode}): "
+            f"{(result.stderr or '').strip()}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    boot, statuses = parse_hook_status_output(result.stdout or "")
+    rows = [["HOOK", "STATE", "LAST EXIT", "FINISHED"]]
+    for hook_name in HOOK_NAMES:
+        hook = getattr(config.hooks, hook_name)
+        status = statuses.get(hook_name)
+        if hook is None:
+            rows.append([hook_name, "not configured", "-", "-"])
+            continue
+        if status is None:
+            rows.append([hook_name, "never run", "-", "-"])
+            continue
+        if hook_name == "provision":
+            try:
+                content = load_hook_script(hook, workspace)
+            except ConfigurationError as e:
+                state = f"error: {e}"
+            else:
+                state = "up to date" if status.key == hook_key_hash(content) else "due"
+        else:
+            state = "up to date" if boot is not None and status.key == boot else "due"
+        rows.append(
+            [
+                hook_name,
+                state,
+                str(status.exit_code) if status.exit_code is not None else "-",
+                time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(status.finished))
+                if status.finished is not None
+                else "-",
+            ]
+        )
+    print(_format_columns(rows))
+
+
 @daemon_app.command(name="start")
 def daemon_start(
     daemon_name: Annotated[
@@ -3220,6 +3336,95 @@ def daemon_logs(
         result = invoker.run(
             build_exec_args(
                 name, build_logs_command(daemon_name, lines, follow), tty=None
+            ),
+            check=False,
+            capture_output=False,
+        )
+    except KeyboardInterrupt:
+        raise typer.Exit(code=130) from None
+    except MsbCommandError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    if result.returncode != 0:
+        raise typer.Exit(code=result.returncode)
+
+
+@hook_app.command(name="run")
+def hook_run(
+    hook_name: Annotated[str, typer.Argument(help="provision or startup.")],
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Run the hook even when it is up to date."),
+    ] = False,
+    workspace: Annotated[
+        Path,
+        typer.Option(
+            "--workspace",
+            "-w",
+            help="Workspace directory path.",
+            exists=True,
+            file_okay=False,
+            resolve_path=True,
+        ),
+    ] = Path("."),
+) -> None:
+    """Run a project hook in the running workspace sandbox now."""
+    config, invoker = _resolve_invoker(workspace)
+    name = sandbox_name_for_workspace(workspace)
+    hook = _require_hook(config, hook_name)
+    _require_running_sandbox(invoker, name)
+    try:
+        content = load_hook_script(hook, workspace)
+    except ConfigurationError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    ok = _run_hook(
+        invoker,
+        config,
+        name,
+        workspace,
+        hook,
+        content,
+        force=force,
+        quiet=False,
+        strict=True,
+    )
+    if not ok:
+        raise typer.Exit(code=1)
+
+
+@hook_app.command(name="logs")
+def hook_logs(
+    hook_name: Annotated[str, typer.Argument(help="provision or startup.")],
+    lines: Annotated[
+        int,
+        typer.Option("--lines", "-n", min=1, help="Number of lines to show."),
+    ] = 100,
+    follow: Annotated[
+        bool,
+        typer.Option("--follow", "-f", help="Keep printing new log lines."),
+    ] = False,
+    workspace: Annotated[
+        Path,
+        typer.Option(
+            "--workspace",
+            "-w",
+            help="Workspace directory path.",
+            exists=True,
+            file_okay=False,
+            resolve_path=True,
+        ),
+    ] = Path("."),
+) -> None:
+    """Show the log of the last run of a project hook."""
+    config, invoker = _resolve_invoker(workspace)
+    name = sandbox_name_for_workspace(workspace)
+    _require_hook(config, hook_name)
+    _require_running_sandbox(invoker, name)
+    try:
+        result = invoker.run(
+            build_exec_args(
+                name, build_hook_logs_command(hook_name, lines, follow), tty=None
             ),
             check=False,
             capture_output=False,
