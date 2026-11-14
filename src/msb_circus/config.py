@@ -13,7 +13,7 @@ import logging
 import os
 import re
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +63,9 @@ DEFAULT_PORT_HOST = "127.0.0.1"
 DEFAULT_SANDBOX_NAME_PREFIX = "agents"
 DEFAULT_MOUNTS: dict[str, str] = {".": "/workspace"}
 ADDITIONAL_DIRS_GUEST_BASE = "/workspaces"
+
+#: Default of ``[git] worktree_mirror`` when the key is not set.
+DEFAULT_WORKTREE_MIRROR = True
 
 #: Suffix of the persistent docker volume name (see
 #: :func:`docker_volume_name_for_workspace`).
@@ -388,14 +391,17 @@ class GitConfig:
     """Git settings (``[git]``, agent-circus compatible).
 
     :ivar worktree_mirror: Mount the workspace a second time at its
-        host absolute path.
+        host absolute path. Defaults to ``True`` when the key is not set.
+    :ivar worktree_mirror_explicit: Whether the configuration sets
+        ``worktree_mirror``.
     :ivar config_path: Explicit absolute host path of the gitconfig to
         forward, or ``None`` to search the default locations.
     :ivar signing_key_path: Absolute host path of an SSH public key used
         for commit signing, or ``None``.
     """
 
-    worktree_mirror: bool = False
+    worktree_mirror: bool = DEFAULT_WORKTREE_MIRROR
+    worktree_mirror_explicit: bool = False
     config_path: str | None = None
     signing_key_path: str | None = None
 
@@ -446,7 +452,11 @@ class MsbConfig:
         (like agent-circus's ``filter_env``).
     :ivar git_worktree_mirror: Mount the workspace a second time at its
         exact host absolute path (``[git] worktree_mirror``) so Git's
-        recorded paths stay valid across the sandbox boundary.
+        recorded paths stay valid across the sandbox boundary. The
+        dataclass default is ``False``; :func:`parse_config` applies the
+        documented default of ``true`` when parsed from a configuration.
+    :ivar git_worktree_mirror_explicit: Whether ``[git] worktree_mirror``
+        is set in the configuration.
     :ivar git: Git settings; ``None`` when the ``[git]`` table is absent.
     :ivar ssh: SSH agent forwarding settings; ``None`` disables forwarding.
     :ivar hosts: Host entry forwarding; ``None`` disables it.
@@ -468,6 +478,7 @@ class MsbConfig:
     env: dict[str, str] = field(default_factory=dict)
     env_passthrough: tuple[str, ...] = ()
     git_worktree_mirror: bool = False
+    git_worktree_mirror_explicit: bool = False
     git: GitConfig | None = None
     ssh: SshConfig | None = None
     hosts: HostsConfig | None = None
@@ -1329,9 +1340,10 @@ def _parse_git(raw: Any) -> GitConfig | None:
         return None
     if not isinstance(raw, dict):
         raise ConfigurationError("git must be a table")
-    worktree_mirror = raw.get("worktree_mirror", False)
-    if not isinstance(worktree_mirror, bool):
+    raw_mirror = raw.get("worktree_mirror")
+    if raw_mirror is not None and not isinstance(raw_mirror, bool):
         raise ConfigurationError("git.worktree_mirror must be a boolean")
+    worktree_mirror = DEFAULT_WORKTREE_MIRROR if raw_mirror is None else raw_mirror
 
     paths: dict[str, str | None] = {}
     for key in ("config_path", "signing_key_path"):
@@ -1353,6 +1365,7 @@ def _parse_git(raw: Any) -> GitConfig | None:
             )
     return GitConfig(
         worktree_mirror=worktree_mirror,
+        worktree_mirror_explicit=raw_mirror is not None,
         config_path=paths["config_path"],
         signing_key_path=paths["signing_key_path"],
     )
@@ -1574,13 +1587,53 @@ def parse_config(config: dict[str, Any]) -> MsbConfig:
         hooks=_parse_hooks(msb_raw.get("hooks")),
         env=_parse_env_tables(config.get("env"), msb_raw.get("env")),
         env_passthrough=_parse_env_passthrough(config.get("env_passthrough")),
-        git_worktree_mirror=git.worktree_mirror if git is not None else False,
+        git_worktree_mirror=(
+            git.worktree_mirror if git is not None else DEFAULT_WORKTREE_MIRROR
+        ),
+        git_worktree_mirror_explicit=(
+            git.worktree_mirror_explicit if git is not None else False
+        ),
         git=git,
         ssh=_parse_ssh(config.get("ssh")),
         hosts=_parse_hosts(config.get("hosts")),
         logging_level=level,
         logging_file=log_file,
     )
+
+
+def apply_worktree_mirror_default(config: MsbConfig, workspace: Path) -> MsbConfig:
+    """Turn off a default worktree mirror that cannot be mounted.
+
+    The mirror mounts the workspace at its host path. When that path is
+    already a guest mount target (for example a workspace whose host path
+    is ``/workspace``) or an ``additional_dirs`` target, or is ``/``, a
+    default mirror is turned off with an INFO message. An explicit
+    ``worktree_mirror = true`` is returned unchanged, so
+    :func:`effective_mounts` still reports the conflict.
+
+    :param config: Parsed configuration.
+    :param workspace: Workspace directory (absolute host path).
+    :returns: The configuration, with the mirror turned off if needed.
+    """
+    if not config.git_worktree_mirror or config.git_worktree_mirror_explicit:
+        return config
+    host = str(workspace)
+    targets = {
+        guest.split(":", 1)[0]
+        for guest in resolve_mounts(config.mounts, workspace).values()
+    }
+    targets.update(
+        f"{ADDITIONAL_DIRS_GUEST_BASE}/{entry.name}" for entry in config.additional_dirs
+    )
+    if host == "/" or host in targets:
+        logger.info(
+            "Not mounting the git worktree mirror: the workspace path %s is "
+            "already used in the sandbox. Set [git] worktree_mirror = false "
+            "to silence this message.",
+            host,
+        )
+        return replace(config, git_worktree_mirror=False)
+    return config
 
 
 def load_config(workspace: Path, environ: dict[str, str] | None = None) -> MsbConfig:
@@ -1591,4 +1644,6 @@ def load_config(workspace: Path, environ: dict[str, str] | None = None) -> MsbCo
     :returns: Resolved configuration.
     :raises ConfigurationError: If a config file is invalid.
     """
-    return parse_config(read_config_layers(workspace, environ))
+    return apply_worktree_mirror_default(
+        parse_config(read_config_layers(workspace, environ)), workspace
+    )

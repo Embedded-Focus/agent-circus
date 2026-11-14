@@ -649,7 +649,7 @@ patterns = []                          # globs or re:-prefixed regexes
 # config_path = "~/.gitconfig"         # default: ~/.gitconfig, then
                                        # $XDG_CONFIG_HOME/git/config
 # signing_key_path = "~/.ssh/id_ed25519.pub"  # SSH public key
-# worktree_mirror = false              # see "Git Worktrees"
+# worktree_mirror = true               # default; see "Git Worktrees"
 ```
 
 All fields are optional. The values above are the defaults. The
@@ -1211,15 +1211,19 @@ A persistent docker volume stays there until you delete it.
 
 ## Git Worktrees
 
-Set `git.worktree_mirror = true` when the repository is also used outside
-the sandbox and you need transparent Git worktree support:
+msb-circus supports Git worktrees through the worktree mirror. It is on
+by default (`[git] worktree_mirror = true`). To turn it off, set:
 
 ``` toml
 [git]
-worktree_mirror = true
+worktree_mirror = false
 ```
 
-This adds a second bind mount for the workspace at its exact host absolute
+A `[git]` table also turns on the forwarding of your host Git
+configuration (see "Git Configuration"), even when it only sets
+`worktree_mirror`.
+
+The mirror adds a second bind mount for the workspace at its exact host absolute
 path inside the sandbox (in addition to the standard `/workspace` mount).
 Both paths point to the same directory, so Git's recorded absolute paths
 are valid on both sides of the sandbox boundary — `git worktree list`,
@@ -1234,10 +1238,26 @@ re-create the sandbox to apply the flag:
 msb-circus rm -f && msb-circus up
 ```
 
+Earlier releases had the mirror off by default. A sandbox created by such
+a release has no mirror mount, so msb-circus warns until you re-create
+it, or until you set `worktree_mirror = false` to keep the old behavior.
+Re-creating removes the guest state: installed packages and the result of
+the `provision` hook (Docker data survives only with
+`docker_disk_persist`).
+
+When msb-circus cannot add the default mirror, because the host path of
+the workspace is already a mount target in the sandbox (for example a
+workspace at `/workspace` on the host, as in a dev container), it boots
+without the mirror and logs a short note. An explicit
+`worktree_mirror = true` stops with an error in that case instead.
+
 With the mirror on, agents start in the host path of the workspace
 instead of `/workspace` (unless `[msb.agent] workdir` or `exec --workdir`
 sets another directory). Git then records paths that are valid on the
-host, and you do not need extra instructions in `AGENTS.md`.
+host, and you do not need extra instructions in `AGENTS.md`. ACP sessions
+from an editor still open in `/workspace`, because the editor maps file
+paths to it; the git wrapper runs their worktree commands through the
+host path (see below).
 
 Create worktrees below `.agent-circus/worktrees/`, for example
 `git worktree add .agent-circus/worktrees/my-branch -b my-branch`.

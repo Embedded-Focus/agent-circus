@@ -43,8 +43,10 @@ class FailingInvoker(MsbInvoker):
         raise MsbCommandError("msb inspect failed", returncode=1)
 
 
-def test_parse_config_defaults_worktree_mirror_to_false():
-    assert parse_config({}).git_worktree_mirror is False
+def test_parse_config_defaults_worktree_mirror_to_true():
+    config = parse_config({})
+    assert config.git_worktree_mirror is True
+    assert config.git_worktree_mirror_explicit is False
 
 
 def test_parse_config_reads_worktree_mirror():
@@ -83,7 +85,7 @@ def test_effective_mounts_adds_worktree_mirror(tmp_path):
 
 
 def test_effective_mounts_without_mirror_is_unchanged(tmp_path):
-    config = parse_config({})
+    config = parse_config({"git": {"worktree_mirror": False}})
     mounts = effective_mounts(config, tmp_path)
     assert mounts == [(str(tmp_path), "/workspace")]
 
@@ -161,7 +163,7 @@ def test_warn_on_mount_drift_silent_when_mirror_mount_present(tmp_path, caplog):
 
 
 def test_warn_on_mount_drift_noop_when_disabled(tmp_path, caplog):
-    config = parse_config({})
+    config = parse_config({"git": {"worktree_mirror": False}})
     invoker = StubInvoker(json.dumps({"config": {}}))
     with caplog.at_level(logging.WARNING):
         _warn_on_mount_drift(invoker, config, "agents-x", tmp_path)
@@ -176,7 +178,8 @@ def test_warn_on_mount_drift_skips_on_inspect_failure(tmp_path, caplog):
 
 
 def test_resolve_agent_workdir_defaults_to_workspace_mount(tmp_path):
-    assert resolve_agent_workdir(parse_config({}), tmp_path) == "/workspace"
+    config = parse_config({"git": {"worktree_mirror": False}})
+    assert resolve_agent_workdir(config, tmp_path) == "/workspace"
 
 
 def test_resolve_agent_workdir_uses_host_path_with_mirror(tmp_path):

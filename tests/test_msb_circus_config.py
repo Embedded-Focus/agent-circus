@@ -310,10 +310,11 @@ def test_parse_additional_dirs_rejects_malformed_entries(raw, message):
 def test_effective_mounts_appends_additional_dirs(tmp_path):
     config = parse_config(
         {
+            "git": {"worktree_mirror": False},
             "additional_dirs": [
                 {"path": "/home/user/shared-libs", "readonly": True},
                 {"path": "/home/user/other-project", "name": "other"},
-            ]
+            ],
         }
     )
     mounts = effective_mounts(config, tmp_path)

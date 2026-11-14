@@ -39,7 +39,8 @@ def _git(config):
 def test_parse_config_without_git_table_has_no_git_config():
     config = parse_config({})
     assert config.git is None
-    assert config.git_worktree_mirror is False
+    # The mirror defaults to true even without a [git] table.
+    assert config.git_worktree_mirror is True
 
 
 def test_parse_config_empty_git_table_enables_git_config():
@@ -47,7 +48,7 @@ def test_parse_config_empty_git_table_enables_git_config():
     assert config.git is not None
     assert config.git.config_path is None
     assert config.git.signing_key_path is None
-    assert config.git.worktree_mirror is False
+    assert config.git.worktree_mirror is True
 
 
 def test_parse_config_expands_git_paths(tmp_path, monkeypatch):

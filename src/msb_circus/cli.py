@@ -1096,13 +1096,23 @@ def _warn_on_mount_drift(
     host_path = str(workspace)
     if (host_path, host_path) in binds:
         return
-    logger.warning(
-        "git.worktree_mirror is enabled in the configuration, but sandbox %s "
-        "was created without the workspace mirror mount. Mounts are fixed at "
-        "sandbox creation, so the change is not applied to this sandbox. "
-        "Remove and re-create it to apply: msb-circus rm -f && msb-circus up.",
-        name,
-    )
+    if config.git_worktree_mirror_explicit:
+        logger.warning(
+            "git.worktree_mirror is enabled in the configuration, but sandbox %s "
+            "was created without the workspace mirror mount. Mounts are fixed at "
+            "sandbox creation, so the change is not applied to this sandbox. "
+            "Remove and re-create it to apply: msb-circus rm -f && msb-circus up.",
+            name,
+        )
+    else:
+        logger.warning(
+            "Sandbox %s was created without the git worktree mirror mount, which "
+            "msb-circus now adds by default ([git] worktree_mirror defaults to true). "
+            "Mounts are fixed at sandbox creation. Re-create the sandbox to apply "
+            "it (msb-circus rm -f && msb-circus up), or set [git] worktree_mirror = "
+            "false in .agent-circus/config.toml to keep the old behavior.",
+            name,
+        )
 
 
 def _warn_on_trust_host_cas_drift(
@@ -1753,7 +1763,11 @@ def _repair_guest_path_worktrees(config: MsbConfig, workspace: Path) -> None:
     """
     if not config.git_worktree_mirror:
         return
-    guest_root = _workspace_guest_path(config, workspace)
+    try:
+        guest_root = _workspace_guest_path(config, workspace)
+    except ConfigurationError as e:
+        logger.debug("Worktree repair skipped: %s", e)
+        return
     try:
         repaired = repair_guest_path_worktrees(workspace, guest_root)
     except subprocess.CalledProcessError as e:

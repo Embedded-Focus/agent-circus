@@ -229,11 +229,16 @@ def test_up_boots_fresh_sandbox_with_documented_workflow(tmp_path, fake_msb):
 
 
 def _enable_docker(tmp_path: Path, size: str = "10G") -> None:
-    """Write a config that opts into docker via a dedicated disk."""
+    """Write a config that opts into docker via a dedicated disk.
+
+    Keeps the git worktree mirror off so the tests stay independent of
+    the ``worktree_mirror`` default.
+    """
     config_dir = tmp_path / ".agent-circus"
     config_dir.mkdir(exist_ok=True)
     (config_dir / "config.toml").write_bytes(
-        f'[msb.sandbox]\ndocker_disk = "{size}"\n'.encode()
+        f'[msb.sandbox]\ndocker_disk = "{size}"\n'
+        "[git]\nworktree_mirror = false\n".encode()
     )
 
 
@@ -1095,6 +1100,7 @@ def test_up_writes_pi_trust_for_workdir_and_additional_dirs(tmp_path, fake_msb):
     config_dir.mkdir()
     (tmp_path / "shared-libs").mkdir()
     (config_dir / "config.toml").write_bytes(
+        b"[git]\nworktree_mirror = false\n"
         b"[[additional_dirs]]\n"
         b'path = "' + str(tmp_path / "shared-libs").encode() + b'"\n'
     )
@@ -1113,7 +1119,7 @@ def test_up_trusts_workspace_guest_path_with_explicit_workdir(tmp_path, fake_msb
     config_dir = tmp_path / ".agent-circus"
     config_dir.mkdir()
     (config_dir / "config.toml").write_bytes(
-        b'[msb.agent]\nworkdir = "/workspace/repo"\n'
+        b'[git]\nworktree_mirror = false\n[msb.agent]\nworkdir = "/workspace/repo"\n'
     )
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
@@ -1437,6 +1443,8 @@ def test_up_creates_sandbox_worktrees_dir(tmp_path, fake_msb):
 def test_up_warns_when_sandbox_worktrees_exist_without_mirror(tmp_path, fake_msb):
     (tmp_path / ".git").mkdir()
     (tmp_path / ".agent-circus" / "worktrees" / "x").mkdir(parents=True)
+    config_dir = tmp_path / ".agent-circus"
+    (config_dir / "config.toml").write_text("[git]\nworktree_mirror = false\n")
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
     assert "worktree_mirror is off" in result.output
@@ -1498,6 +1506,9 @@ def test_up_installs_git_wrapper_with_mirror_root(tmp_path, fake_msb, monkeypatc
 
 
 def test_up_installs_git_wrapper_without_mirror_root(tmp_path, fake_msb):
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_text("[git]\nworktree_mirror = false\n")
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
     script = _installed_git_wrapper(fake_msb["calls"])

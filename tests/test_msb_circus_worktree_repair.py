@@ -203,7 +203,7 @@ def test_cli_repair_runs_with_mirror(tmp_path, monkeypatch, caplog):
 
 def test_cli_repair_skipped_without_mirror(tmp_path, monkeypatch):
     calls = _patch_repair_recorder(monkeypatch, [])
-    config = parse_config({})
+    config = parse_config({"git": {"worktree_mirror": False}})
     cli._repair_guest_path_worktrees(config, tmp_path)
     assert calls == []
 
