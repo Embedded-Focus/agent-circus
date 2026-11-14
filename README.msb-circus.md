@@ -9,6 +9,7 @@
 [Images](#images) ·
 [Lifecycle](#lifecycle) ·
 [Configuration](#configuration) ·
+[Hooks](#hooks) ·
 [Secrets](#secrets) ·
 [Networking](#networking) ·
 [Host Entries](#host-entries) ·
@@ -616,6 +617,18 @@ command = ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096"]
 # env = { KEY = "value" }               # extra variables
 # env_passthrough = ["OPENAI_API_KEY"]  # host variables for this daemon
 
+[msb.hooks]                             # project setup scripts; see "Hooks"
+provision = "apt-get update && apt-get install -y ripgrep"  # once per
+                                        # sandbox and after each change
+
+[msb.hooks.startup]                     # table form: once per boot
+script = "uv sync"                      # or: file = "path/to/script.sh"
+# required = false                      # default: true for provision
+# timeout = 300                         # seconds; default: no timeout
+# workdir = "/workspace"                # default: [msb.agent] workdir
+# env = { KEY = "value" }               # extra variables
+# env_passthrough = ["NPM_TOKEN"]       # host variables for this hook
+
 [ssh]                                  # forward the host SSH agent; see
                                        # "SSH Agent Forwarding"
 # config_path = "~/.ssh/config"        # copied to /root/.ssh/config
@@ -635,7 +648,8 @@ patterns = []                          # globs or re:-prefixed regexes
 ```
 
 All fields are optional. The values above are the defaults. The
-`[[msb.daemons]]` entry is an example; there are no daemons by default.
+`[[msb.daemons]]` and `[msb.hooks]` entries are examples; there are no
+daemons and no hooks by default.
 
 ## Secrets
 
@@ -857,6 +871,183 @@ Give a daemon only the secrets it needs.
   boots the sandbox without them.
 - `port` only checks TCP on `127.0.0.1` in the guest.
 - A daemon runs as root, like every other command in the sandbox.
+
+## Hooks
+
+A hook is a shell script that msb-circus runs in the sandbox to set up
+your project. Use hooks to install project software without building
+your own image. There are two hooks:
+
+| Hook | Runs | Typical use |
+| --- | --- | --- |
+| `provision` | Once per sandbox, and again when the script changes | Install packages and tools: `apt-get install`, `npm install -g`, downloads, `docker pull` |
+| `startup` | Once per boot of the sandbox | Prepare the project: write tool configs, `docker compose up -d`, database migrations |
+
+Both hooks run as root, in the agent workdir (`[msb.agent] workdir`).
+A long-running process does not belong in a hook. Make it a daemon (see
+[Daemons](#daemons)).
+
+### Example: install and configure a CLI tool
+
+This example installs the Grafana CLI `gcx` and configures it with a
+server URL and a token from your host shell:
+
+``` toml
+env_passthrough = ["GRAFANA_*"]
+
+[msb.hooks]
+provision = """
+set -eu
+GCX_VERSION=1.6.0
+case "$(uname -m)" in
+  x86_64)  arch=amd64 ;;
+  aarch64) arch=arm64 ;;
+  *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+curl -fsSL "https://github.com/grafana/gcx/releases/download/v${GCX_VERSION}/gcx_${GCX_VERSION}_linux_${arch}.tar.gz" \
+  | tar xz -C /usr/local/bin gcx
+"""
+
+startup = """
+set -eu
+: "${GRAFANA_SERVER:?GRAFANA_SERVER is required}"
+: "${GRAFANA_TOKEN:?GRAFANA_TOKEN is required}"
+gcx config set stacks.default.grafana.server "${GRAFANA_SERVER}"
+gcx config set stacks.default.grafana.token "${GRAFANA_TOKEN}"
+gcx config set contexts.default.stack default
+gcx config set stacks.default.grafana.org-id 1
+"""
+```
+
+- `provision` installs `gcx` once. The binary stays in the sandbox across
+  `stop` and `start`.
+- If you change `GCX_VERSION`, the script changes, and the next
+  `msb-circus up` runs `provision` again.
+- `startup` writes the configuration on every boot, so a new token in
+  your host shell reaches the sandbox at the next start.
+- The script detects the CPU architecture, because the sandbox image is
+  built for the architecture of your host.
+- `set -eu` stops the script at the first failing command. msb-circus
+  does not add it for you.
+
+### When Hooks Run
+
+| Command | Sandbox before | `provision` | `startup` |
+| --- | --- | --- | --- |
+| `up` | missing (created) | runs | runs |
+| `up`, `start` | stopped (started) | runs if the script changed | runs |
+| `up` | running | runs if the script changed | runs if it has not run in this boot |
+| `exec` | missing or stopped | runs if the script changed | runs |
+| `exec` | running | **does not run**; prints a warning if the script changed | runs if it has not run in this boot |
+| `rm`, `destroy` | – | its result is lost; the next `up` runs it again | – |
+
+The order after a boot or start is: host entries, SSH files, Git
+configuration, Docker engine ready, `provision`, `startup`, daemons. So
+`provision` can clone private repositories through the SSH agent, and
+daemons can use what the hooks set up.
+
+`exec` on a running sandbox never runs `provision`, so a session does not
+change the sandbox under you. Run `msb-circus up` to apply a changed
+`provision` script.
+
+msb-circus compares only the **script text**. A change to `env`,
+`env_passthrough` or a passed-through value does not run `provision`
+again. Use `msb-circus hook run provision --force` for that.
+
+### Hook Settings
+
+The short form is a string with the script. The table form allows more
+settings:
+
+``` toml
+[msb.hooks.provision]
+file = ".agent-circus/hooks/provision.sh"  # or: script = "..."
+required = true                            # default: true for provision,
+                                           # false for startup
+timeout = 600                              # seconds; default: no timeout
+workdir = "/workspace"                     # default: [msb.agent] workdir
+env = { NPM_CONFIG_LOGLEVEL = "warn" }     # extra variables
+env_passthrough = ["NPM_TOKEN"]            # host variables for this hook
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `script` | – | The script text. Set `script` or `file`, not both. |
+| `file` | – | A script file on the host. A relative path starts at the workspace root. msb-circus reads the file on the host at every run. |
+| `required` | `true` (`provision`), `false` (`startup`) | When a required hook fails, the command exits with code 1 and skips the later steps (`startup`, daemons). The sandbox keeps running. When an optional hook fails, msb-circus prints a warning and continues. |
+| `timeout` | none | Stop the hook after this many seconds. |
+| `workdir` | the `[msb.agent] workdir` | Guest working directory |
+| `env` | `{}` | Extra variables |
+| `env_passthrough` | `[]` | Host variables for this hook, with the same rules as the top-level `env_passthrough` |
+
+A hook gets the same variables as a daemon: the top-level
+`env_passthrough`, `SSH_AUTH_SOCK` (with `[ssh]`), its own
+`env_passthrough`, and its `env`. If a plain name in `env_passthrough` is
+not set on the host, the hook fails. Variable names must not start with
+`MSB_`: msb reserves that prefix and rejects such variables.
+
+A script that starts with `#!` runs with that interpreter. Any other
+script runs with `bash`. A script can be at most 64 KiB. For larger
+setups, call a script from your repository in the hook.
+
+A failed `provision` run is due again: the next `up` or `start` runs it
+again. A failed `startup` run is not repeated in the same boot; run it by
+hand with `msb-circus hook run startup`.
+
+### Writing Hook Scripts
+
+- Make `provision` safe to run more than once. `apt-get install` and
+  `docker pull` are safe. A script that appends a line to a file is not.
+- A background process that a hook starts must not keep the hook's
+  output open. Otherwise msb-circus waits for it. Redirect its output,
+  for example `some-tunnel >/dev/null 2>&1 &`. Better: make it a daemon.
+- `provision` results are lost with `msb-circus rm`, and the next `up`
+  runs `provision` again. Docker images that `provision` pulls survive
+  with `docker_disk_persist = true` (see [Docker and Disks](#docker-and-disks)).
+- The workspace is the same folder as on the host. A tool that writes
+  into it, such as `uv sync` writing `.venv`, shares that folder with
+  the host. Set `UV_PROJECT_ENVIRONMENT` to a path in the sandbox if the
+  host uses its own `.venv`.
+
+### Hook Commands
+
+| Command | Effect |
+| --- | --- |
+| `msb-circus hooks` | Show each hook: `up to date`, `due`, `never run` or `not configured`, the last exit code and the time of the last run. |
+| `msb-circus hook run <hook>` | Run `provision` or `startup` now, if it is due. Exits with code 1 when the hook fails. |
+| `msb-circus hook run <hook> --force` | Run it even when it is up to date. |
+| `msb-circus hook logs <hook> [-n N] [-f]` | Show the output of the last run. |
+
+The output of a hook appears on the terminal while it runs. A copy is in
+`/var/log/msb-circus/<hook>.log` in the sandbox; each run replaces it.
+In ACP mode (`exec --acp`), the output goes only to that file. If the
+sandbox must boot first, an ACP start waits for the hooks. Run
+`msb-circus up` once before you connect an editor to a new sandbox.
+
+### Hooks and Agents
+
+- The agent can change hook files and `config.toml` through the
+  workspace mount. A changed hook runs at the next boot or `up`. In the
+  sandbox, this gives the agent no new rights: it already runs as root.
+  But the change is in your repository. Review it like other code before
+  you commit it. msb-circus logs `The provision script changed since the
+  last run` before it runs a changed script.
+- Variables that only a hook gets (`env_passthrough` of the hook) are
+  not hidden from the agent: the agent can edit the hook to print them.
+- Hook variables are on the command line of the `msb` process on the
+  host while the hook runs, the same as for daemons and `exec -e`.
+
+### Migrating from agent-circus `[hooks]`
+
+msb-circus does not read the `[hooks]` table of agent-circus. Its
+scripts assume the `node` user and the Docker image of agent-circus.
+When `[hooks]` is set and `[msb.hooks]` is not, msb-circus logs a hint.
+
+- Move `base_root` and `base_user` into `provision`. Everything runs as
+  root, so `/home/node/...` paths become `/usr/local/bin` or `/root/...`.
+- Move `startup` into `startup`.
+- Hook files in `.agent-circus/hooks/` can stay where they are. Point
+  `file` at them.
 
 ## Docker and Disks
 
