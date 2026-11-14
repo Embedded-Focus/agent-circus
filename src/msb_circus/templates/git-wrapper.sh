@@ -4,8 +4,10 @@
 #
 # Keeps "git worktree add" and "git worktree move" targets inside the
 # repository's .agent-circus/worktrees/ (or Claude Code's .claude/worktrees/)
-# so new worktrees live on the host mount. Every other command runs the
-# real git unchanged. This guides agents; it is not a security boundary.
+# so new worktrees live on the host mount. With the worktree mirror, it
+# also runs worktree commands that go through the guest mount through the
+# host path instead, so Git records host paths. Every other command runs
+# the real git unchanged. This guides agents; it is not a security boundary.
 real_git="${MSB_CIRCUS_REAL_GIT:-/usr/bin/git}"
 # With [git] worktree_mirror, the workspace is mounted at guest_root and a
 # second time at mirror_root (its host path). Only worktrees made through
@@ -18,6 +20,8 @@ args=("$@")
 n=${#args[@]}
 globals=()
 cwd=$PWD
+# Set when --git-dir or --work-tree name the repository explicitly.
+dir_globals=0
 i=0
 # Skip git's global options; remember -C so relative paths resolve like git.
 while [ "$i" -lt "$n" ]; do
@@ -34,7 +38,17 @@ while [ "$i" -lt "$n" ]; do
             globals+=("$a" "$v")
             i=$((i + 2))
             ;;
-        -c | --git-dir | --work-tree | --namespace | --config-env)
+        --git-dir | --work-tree)
+            dir_globals=1
+            globals+=("$a" "${args[$((i + 1))]-}")
+            i=$((i + 2))
+            ;;
+        --git-dir=* | --work-tree=*)
+            dir_globals=1
+            globals+=("$a")
+            i=$((i + 1))
+            ;;
+        -c | --namespace | --config-env)
             globals+=("$a" "${args[$((i + 1))]-}")
             i=$((i + 2))
             ;;
@@ -48,19 +62,22 @@ done
 
 [ "${args[$i]-}" = worktree ] || exec "$real_git" "$@"
 action=${args[$((i + 1))]-}
+# wanted: position of the path that must stay in a worktrees directory
+# (add: the new worktree, move: the destination); 0 for actions that are
+# only translated to the mirror root.
 case $action in
     add) wanted=1 ;;
     move) wanted=2 ;;
+    remove | lock | unlock | repair) wanted=0 ;;
     *) exec "$real_git" "$@" ;;
 esac
 
-# Find the target path: the wanted-th positional argument after the action.
-# Remember its index (and the index of the source of a move) to build a
-# corrected command for the error message.
-target=
-target_idx=
-source_idx=
-count=0
+mirror=0
+[ -n "$mirror_root" ] && [ -n "$guest_root" ] && mirror=1
+[ "$wanted" -gt 0 ] || [ "$mirror" = 1 ] || exec "$real_git" "$@"
+
+# Collect the indexes of the positional arguments after the action.
+pos=()
 j=$((i + 2))
 only_positionals=0
 while [ "$j" -lt "$n" ]; do
@@ -72,16 +89,29 @@ while [ "$j" -lt "$n" ]; do
             -*) j=$((j + 1)); continue ;;
         esac
     fi
-    count=$((count + 1))
-    if [ "$count" = "$wanted" ]; then
-        target=$a
-        target_idx=$j
-        break
-    fi
-    source_idx=$j
+    pos+=("$j")
     j=$((j + 1))
 done
-[ -n "$target" ] || exec "$real_git" "$@"
+
+# Path arguments per action: add <path> [<commit-ish>], move <src> <dst>,
+# remove/lock/unlock <path>, repair [<path>...]. Remember the target and
+# the source of a move to build a corrected command for the error message.
+target=
+target_idx=
+source_idx=
+path_idx=()
+case $action in
+    add) path_idx=("${pos[@]:0:1}") ;;
+    move) path_idx=("${pos[@]:0:2}") ;;
+    remove | lock | unlock) path_idx=("${pos[@]:0:1}") ;;
+    repair) path_idx=("${pos[@]}") ;;
+esac
+if [ "$wanted" -gt 0 ]; then
+    target_idx=${pos[$((wanted - 1))]-}
+    [ -n "$target_idx" ] || exec "$real_git" "$@"
+    target=${args[$target_idx]}
+    [ "$wanted" = 2 ] && source_idx=${pos[0]}
+fi
 
 common=$("$real_git" "${globals[@]}" rev-parse --path-format=absolute \
     --git-common-dir 2>/dev/null) || exec "$real_git" "$@"
@@ -90,25 +120,101 @@ common=$("$real_git" "${globals[@]}" rev-parse --path-format=absolute \
 root=$(dirname -- "$common")
 git_root=$(realpath -m -- "$root")
 
-case $target in
-    /*) path=$target ;;
-    *) path=$cwd/$target ;;
-esac
-path=$(realpath -m -- "$path")
+# Print the absolute, normalized form of a path argument.
+abs_path() {
+    case $1 in
+        /*) realpath -m -- "$1" ;;
+        *) realpath -m -- "$cwd/$1" ;;
+    esac
+}
+
+# With the mirror, guest_root and mirror_root are the same directory, but
+# Git records the path it was given. Translate worktree commands of this
+# checkout that go through guest_root to mirror_root, so Git records host
+# paths: run them in mirror_root with every path argument mapped. Skipped
+# with --git-dir/--work-tree, whose values would need mapping too.
+translate=0
+declare -A mapped=()
+if [ "$mirror" = 1 ] && [ "$dir_globals" = 0 ]; then
+    g=$(realpath -m -- "$guest_root")
+    m=$(realpath -m -- "$mirror_root")
+    if [ "$git_root" = "$g" ] || [ "$git_root" = "$m" ]; then
+        [ "$git_root" = "$g" ] && translate=1
+        for idx in "${path_idx[@]}"; do
+            p=$(abs_path "${args[$idx]}")
+            case $p in
+                "$g") p=$mirror_root; translate=1 ;;
+                "$g"/*) p=$mirror_root/${p#"$g"/}; translate=1 ;;
+            esac
+            mapped[$idx]=$p
+        done
+    fi
+fi
+
+# Run the translated command: the global options without -C (all paths
+# are absolute now), then -C mirror_root and the mapped arguments.
+run_translated() {
+    local argv=() k=0
+    while [ "$k" -lt "${#globals[@]}" ]; do
+        if [ "${globals[$k]}" = -C ]; then
+            k=$((k + 2))
+            continue
+        fi
+        argv+=("${globals[$k]}")
+        k=$((k + 1))
+    done
+    argv+=(-C "$mirror_root")
+    k=$i
+    while [ "$k" -lt "$n" ]; do
+        if [ -n "${mapped[$k]+set}" ]; then
+            argv+=("${mapped[$k]}")
+        else
+            argv+=("${args[$k]}")
+        fi
+        k=$((k + 1))
+    done
+    echo "msb-circus: running \"git worktree $action\" through $mirror_root," \
+        "the host path of $guest_root (the same directory), so Git records" \
+        "paths that are valid on the host." >&2
+    exec "$real_git" "${argv[@]}"
+}
+
+if [ "$wanted" = 0 ]; then
+    [ "$translate" = 1 ] && run_translated
+    exec "$real_git" "$@"
+fi
 
 mirrored=0
-if [ -n "$mirror_root" ] && [ -n "$guest_root" ] &&
-    [ "$git_root" = "$(realpath -m -- "$guest_root")" ]; then
-    # Git would record guest_root paths, which are invalid on the host.
-    # Reject every target and point the agent to the host path instead.
+if [ "$translate" = 1 ]; then
+    path=${mapped[$target_idx]}
+    git_root=$m
     root=$mirror_root
     mirrored=1
-else
-    for dir in "$git_root/.agent-circus/worktrees" "$git_root/.claude/worktrees"; do
+    for dir in "$mirror_root/.agent-circus/worktrees" "$mirror_root/.claude/worktrees"; do
         case $path in
-            "$dir"/?*) exec "$real_git" "$@" ;;
+            "$dir"/?*) run_translated ;;
         esac
     done
+    # Compare below the normalized mirror root from here on.
+    case $path in
+        "$mirror_root") path=$m ;;
+        "$mirror_root"/*) path=$m/${path#"$mirror_root"/} ;;
+    esac
+else
+    path=$(abs_path "$target")
+    if [ "$mirror" = 1 ] && [ "$git_root" = "$(realpath -m -- "$guest_root")" ]; then
+        # Only reached with --git-dir/--work-tree: Git would record
+        # guest_root paths, which are invalid on the host. Reject every
+        # target and point the agent to the host path instead.
+        root=$mirror_root
+        mirrored=1
+    else
+        for dir in "$git_root/.agent-circus/worktrees" "$git_root/.claude/worktrees"; do
+            case $path in
+                "$dir"/?*) exec "$real_git" "$@" ;;
+            esac
+        done
+    fi
 fi
 
 # Agents fix their command fastest when the error hands them one that

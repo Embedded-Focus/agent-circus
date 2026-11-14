@@ -212,27 +212,363 @@ def test_install_executable_script_writes_executable_file(tmp_path: Path):
     assert os.access(dest, os.X_OK)
 
 
-def test_git_wrapper_rejects_guest_root_worktree_with_mirror(repo: Path):
-    mirror = "/home/user/my repo"
-    result = wrapper(
-        repo,
+#: Stub for the real git: answers ``rev-parse`` with ``$STUB_COMMON`` and
+#: writes the argv of every other call, one argument per line, to
+#: ``$STUB_LOG``.
+STUB_GIT = """#!/bin/bash
+for a in "$@"; do
+    if [ "$a" = rev-parse ]; then printf '%s\\n' "$STUB_COMMON"; exit 0; fi
+done
+printf '%s\\n' "$@" > "$STUB_LOG"
+"""
+
+#: First words of the note that the wrapper prints when it translates.
+TRANSLATION_NOTE = 'msb-circus: running "git worktree'
+
+
+def stub_wrapper(
+    tmp_path: Path,
+    cwd: Path,
+    *args: str,
+    guest_root: str,
+    mirror_root: str,
+    common: str,
+) -> tuple[subprocess.CompletedProcess[str], list[str] | None]:
+    """Run the wrapper with a stub real git.
+
+    :returns: The result and the argv that the stub received for its
+        non-``rev-parse`` call, or ``None`` if there was none.
+    """
+    stub = tmp_path / "stub-git"
+    stub.write_text(STUB_GIT, encoding="utf-8")
+    stub.chmod(0o755)
+    log = tmp_path / "stub.log"
+    log.unlink(missing_ok=True)
+    script = git_wrapper_script(guest_root, mirror_root)
+    result = subprocess.run(
+        ["bash", "-c", script, "git", *args],
+        check=False,
+        cwd=cwd,
+        env={
+            **git_env(),
+            "MSB_CIRCUS_REAL_GIT": str(stub),
+            "STUB_COMMON": common,
+            "STUB_LOG": str(log),
+        },
+        capture_output=True,
+        text=True,
+    )
+    argv = log.read_text(encoding="utf-8").splitlines() if log.exists() else None
+    return result, argv
+
+
+@pytest.fixture
+def mounts(tmp_path: Path) -> tuple[Path, str]:
+    """Return a guest root directory (the cwd) and a mirror root path."""
+    guest = tmp_path / "w"
+    guest.mkdir()
+    return guest, str(tmp_path / "h" / "my repo")
+
+
+def test_git_wrapper_translates_add_from_guest_root(tmp_path: Path, mounts):
+    guest, mirror = mounts
+    result, argv = stub_wrapper(
+        tmp_path,
+        guest,
         "worktree",
         "add",
         ".agent-circus/worktrees/x",
         "-b",
         "x",
-        guest_root=str(repo),
+        guest_root=str(guest),
         mirror_root=mirror,
+        common=f"{guest}/.git",
+    )
+    assert result.returncode == 0, result.stderr
+    assert argv == [
+        "-C",
+        mirror,
+        "worktree",
+        "add",
+        f"{mirror}/.agent-circus/worktrees/x",
+        "-b",
+        "x",
+    ]
+    assert TRANSLATION_NOTE in result.stderr
+    assert f"through {mirror}, the host path of {guest}" in result.stderr
+
+
+def test_git_wrapper_translates_claude_worktree_from_guest_root(tmp_path: Path, mounts):
+    guest, mirror = mounts
+    _, argv = stub_wrapper(
+        tmp_path,
+        guest,
+        "worktree",
+        "add",
+        f"{guest}/.claude/worktrees/x",
+        guest_root=str(guest),
+        mirror_root=mirror,
+        common=f"{guest}/.git",
+    )
+    assert argv == ["-C", mirror, "worktree", "add", f"{mirror}/.claude/worktrees/x"]
+
+
+def test_git_wrapper_translates_guest_target_from_mirror(tmp_path: Path):
+    guest = tmp_path / "w"
+    mirror = tmp_path / "h"
+    mirror.mkdir()
+    result, argv = stub_wrapper(
+        tmp_path,
+        mirror,
+        "worktree",
+        "add",
+        f"{guest}/.agent-circus/worktrees/x",
+        "main",
+        guest_root=str(guest),
+        mirror_root=str(mirror),
+        common=f"{mirror}/.git",
+    )
+    assert result.returncode == 0, result.stderr
+    assert argv == [
+        "-C",
+        str(mirror),
+        "worktree",
+        "add",
+        f"{mirror}/.agent-circus/worktrees/x",
+        "main",
+    ]
+
+
+def test_git_wrapper_keeps_commit_ish_untranslated(tmp_path: Path, mounts):
+    guest, mirror = mounts
+    _, argv = stub_wrapper(
+        tmp_path,
+        guest,
+        "worktree",
+        "add",
+        ".agent-circus/worktrees/x",
+        "main",
+        guest_root=str(guest),
+        mirror_root=mirror,
+        common=f"{guest}/.git",
+    )
+    assert argv is not None
+    assert argv[-1] == "main"
+
+
+def test_git_wrapper_rejects_sibling_from_guest_root_with_mirror(
+    tmp_path: Path, mounts
+):
+    guest, mirror = mounts
+    result, argv = stub_wrapper(
+        tmp_path,
+        guest,
+        "worktree",
+        "add",
+        "../x",
+        "-b",
+        "x",
+        guest_root=str(guest),
+        mirror_root=mirror,
+        common=f"{guest}/.git",
     )
     assert result.returncode == 128
-    assert not (repo / ".agent-circus" / "worktrees" / "x").exists()
-    assert f"below {mirror}/.agent-circus/worktrees/" in result.stderr
-    assert f"{repo} and {mirror} are the same checkout" in result.stderr
-    assert (
-        "  git -C /home/user/my\\ repo worktree add .agent-circus/worktrees/x -b x\n"
-        in result.stderr
+    assert argv is None
+    assert TRANSLATION_NOTE not in result.stderr
+    assert suggestion(result) == (
+        "git -C " + mirror.replace(" ", "\\ ") + " worktree add "
+        ".agent-circus/worktrees/x -b x"
     )
-    assert f"below {repo}" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    "action_args",
+    [
+        ["remove", ".agent-circus/worktrees/x"],
+        ["remove", "--force", ".agent-circus/worktrees/x"],
+        ["lock", "--reason", "a b", ".agent-circus/worktrees/x"],
+        ["unlock", ".agent-circus/worktrees/x"],
+    ],
+)
+def test_git_wrapper_translates_remove_lock_unlock(
+    tmp_path: Path, mounts, action_args: list[str]
+):
+    guest, mirror = mounts
+    result, argv = stub_wrapper(
+        tmp_path,
+        guest,
+        "worktree",
+        *action_args,
+        guest_root=str(guest),
+        mirror_root=mirror,
+        common=f"{guest}/.git",
+    )
+    assert result.returncode == 0, result.stderr
+    expected = [*action_args[:-1], f"{mirror}/.agent-circus/worktrees/x"]
+    assert argv == ["-C", mirror, "worktree", *expected]
+    assert TRANSLATION_NOTE in result.stderr
+
+
+def test_git_wrapper_translates_repair_without_args(tmp_path: Path, mounts):
+    guest, mirror = mounts
+    _, argv = stub_wrapper(
+        tmp_path,
+        guest,
+        "worktree",
+        "repair",
+        guest_root=str(guest),
+        mirror_root=mirror,
+        common=f"{guest}/.git",
+    )
+    assert argv == ["-C", mirror, "worktree", "repair"]
+
+
+def test_git_wrapper_translates_repair_paths(tmp_path: Path, mounts):
+    guest, mirror = mounts
+    _, argv = stub_wrapper(
+        tmp_path,
+        guest,
+        "worktree",
+        "repair",
+        ".agent-circus/worktrees/a",
+        f"{guest}/.claude/worktrees/b",
+        guest_root=str(guest),
+        mirror_root=mirror,
+        common=f"{guest}/.git",
+    )
+    assert argv == [
+        "-C",
+        mirror,
+        "worktree",
+        "repair",
+        f"{mirror}/.agent-circus/worktrees/a",
+        f"{mirror}/.claude/worktrees/b",
+    ]
+
+
+def test_git_wrapper_translates_move_inside(tmp_path: Path, mounts):
+    guest, mirror = mounts
+    _, argv = stub_wrapper(
+        tmp_path,
+        guest,
+        "worktree",
+        "move",
+        ".agent-circus/worktrees/x",
+        ".agent-circus/worktrees/y",
+        guest_root=str(guest),
+        mirror_root=mirror,
+        common=f"{guest}/.git",
+    )
+    assert argv == [
+        "-C",
+        mirror,
+        "worktree",
+        "move",
+        f"{mirror}/.agent-circus/worktrees/x",
+        f"{mirror}/.agent-circus/worktrees/y",
+    ]
+
+
+def test_git_wrapper_translates_global_options_and_dash_c(tmp_path: Path, mounts):
+    guest, mirror = mounts
+    _, argv = stub_wrapper(
+        tmp_path,
+        guest.parent,
+        "-c",
+        "a.b=c",
+        "-C",
+        guest.name,
+        "worktree",
+        "add",
+        ".agent-circus/worktrees/x",
+        guest_root=str(guest),
+        mirror_root=mirror,
+        common=f"{guest}/.git",
+    )
+    assert argv == [
+        "-c",
+        "a.b=c",
+        "-C",
+        mirror,
+        "worktree",
+        "add",
+        f"{mirror}/.agent-circus/worktrees/x",
+    ]
+
+
+@pytest.mark.parametrize(
+    "dir_args", [["--git-dir=GUEST/.git"], ["--git-dir", "GUEST/.git"]]
+)
+def test_git_wrapper_skips_translation_with_git_dir(
+    tmp_path: Path, mounts, dir_args: list[str]
+):
+    guest, mirror = mounts
+    result, argv = stub_wrapper(
+        tmp_path,
+        guest,
+        *[a.replace("GUEST", str(guest)) for a in dir_args],
+        "worktree",
+        "add",
+        ".agent-circus/worktrees/x",
+        guest_root=str(guest),
+        mirror_root=mirror,
+        common=f"{guest}/.git",
+    )
+    assert result.returncode == 128
+    assert argv is None
+    assert TRANSLATION_NOTE not in result.stderr
+
+
+def test_git_wrapper_passes_remove_through_without_mirror(tmp_path: Path, mounts):
+    guest, _ = mounts
+    args = ["worktree", "remove", ".agent-circus/worktrees/x"]
+    result, argv = stub_wrapper(
+        tmp_path,
+        guest,
+        *args,
+        guest_root=str(guest),
+        mirror_root="",
+        common=f"{guest}/.git",
+    )
+    assert argv == args
+    assert TRANSLATION_NOTE not in result.stderr
+
+
+def test_git_wrapper_passes_remove_of_other_repo_through(tmp_path: Path, mounts):
+    guest, mirror = mounts
+    other = tmp_path / "other"
+    other.mkdir()
+    args = ["worktree", "remove", f"{guest}/.agent-circus/worktrees/x"]
+    result, argv = stub_wrapper(
+        tmp_path,
+        other,
+        *args,
+        guest_root=str(guest),
+        mirror_root=mirror,
+        common=f"{other}/.git",
+    )
+    assert argv == args
+    assert TRANSLATION_NOTE not in result.stderr
+
+
+def test_git_wrapper_creates_real_worktree_through_mirror(tmp_path: Path, repo: Path):
+    guest = tmp_path / "guest"
+    result = wrapper(
+        repo,
+        "worktree",
+        "add",
+        str(guest / ".agent-circus" / "worktrees" / "x"),
+        "-b",
+        "x",
+        guest_root=str(guest),
+        mirror_root=str(repo),
+    )
+    assert result.returncode == 0, result.stderr
+    worktree = repo / ".agent-circus" / "worktrees" / "x"
+    assert worktree.is_dir()
+    dot_git = (worktree / ".git").read_text(encoding="utf-8")
+    assert str(repo) in dot_git
+    assert str(guest) not in dot_git
 
 
 def test_git_wrapper_allows_mirror_worktree_with_mirror(tmp_path: Path, repo: Path):
@@ -247,20 +583,6 @@ def test_git_wrapper_allows_mirror_worktree_with_mirror(tmp_path: Path, repo: Pa
         mirror_root=str(repo),
     )
     assert result.returncode == 0
-
-
-def test_git_wrapper_rejects_guest_root_target_from_mirror(tmp_path: Path, repo: Path):
-    guest_root = tmp_path / "workspace"
-    result = wrapper(
-        repo,
-        "worktree",
-        "add",
-        str(guest_root / ".agent-circus" / "worktrees" / "x"),
-        guest_root=str(guest_root),
-        mirror_root=str(repo),
-    )
-    assert result.returncode == 128
-    assert f"git -C {repo} worktree add" in result.stderr
 
 
 def test_git_wrapper_suggests_repo_root_without_mirror(repo: Path):

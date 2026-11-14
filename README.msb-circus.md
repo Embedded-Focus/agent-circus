@@ -1268,12 +1268,23 @@ unchanged. The wrapper guides agents; it is not a security boundary:
 are rejected as well, because their paths differ between host and
 sandbox.
 
-With `worktree_mirror = true`, the wrapper also rejects worktrees made
-through the `/workspace` mount (e.g. from a shell started in
-`/workspace`), because Git would record `/workspace` paths. Its error
-explains that both mounts are the same checkout and suggests the host
-path instead, e.g. `git worktree add ../feature -b feature` becomes
+With `worktree_mirror = true`, `/workspace` and the host path are the
+same directory, but Git records the path it is given. Agents in ACP
+sessions work in `/workspace`, so the wrapper translates their worktree
+commands: `git worktree add`, `move`, `remove`, `lock`, `unlock` and
+`repair` on this checkout through `/workspace` run through the host path
+instead, with every path argument mapped to it. For example,
+`git worktree add .agent-circus/worktrees/feature -b feature` in
+`/workspace` runs as
+`git -C /home/user/myrepo worktree add /home/user/myrepo/.agent-circus/worktrees/feature -b feature`.
+The wrapper prints one line that says so. The new worktree is also
+reachable as `/workspace/.agent-circus/worktrees/feature`, and Git works
+there as well. A target outside the worktree directories is still
+rejected, with a suggestion through the host path, e.g.
+`git worktree add ../feature -b feature` becomes
 `git -C /home/user/myrepo worktree add .agent-circus/worktrees/feature -b feature`.
+With `--git-dir` or `--work-tree`, the wrapper does not translate and
+rejects every target through `/workspace`.
 
 msb-circus does not run in a linked worktree (a directory created with
 `git worktree add`). Its Git metadata lives in the main repository, outside
