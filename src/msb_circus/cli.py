@@ -89,6 +89,7 @@ from .gitworktree import (
     find_missing_worktrees,
     git_wrapper_script,
     has_sandbox_worktrees,
+    repair_guest_path_worktrees,
 )
 from .hooks import (
     EXIT_RUNNER_FAILED,
@@ -1741,6 +1742,43 @@ def _fail_on_linked_worktree(workspace: Path) -> None:
         raise typer.Exit(code=1) from e
 
 
+def _repair_guest_path_worktrees(config: MsbConfig, workspace: Path) -> None:
+    """Repair worktrees that Git recorded through the guest mount.
+
+    Only with ``[git] worktree_mirror``: without the mirror, guest paths
+    are the only valid paths inside the sandbox. Never raises.
+
+    :param config: Resolved msb-circus configuration.
+    :param workspace: Workspace directory (absolute host path).
+    """
+    if not config.git_worktree_mirror:
+        return
+    guest_root = _workspace_guest_path(config, workspace)
+    try:
+        repaired = repair_guest_path_worktrees(workspace, guest_root)
+    except subprocess.CalledProcessError as e:
+        logger.warning(
+            "Could not repair Git worktrees that record the sandbox path %s: %s",
+            guest_root,
+            (e.stderr or "").strip() or e,
+        )
+        return
+    except OSError as e:
+        logger.warning(
+            "Could not repair Git worktrees that record the sandbox path %s: %s",
+            guest_root,
+            e,
+        )
+        return
+    for path in repaired:
+        logger.info(
+            "Repaired Git worktree %s: Git had recorded its sandbox path below "
+            "%s; it now records the host path.",
+            path,
+            guest_root,
+        )
+
+
 def _warn_on_missing_worktrees(workspace: Path) -> None:
     """Warn about registered Git worktrees that are missing on the host.
 
@@ -2368,6 +2406,7 @@ def _ensure_sandbox_running(
         fails. Hooks run after the dockerd check and before daemons.
     """
     _fail_on_linked_worktree(workspace)
+    _repair_guest_path_worktrees(config, workspace)
     _warn_on_missing_worktrees(workspace)
     _warn_on_broken_skill_links(config, workspace)
     _prepare_sandbox_worktrees(config, workspace)
@@ -2634,6 +2673,7 @@ def start(
     """Start the workspace sandbox and verify dockerd readiness."""
     _fail_on_linked_worktree(workspace)
     config, invoker = _resolve_invoker(workspace)
+    _repair_guest_path_worktrees(config, workspace)
     _warn_on_missing_worktrees(workspace)
     _warn_on_broken_skill_links(config, workspace)
     _prepare_sandbox_worktrees(config, workspace)

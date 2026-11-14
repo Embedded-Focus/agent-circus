@@ -1299,6 +1299,19 @@ rejected, with a suggestion through the host path, e.g.
 With `--git-dir` or `--work-tree`, the wrapper does not translate and
 rejects every target through `/workspace`.
 
+An agent can still create a worktree through `/workspace` without the
+wrapper, for example with `/usr/bin/git` or with a Git library inside a
+harness. Git then records `/workspace` paths, and the worktree is broken
+on the host although its files are there. With `worktree_mirror = true`,
+msb-circus repairs such worktrees on the host at every `up`, `start` and
+`exec`: for each registered worktree below `/workspace` whose directory
+exists in the workspace, it runs `git worktree repair` with the host
+path, and logs `Repaired Git worktree ...`. This needs `git` on the
+host; without it, msb-circus prints a warning. Until the next `up`,
+`start` or `exec`, the worktree stays broken on the host. Without the
+mirror, msb-circus does not repair anything, because `/workspace` paths
+are the only paths that work in the sandbox then.
+
 msb-circus does not run in a linked worktree (a directory created with
 `git worktree add`). Its Git metadata lives in the main repository, outside
 the sandbox, so Git cannot work inside the sandbox. `up`, `start`, and

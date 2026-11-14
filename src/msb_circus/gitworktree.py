@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import subprocess
 from pathlib import Path
 
 from .config import CONFIG_DIR_NAME
@@ -89,6 +90,103 @@ def find_missing_worktrees(workspace: Path) -> list[Path]:
         if not worktree.exists():
             missing.append(worktree)
     return sorted(missing)
+
+
+def find_guest_path_worktrees(workspace: Path, guest_root: str) -> list[Path]:
+    """Return host paths of linked worktrees that Git recorded below the guest root.
+
+    Reads ``<workspace>/.git/worktrees/*/gitdir`` without running Git. A
+    worktree recorded below ``guest_root + "/"`` is
+    mapped to the same relative path below *workspace*. Only mapped paths
+    that exist as directories on the host are returned.
+
+    :param workspace: Absolute workspace directory (main checkout, host path).
+    :param guest_root: Guest mount point of the workspace, e.g. ``/workspace``.
+    :returns: Host paths of the worktrees, sorted, without duplicates.
+    """
+    root = os.path.normpath(guest_root)
+    if not os.path.isabs(root):
+        return []
+    registry = workspace / ".git" / "worktrees"
+    if not registry.is_dir():
+        return []
+    prefix = root + os.sep
+    worktrees: set[Path] = set()
+    for entry in sorted(registry.iterdir()):
+        try:
+            line = (entry / "gitdir").read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if not line:
+            continue
+        dot_git = Path(line)
+        if not dot_git.is_absolute():
+            dot_git = entry / dot_git
+        guest_dir = os.path.dirname(os.path.normpath(dot_git))
+        # A linked worktree lies below the guest root; the root itself is
+        # the main checkout, which must never be "repaired" as a worktree.
+        if not guest_dir.startswith(prefix):
+            continue
+        worktree = Path(os.path.normpath(workspace / os.path.relpath(guest_dir, root)))
+        if worktree.is_dir():
+            worktrees.add(worktree)
+    return sorted(worktrees)
+
+
+def repair_guest_path_worktrees(
+    workspace: Path, guest_root: str, *, git: str = "git"
+) -> list[Path]:
+    """Rewrite worktree links that Git recorded below the guest root.
+
+    Runs ``git -C <workspace> worktree repair <paths>`` for all worktrees
+    from :func:`find_guest_path_worktrees`, and once more for those whose
+    ``.git`` file still names the guest root afterwards. In the sandbox,
+    one ``repair`` was seen to fix only the registry side when the
+    worktree had just been written through the other mount. Does nothing
+    (and starts no process) when there are none, or when *guest_root*
+    equals ``str(workspace)``.
+
+    :param workspace: Absolute workspace directory (main checkout, host path).
+    :param guest_root: Guest mount point of the workspace.
+    :param git: Git executable.
+    :returns: The repaired host paths (empty when nothing was done).
+    :raises OSError: If Git cannot be started.
+    :raises subprocess.CalledProcessError: If Git fails.
+    """
+    if os.path.normpath(guest_root) == os.path.normpath(str(workspace)):
+        return []
+    paths = find_guest_path_worktrees(workspace, guest_root)
+    if not paths:
+        return []
+    prefix = os.path.normpath(guest_root) + os.sep
+    pending = paths
+    for _attempt in range(2):
+        subprocess.run(
+            [git, "-C", str(workspace), "worktree", "repair", *map(str, pending)],
+            check=True,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+        )
+        pending = [p for p in pending if _dot_git_names(p, prefix)]
+        if not pending:
+            break
+    return paths
+
+
+def _dot_git_names(worktree: Path, prefix: str) -> bool:
+    """Tell whether a worktree's ``.git`` file points below *prefix*.
+
+    :param worktree: Worktree directory.
+    :param prefix: Path prefix ending with a separator.
+    :returns: ``True`` if the ``gitdir:`` line starts with *prefix*;
+        ``False`` for other content or an unreadable file.
+    """
+    try:
+        text = (worktree / ".git").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    return text.removeprefix("gitdir:").strip().startswith(prefix)
 
 
 def ensure_not_linked_worktree(workspace: Path) -> None:
