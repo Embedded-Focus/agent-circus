@@ -13,6 +13,9 @@ REDACTED = "<redacted>"
 #: Characters that turn a plain name into a glob pattern (like agent-circus).
 _GLOB_CHARS = "*?["
 
+#: Valid environment variable names (POSIX shell identifiers).
+ENV_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 
 def _matches_glob(name: str, pattern: str) -> bool:
     """Case-insensitively match *name* against an fnmatch glob *pattern*."""
@@ -92,3 +95,32 @@ def redact_env(env: dict[str, str]) -> dict[str, str]:
     :returns: Mapping with every value replaced by :data:`REDACTED`.
     """
     return dict.fromkeys(env, REDACTED)
+
+
+def quote_shell_word(value: str) -> str:
+    """Quote *value* as a shell word in double quotes, keeping ``$`` live.
+
+    User-authored environment values are guest shell words: ``$VAR``
+    expands when a guest shell evaluates the quoted string. ``$$`` yields
+    a literal ``$`` (docker-compose convention), backslashes and double
+    quotes are escaped. Everything else keeps POSIX double-quote
+    semantics, so ``$(cmd)`` and backticks run inside the guest.
+
+    :param value: Raw user-authored value.
+    :returns: The value wrapped in double quotes, ready for an
+        ``export KEY=...`` line or ``sh -c`` script.
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(value):
+        char = value[i]
+        if char == "$" and value.startswith("$$", i):
+            out.append("\\$")
+            i += 2
+        elif char in ("\\", '"'):
+            out.append("\\" + char)
+            i += 1
+        else:
+            out.append(char)
+            i += 1
+    return '"' + "".join(out) + '"'

@@ -1791,4 +1791,6 @@ def test_daemon_envs_daemon_env_overrides_passthrough(monkeypatch):
         }
     )
     envs = cli_module._daemon_envs(config)
-    assert envs["web"]["CIRCUS_TEST_VAR"] == "from-daemon"
+    assert envs["web"][0]["CIRCUS_TEST_VAR"] == "from-daemon"
+    # The daemon's own env entry wins, but has no $ -> literal.
+    assert envs["web"][1] == set()

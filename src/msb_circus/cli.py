@@ -2032,34 +2032,76 @@ def _check_docker_volume(invoker: MsbInvoker, config: MsbConfig, volume: str) ->
     )
 
 
+def _sandbox_creation_env(env: Mapping[str, str]) -> dict[str, str]:
+    """Return the env values that can be persisted at sandbox creation.
+
+    ``msb run --env`` passes values literally: a value containing ``$``
+    would poison the persisted sandbox environment with an unexpanded
+    string. Such values expand when msb-circus runs commands (exec,
+    hooks, daemons), so they are skipped here; literal values keep the
+    current behavior.
+
+    :param env: Merged ``[env]``/``[msb.env]`` variables.
+    :returns: Values safe to pass to ``msb run --env``.
+    """
+    skipped = sorted(k for k, v in env.items() if "$" in v)
+    if skipped:
+        logger.debug(
+            "Skipping $ references in %s at sandbox creation; they expand "
+            "when msb-circus runs commands in the guest.",
+            ", ".join(skipped),
+        )
+    return {k: v for k, v in env.items() if "$" not in v}
+
+
 def _merged_env(
     config: MsbConfig,
     env_passthrough: tuple[str, ...],
     env: Mapping[str, str],
-) -> dict[str, str]:
-    """Return the environment of a daemon or hook.
+) -> tuple[dict[str, str], frozenset[str]]:
+    """Return the environment of a daemon or hook, plus its shell words.
 
     In increasing precedence: the ``[env]``/``[msb.env]`` variables, the
     top-level ``env_passthrough`` variables, ``SSH_AUTH_SOCK`` (when
     ``[ssh]`` is configured), *env_passthrough*, and *env*.
 
+    Values are classified by origin and content: user-authored values
+    (``[env]``/``[msb.env]`` and *env*) containing ``$`` are guest shell
+    words whose references expand in the guest; passthrough values stay
+    literal even when they contain ``$`` (host secrets), and values
+    without ``$`` are literal because quoting them would change nothing.
+    A later source overrides both the value and the classification of a
+    key.
+
     :param config: Resolved msb-circus configuration.
     :param env_passthrough: Extra passthrough patterns of the entry.
     :param env: Extra variables of the entry.
-    :returns: Merged environment.
+    :returns: Tuple of the merged environment and the names of the keys
+        whose values are guest shell words.
     :raises ConfigurationError: If a passthrough variable is unset on the host.
     """
-    base = {**config.env, **resolve_passthrough(config.env_passthrough)}
+    merged: dict[str, str] = {}
+    origins: dict[str, bool] = {}  # True: shell word, False: literal
+
+    def put(values: Mapping[str, str], *, shell_word: bool) -> None:
+        """Merge *values*, overriding value and origin of known keys."""
+        merged.update(values)
+        origins.update(dict.fromkeys(values, shell_word))
+
+    put(config.env, shell_word=True)
+    put(resolve_passthrough(config.env_passthrough), shell_word=False)
     if config.ssh:
-        base = {**base, "SSH_AUTH_SOCK": SSH_AGENT_GUEST_SOCKET}
-    return {
-        **base,
-        **resolve_passthrough(env_passthrough),
-        **env,
-    }
+        put({"SSH_AUTH_SOCK": SSH_AGENT_GUEST_SOCKET}, shell_word=False)
+    put(resolve_passthrough(env_passthrough), shell_word=False)
+    put(env, shell_word=True)
+    return merged, frozenset(
+        k for k, shell_word in origins.items() if shell_word and "$" in merged[k]
+    )
 
 
-def _daemon_envs(config: MsbConfig) -> dict[str, dict[str, str]]:
+def _daemon_envs(
+    config: MsbConfig,
+) -> dict[str, tuple[dict[str, str], frozenset[str]]]:
     """Return the merged environment of every configured daemon.
 
     The environment of a daemon is, in increasing precedence: the
@@ -2068,7 +2110,8 @@ def _daemon_envs(config: MsbConfig) -> dict[str, dict[str, str]]:
     daemon's own ``env_passthrough`` variables, and its ``env`` entries.
 
     :param config: Resolved msb-circus configuration.
-    :returns: Mapping of daemon name to its merged environment.
+    :returns: Mapping of daemon name to ``(environment, shell word
+        names)``.
     :raises ConfigurationError: If a passthrough variable is unset on the
         host.
     """
@@ -2267,10 +2310,11 @@ def _run_hook(
 
     key = hook_key_hash(content) if hook.name == "provision" else None
     try:
-        env = {
-            **_merged_env(config, hook.env_passthrough, hook.env),
-            **build_run_env(content, key, hook.timeout),
-        }
+        merged, shell_keys = _merged_env(config, hook.env_passthrough, hook.env)
+        runner_env = build_run_env(content, key, hook.timeout)
+        env = {**merged, **runner_env}
+        # The runner's own variables are literal and win over user values.
+        shell_env = {k: merged[k] for k in shell_keys if k not in runner_env}
     except ConfigurationError as e:
         return fail(str(e))
     workdir = hook.workdir or resolve_agent_workdir(config, workspace)
@@ -2286,6 +2330,7 @@ def _run_hook(
                 name,
                 build_hook_run_args(hook.name, force),
                 env=env,
+                shell_env=shell_env,
                 workdir=workdir,
                 tty=None,
             ),
@@ -2579,7 +2624,7 @@ def _ensure_sandbox_running(
                     ),
                     trust_host_cas=config.network.trust_host_cas,
                     env={
-                        **config.env,
+                        **_sandbox_creation_env(config.env),
                         DOCKERD_SHUTDOWN_TIMEOUT_ENV_VAR: str(
                             config.sandbox.docker_stop_timeout
                         ),
@@ -2925,12 +2970,11 @@ def exec_(
     guest_workdir = workdir or resolve_agent_workdir(config, workspace)
 
     try:
-        env_map = {
-            **config.env,
-            **resolve_passthrough(config.env_passthrough),
-            **({"SSH_AUTH_SOCK": SSH_AGENT_GUEST_SOCKET} if config.ssh else {}),
-            **parse_env_assignments(env or []),
-        }
+        # -e assignments are user-authored shell words, same as [env].
+        env_map, shell_keys = _merged_env(
+            config, env_passthrough=(), env=parse_env_assignments(env or [])
+        )
+        shell_env = {k: env_map[k] for k in shell_keys}
     except ConfigurationError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
@@ -2988,6 +3032,7 @@ def exec_(
             cmd,
             acp=acp,
             env=env_map or None,
+            shell_env=shell_env or None,
             workdir=guest_workdir,
             user=user,
         ),

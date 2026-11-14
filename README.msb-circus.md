@@ -696,16 +696,46 @@ list wins:
 3. `env_passthrough` and `env` of a hook or daemon
 4. `msb-circus exec -e KEY=VALUE`
 
+### Dollar References
+
+Values that contain `$` are guest shell words: msb-circus expands the
+references inside the sandbox, against the sandbox's own environment
+(the same behavior as agent-circus):
+
+``` toml
+[env]
+PATH = "$PATH:/home/node/.local/bin"
+```
+
+The rules:
+
+- Full shell semantics apply inside double quotes: `${VAR}` works, and
+  `$(command)` or backticks run a command in the guest. Keep that in
+  mind for values you did not write yourself.
+- `$$` gives a literal `$`, so `COST = "5$$"` becomes `5$`.
+- A reference to an unset variable expands to an empty string (POSIX
+  behavior). msb-circus does not detect typos.
+- References resolve against the sandbox environment, not against other
+  `[env]` values. `$OTHER` does not read a variable defined in the same
+  table.
+- Values from `env_passthrough` never expand: a host secret keeps its
+  `$` characters as they are.
+- msb fixes the sandbox environment at creation and passes values
+  literally there, so values with `$` are not applied at creation time.
+  They take effect when msb-circus runs commands: `exec`, hooks, and
+  daemons. A service of the image that starts at boot reads the raw
+  value.
+
 ### Differences from agent-circus
 
 - agent-circus writes `[env]` into the image at build time, as `ENV`
   lines. msb-circus does not change the image; it passes the variables
   when it runs commands.
-- agent-circus expands `$` references, for example
-  `PATH = "/usr/local/go/bin:$PATH"`. msb passes values as they are, so
-  such a value would replace `PATH` with a broken one. msb-circus skips
-  every value that contains `$` and prints a warning. Write the full
-  value instead, or set the variable in a hook script.
+- Both tools expand `$` references. agent-circus expands them in
+  `/etc/profile.d` at container runtime; msb-circus expands them when it
+  runs a command in the guest (exec, hooks, daemons), so a value such
+  as `PATH = "$PATH:/home/node/.local/bin"` appends to the sandbox's
+  own `PATH`.
 - Variable names must not start with `MSB_`. msb reserves this prefix
   and rejects such variables, so msb-circus stops with an error.
 - Before this change, msb-circus ignored `[env]` without a message, and
@@ -869,6 +899,12 @@ Port mappings are fixed when the sandbox is created. If you add the
 
 A daemon also gets the variables of the top-level `env_passthrough`, and
 `SSH_AUTH_SOCK` when SSH agent forwarding is on. `env` wins over both.
+
+Values of `env` that contain `$` are guest shell words: msb-circus
+expands the references when the daemon starts, against the daemon's
+environment (see ["Dollar References"](#dollar-references)).
+`env_passthrough` values never expand. Before msb-circus supported `$`
+references, such values stayed literal.
 
 ### Commands
 
@@ -1047,7 +1083,9 @@ A hook gets the same variables as a daemon: `[env]` and `[msb.env]`, the
 top-level `env_passthrough`, `SSH_AUTH_SOCK` (with `[ssh]`), its own
 `env_passthrough`, and its `env`. If a plain name in `env_passthrough` is
 not set on the host, the hook fails. Variable names must not start with
-`MSB_`: msb reserves that prefix and rejects such variables.
+`MSB_`: msb reserves that prefix and rejects such variables. Values of
+`env` that contain `$` expand inside the sandbox before the hook runs
+(see ["Dollar References"](#dollar-references)).
 
 A script that starts with `#!` runs with that interpreter. Any other
 script runs with `bash`. A script can be at most 64 KiB. For larger

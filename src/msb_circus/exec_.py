@@ -7,12 +7,13 @@ import logging
 import subprocess
 import sys
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 from .config import (
     SSH_AGENT_GUEST_SOCKET,
     SSH_GUEST_DIR,
 )
+from .envs import ENV_NAME_PATTERN, quote_shell_word
 from .gitconfig import GIT_GUEST_GLOBAL_CONFIG, GIT_GUEST_MANAGED_CONFIG
 
 S6_PID1_COMM = "s6-svscan"
@@ -328,12 +329,34 @@ def build_init_shutdown_args(name: str) -> list[str]:
     return build_exec_args(name, ["sh", "-c", "kill -TERM 1"], tty=None)
 
 
+def build_env_exports(shell_env: Mapping[str, str]) -> str:
+    """Render ``export`` lines that expand guest-side.
+
+    Every value is quoted with :func:`msb_circus.envs.quote_shell_word`,
+    so ``$`` references resolve against the guest's live environment
+    when a shell evaluates the lines.
+
+    :param shell_env: Mapping of variable names to raw user-authored
+        values (guest shell words).
+    :returns: Script fragment of ``export KEY=...`` lines; empty when
+        *shell_env* is empty.
+    :raises ValueError: If a key is not a valid POSIX variable name.
+    """
+    lines = []
+    for key in sorted(shell_env):
+        if not ENV_NAME_PATTERN.fullmatch(key):
+            raise ValueError(f"invalid environment variable name: {key!r}")
+        lines.append(f"export {key}={quote_shell_word(shell_env[key])}\n")
+    return "".join(lines)
+
+
 def build_exec_args(
     name: str,
     command: list[str],
     *,
     acp: bool = False,
     env: dict[str, str] | None = None,
+    shell_env: Mapping[str, str] | None = None,
     workdir: str | None = None,
     user: str | None = None,
     tty: bool | None = True,
@@ -355,7 +378,13 @@ def build_exec_args(
     :param name: Sandbox name.
     :param command: Command (and arguments) to run inside the sandbox.
     :param acp: Select ACP streaming mode instead of a PTY session.
-    :param env: Optional per-execution environment overrides.
+    :param env: Optional per-execution environment overrides, passed
+        literally via ``--env``.
+    :param shell_env: Optional per-execution environment overrides that
+        are guest shell words (user-authored values containing ``$``
+        references). Applied by wrapping the command in a guest
+        ``sh -c`` that exports the values (with expansion) before
+        ``exec``-ing the command; never passed via ``--env``.
     :param workdir: Optional guest working directory.
     :param user: Optional guest user.
     :param tty: ``True`` for ``--tty``, ``False`` for ``--no-tty``,
@@ -377,7 +406,13 @@ def build_exec_args(
     else:
         args.append("--no-tty")
     for key, value in (env or {}).items():
+        if shell_env and key in shell_env:
+            # Exported (with expansion) by the guest shell wrapper below.
+            continue
         args += ["--env", f"{key}={value}"]
+    if shell_env:
+        script = build_env_exports(shell_env) + 'exec "$@"'
+        command = ["sh", "-c", script, "sh", *command]
     if workdir:
         args += ["--workdir", workdir]
     if user:

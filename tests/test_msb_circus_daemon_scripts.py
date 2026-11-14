@@ -49,6 +49,27 @@ def test_render_env_file_rejects_invalid_keys() -> None:
             raise AssertionError(f"expected ValueError for key {bad!r}")
 
 
+def test_render_env_file_double_quotes_shell_words() -> None:
+    text = render_env_file(
+        {"PATH": "$PATH:/opt/bin", "SECRET": "p$$s", "A": "plain"},
+        shell_words={"PATH", "SECRET"},
+    )
+    assert 'export PATH="$PATH:/opt/bin"' in text
+    assert r'export SECRET="p\$s"' in text
+    assert "export A=plain" in text
+    # The shell-word values expand against the guest environment.
+    proc = subprocess.run(
+        ["/bin/sh", "-c", '. /dev/stdin; printf %s "$PATH|$SECRET"'],
+        input=text,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={"PATH": "/g/bin"},
+    )
+    assert proc.returncode == 0
+    assert proc.stdout == "/g/bin:/opt/bin|p$s"
+
+
 def test_render_env_file_quotes_single_quote_value() -> None:
     text = render_env_file({"A": "it's"})
     proc = subprocess.run(
@@ -63,7 +84,7 @@ def test_render_env_file_quotes_single_quote_value() -> None:
 
 
 def test_encode_env_files_base64_encodes_rendered_env_file() -> None:
-    encoded = encode_env_files({"web": {"A": "1"}})
+    encoded = encode_env_files({"web": ({"A": "1"}, frozenset())})
     assert list(encoded) == ["CIRCUS_DAEMON_ENV_WEB"]
     assert base64.b64decode(
         encoded["CIRCUS_DAEMON_ENV_WEB"]

@@ -75,11 +75,12 @@ def test_parse_config_msb_env_wins_over_top_level_env():
     assert config.env == {"A": "msb", "B": "top"}
 
 
-def test_parse_config_env_skips_dollar_values_with_warning(caplog):
+def test_parse_config_env_accepts_dollar_values(caplog):
+    """$ values are kept; they expand guest-side (no warning anymore)."""
     with caplog.at_level(logging.WARNING, logger="msb_circus.config"):
         config = parse_config({"env": {"PATH": "/x:$PATH", "B": "2"}})
-    assert config.env == {"B": "2"}
-    assert "PATH" in caplog.text
+    assert config.env == {"PATH": "/x:$PATH", "B": "2"}
+    assert not caplog.text
 
 
 @pytest.mark.parametrize("table", ["env", "msb.env"])
@@ -114,11 +115,21 @@ def test_env_is_not_reported_as_unsupported(caplog):
 
 
 def test_merged_env_puts_env_table_below_passthrough(monkeypatch):
-    config = parse_config({"env": {"A": "env", "B": "env"}, "env_passthrough": ["B"]})
+    config = parse_config({"env": {"A": "$REF", "B": "env"}, "env_passthrough": ["B"]})
     monkeypatch.setenv("B", "host")
-    merged = cli_module._merged_env(config, env_passthrough=(), env={})
-    assert merged["A"] == "env"
+    merged, shell_words = cli_module._merged_env(config, env_passthrough=(), env={})
+    assert merged["A"] == "$REF"
     assert merged["B"] == "host"
+    # A: user-authored with $ -> shell word; B: overridden by passthrough
+    # -> literal even though [env] authored it.
+    assert shell_words == {"A"}
+
+
+def test_merged_env_shell_words_need_dollar(monkeypatch):
+    """Values without $ are literal; quoting them would change nothing."""
+    config = parse_config({"env": {"A": "plain"}})
+    _, shell_words = cli_module._merged_env(config, env_passthrough=(), env={})
+    assert shell_words == set()
 
 
 def test_exec_passes_env_table_values(tmp_path, fake_msb):
@@ -153,3 +164,65 @@ def test_exec_cli_env_overrides_env_table(tmp_path, fake_msb):
     envs = [argv[i + 1] for i, a in enumerate(argv) if a == "--env"]
     assert "GCX_KEYCHAIN=on" in envs
     assert "GCX_KEYCHAIN=off" not in envs
+
+
+def test_exec_expands_env_table_dollar_references(tmp_path, fake_msb):
+    """$ values become guest shell words exported by a sh -c wrapper."""
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b'[env]\nPATH = "$PATH:/home/node/.local/bin"\n'
+    )
+    result = runner.invoke(app, ["exec", "--workspace", str(tmp_path), "--", "pi"])
+    assert result.exit_code == 0
+    argv = fake_msb["interactive_argv"]
+    envs = [argv[i + 1] for i, a in enumerate(argv) if a == "--env"]
+    # Not passed literally via --env...
+    assert not [e for e in envs if e.startswith("PATH=")]
+    # ...but exported (unquoted $) before the command in a guest shell.
+    script = argv[argv.index("-c") + 1]
+    assert 'export PATH="$PATH:/home/node/.local/bin"' in script
+    assert script.endswith('exec "$@"')
+    assert argv[argv.index("--") + 1 :] == ["sh", "-c", script, "sh", "pi"]
+
+
+def test_exec_cli_assignment_expands_and_overrides_table(tmp_path, fake_msb):
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b'[env]\nA = "table"\n')
+    result = runner.invoke(
+        app,
+        ["exec", "--workspace", str(tmp_path), "-e", "A=$HOME/a", "--", "pi"],
+    )
+    assert result.exit_code == 0
+    argv = fake_msb["interactive_argv"]
+    envs = [argv[i + 1] for i, a in enumerate(argv) if a == "--env"]
+    assert not [e for e in envs if e.startswith("A=")]
+    script = argv[argv.index("-c") + 1]
+    assert 'export A="$HOME/a"' in script
+    assert 'export A="table"' not in script
+
+
+def test_exec_passthrough_overrides_table_value_literally(
+    tmp_path, fake_msb, monkeypatch
+):
+    """A passthrough value with $ stays literal (host secret, not a shell word)."""
+    monkeypatch.setenv("A", "secret$with$dollars")
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b'env_passthrough = ["A"]\n[env]\nA = "$HOME/table"\n'
+    )
+    result = runner.invoke(app, ["exec", "--workspace", str(tmp_path), "--", "pi"])
+    assert result.exit_code == 0
+    argv = fake_msb["interactive_argv"]
+    envs = [argv[i + 1] for i, a in enumerate(argv) if a == "--env"]
+    assert "A=secret$with$dollars" in envs
+    assert "-c" not in argv
+
+
+def test_sandbox_creation_env_drops_expandable_values():
+    """$ values would persist unexpanded at creation; literals pass through."""
+    assert cli_module._sandbox_creation_env(
+        {"A": "plain", "PATH": "$PATH:/opt/bin", "B": "a$$b"}
+    ) == {"A": "plain"}

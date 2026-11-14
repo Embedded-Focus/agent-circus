@@ -1480,9 +1480,9 @@ def _parse_string_dict(raw: Any, label: str) -> dict[str, str]:
 def _parse_env_tables(top_raw: Any, msb_raw: Any) -> dict[str, str]:
     """Merge the top-level ``[env]`` and the ``[msb.env]`` tables.
 
-    ``[msb.env]`` wins for a key set in both. Values that contain ``$``
-    are skipped with a warning: agent-circus expands them at image build
-    time, but msb passes values literally.
+    ``[msb.env]`` wins for a key set in both. Values are passed through
+    verbatim: values containing ``$`` are guest shell words that expand
+    when a guest shell evaluates them (see ``plan-msb-circus-env-expand.md``).
 
     :param top_raw: Raw ``[env]`` table or ``None``.
     :param msb_raw: Raw ``[msb.env]`` table or ``None``.
@@ -1503,14 +1503,7 @@ def _parse_env_tables(top_raw: Any, msb_raw: Any) -> dict[str, str]:
             raise ConfigurationError(
                 f"{label} key {key!r} uses the MSB_ prefix, which msb reserves"
             )
-    for key, value in merged.items():
-        if "$" in value:
-            logger.warning(
-                "Ignoring %s: msb-circus does not expand $ references in [env] "
-                "values; set the full value instead.",
-                key,
-            )
-    return {key: value for key, value in merged.items() if "$" not in value}
+    return merged
 
 
 def _parse_env_passthrough(raw: Any) -> tuple[str, ...]:

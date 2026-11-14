@@ -2,7 +2,7 @@
 
 import pytest
 
-from msb_circus.envs import redact_env, resolve_passthrough
+from msb_circus.envs import quote_shell_word, redact_env, resolve_passthrough
 from msb_circus.exceptions import ConfigurationError
 from msb_circus.exec_ import build_exec_args
 from msb_circus.images import (
@@ -340,3 +340,57 @@ def test_remove_guest_symlink_script_removes_only_symlinks(tmp_path):
 
     # (c) a missing path exits 0
     subprocess.run(["sh", "-c", script, "sh", str(tmp_path / "missing")], check=True)
+
+
+def test_quote_shell_word_keeps_references_and_escapes_literals():
+
+    # $ references stay live inside the double quotes.
+    assert quote_shell_word("$PATH:/home/node/.local/bin") == (
+        '"$PATH:/home/node/.local/bin"'
+    )
+    assert quote_shell_word("${HOME}/x") == '"${HOME}/x"'
+    # $$ yields a literal $ (docker-compose convention).
+    assert quote_shell_word("costs 5$$") == '"costs 5\\$"'
+    # Backslashes and double quotes are escaped.
+    assert quote_shell_word('a"b\\c') == '"a\\"b\\\\c"'
+    # Single quotes need no escaping inside double quotes.
+    assert quote_shell_word("it's") == '"it\'s"'
+    assert quote_shell_word("") == '""'
+
+
+def test_build_exec_args_wraps_shell_env_commands():
+    from msb_circus.exec_ import build_exec_args
+
+    args = build_exec_args(
+        "agents-x",
+        ["pi"],
+        env={"LITERAL": "1"},
+        shell_env={"PATH": "$PATH:/opt/bin", "EMPTY": ""},
+    )
+    assert args[:2] == ["exec", "--tty"]
+    # Literal values keep the --env path.
+    assert args[args.index("--env") + 1] == "LITERAL=1"
+    # The command is wrapped: exports expand, then exec replaces the shell.
+    assert args[args.index("--") + 1 :] == [
+        "sh",
+        "-c",
+        'export EMPTY=""\nexport PATH="$PATH:/opt/bin"\nexec "$@"',
+        "sh",
+        "pi",
+    ]
+
+
+def test_build_exec_args_without_shell_env_stays_unwrapped():
+    from msb_circus.exec_ import build_exec_args
+
+    args = build_exec_args("agents-x", ["pi"], env={"A": "1"})
+    assert args[args.index("--") + 1 :] == ["pi"]
+    args = build_exec_args("agents-x", ["pi"], shell_env=None)
+    assert args[args.index("--") + 1 :] == ["pi"]
+
+
+def test_build_exec_args_rejects_invalid_shell_env_key():
+    from msb_circus.exec_ import build_exec_args
+
+    with pytest.raises(ValueError, match="invalid environment variable name"):
+        build_exec_args("agents-x", ["pi"], shell_env={"1BAD": "x"})
