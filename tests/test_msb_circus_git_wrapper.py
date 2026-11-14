@@ -683,3 +683,65 @@ def test_git_wrapper_suggests_mirrored_move_source(tmp_path: Path, repo: Path):
         f"git -C {mirror} worktree move {mirror}/.agent-circus/worktrees/x "
         ".agent-circus/worktrees/moved"
     )
+
+
+def test_git_wrapper_message_puts_command_first(repo: Path):
+    result = wrapper(repo, "worktree", "add", "../sib", "-b", "sib")
+    lines = result.stderr.splitlines()
+    assert lines[0].startswith("fatal: msb-circus: rejected worktree path ")
+    assert lines[1] == "Run this instead:"
+    assert lines[2].startswith("  git -C ")
+    assert lines[3].startswith("Why: ")
+    assert lines[4].startswith("Do not use /usr/bin/git to get around this check")
+
+
+def test_git_wrapper_message_explains_outside_workspace(repo: Path):
+    result = wrapper(repo, "worktree", "add", "../sib")
+    sib = repo.parent / "sib"
+    assert f"Why: {sib} is outside the workspace." in result.stderr
+    assert "lost when the sandbox is removed" in result.stderr
+
+
+def test_git_wrapper_message_explains_worktrees_dir_inside_workspace(repo: Path):
+    result = wrapper(repo, "worktree", "add", "src/feature")
+    assert result.returncode == 128
+    assert (
+        f"Why: A worktree needs its own directory below {repo}/.agent-circus/worktrees/"
+        in result.stderr
+    )
+    assert "outside the workspace" not in result.stderr
+
+
+def test_git_wrapper_message_explains_outside_workspace_with_mirror(
+    tmp_path: Path, mounts
+):
+    guest, mirror = mounts
+    result, _ = stub_wrapper(
+        tmp_path,
+        guest,
+        "worktree",
+        "add",
+        "../x",
+        guest_root=str(guest),
+        mirror_root=mirror,
+        common=f"{guest}/.git",
+    )
+    assert f"Why: {tmp_path / 'x'} is outside the workspace." in result.stderr
+    assert "same checkout" not in result.stderr
+
+
+def test_git_wrapper_message_explains_git_dir_with_mirror(tmp_path: Path, mounts):
+    guest, mirror = mounts
+    result, _ = stub_wrapper(
+        tmp_path,
+        guest,
+        f"--git-dir={guest}/.git",
+        "worktree",
+        "add",
+        ".agent-circus/worktrees/x",
+        guest_root=str(guest),
+        mirror_root=mirror,
+        common=f"{guest}/.git",
+    )
+    assert f"Why: {guest} and {mirror} are the same checkout" in result.stderr
+    assert "With --git-dir or --work-tree" in result.stderr

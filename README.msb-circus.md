@@ -1259,10 +1259,23 @@ the host; msb-circus warns about this as well.
 The sandbox runs `git` through a small wrapper (`/usr/local/bin/git`,
 installed by msb-circus on every start). It rejects `git worktree add`
 and `git worktree move` to paths outside `.agent-circus/worktrees/` and
-`.claude/worktrees/`. Its error repeats the rejected command, rewritten to
+`.claude/worktrees/`. Agents act on the first lines of an error, so the
+error starts with the command to run: the rejected command, rewritten to
 run in the repository root with a target below `.agent-circus/worktrees/`
-(named after the new branch or the rejected path), so agents can run it
-as-is. All other Git commands pass through
+(named after the new branch or the rejected path). Then follow one line
+with the reason (for example "outside the workspace", so the worktree
+would be lost with the sandbox) and a warning not to bypass the check
+with `/usr/bin/git`:
+
+``` text
+fatal: msb-circus: rejected worktree path /home/user/feature
+Run this instead:
+  git -C /home/user/myrepo worktree add .agent-circus/worktrees/feature -b feature
+Why: /home/user/feature is outside the workspace. A worktree there would exist only in this sandbox and would be lost when the sandbox is removed.
+Do not use /usr/bin/git to get around this check: the worktree would not work correctly on the host.
+```
+
+All other Git commands pass through
 unchanged. The wrapper guides agents; it is not a security boundary:
 `/usr/bin/git` bypasses it. Worktrees that Codex creates under `~/.codex`
 are rejected as well, because their paths differ between host and

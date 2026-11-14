@@ -287,14 +287,26 @@ while [ "$k" -lt "$n" ]; do
     k=$((k + 1))
 done
 
+# Explain why. Agents act on the first lines, so the command comes first,
+# then one reason that matches this rejection, then the warning against
+# bypassing the wrapper (the most common wrong reaction).
+if [ "$mirrored" = 1 ] && [ "$translate" = 0 ]; then
+    why="$guest_root and $mirror_root are the same checkout, mounted twice in this sandbox. With --git-dir or --work-tree, Git would record $guest_root paths, which do not exist on the host."
+else
+    case $path in
+        "$git_root" | "$git_root"/*)
+            why="A worktree needs its own directory below $root/.agent-circus/worktrees/ (or .claude/worktrees/). That directory is part of the workspace, so the worktree and its files stay visible on the host."
+            ;;
+        *)
+            why="$path is outside the workspace. A worktree there would exist only in this sandbox and would be lost when the sandbox is removed."
+            ;;
+    esac
+fi
 {
     echo "fatal: msb-circus: rejected worktree path $path"
-    echo "Worktrees must live below $root/.agent-circus/worktrees/ so they stay visible on the host."
-    if [ "$mirrored" = 1 ]; then
-        echo "$guest_root and $mirror_root are the same checkout, mounted twice in this sandbox."
-        echo "Run worktree commands through $mirror_root so Git records paths that exist on the host."
-    fi
     echo "Run this instead:"
     echo "  $suggest"
+    echo "Why: $why"
+    echo "Do not use /usr/bin/git to get around this check: the worktree would not work correctly on the host."
 } >&2
 exit 128
