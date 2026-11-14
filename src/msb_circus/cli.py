@@ -1956,9 +1956,9 @@ def _merged_env(
 ) -> dict[str, str]:
     """Return the environment of a daemon or hook.
 
-    In increasing precedence: the top-level ``env_passthrough`` variables,
-    ``SSH_AUTH_SOCK`` (when ``[ssh]`` is configured), *env_passthrough*,
-    and *env*.
+    In increasing precedence: the ``[env]``/``[msb.env]`` variables, the
+    top-level ``env_passthrough`` variables, ``SSH_AUTH_SOCK`` (when
+    ``[ssh]`` is configured), *env_passthrough*, and *env*.
 
     :param config: Resolved msb-circus configuration.
     :param env_passthrough: Extra passthrough patterns of the entry.
@@ -1966,7 +1966,7 @@ def _merged_env(
     :returns: Merged environment.
     :raises ConfigurationError: If a passthrough variable is unset on the host.
     """
-    base = resolve_passthrough(config.env_passthrough)
+    base = {**config.env, **resolve_passthrough(config.env_passthrough)}
     if config.ssh:
         base = {**base, "SSH_AUTH_SOCK": SSH_AGENT_GUEST_SOCKET}
     return {
@@ -1980,9 +1980,9 @@ def _daemon_envs(config: MsbConfig) -> dict[str, dict[str, str]]:
     """Return the merged environment of every configured daemon.
 
     The environment of a daemon is, in increasing precedence: the
-    top-level ``env_passthrough`` variables, ``SSH_AUTH_SOCK`` (when
-    ``[ssh]`` is configured), the daemon's own ``env_passthrough``
-    variables, and its ``env`` entries.
+    ``[env]``/``[msb.env]`` variables, the top-level ``env_passthrough``
+    variables, ``SSH_AUTH_SOCK`` (when ``[ssh]`` is configured), the
+    daemon's own ``env_passthrough`` variables, and its ``env`` entries.
 
     :param config: Resolved msb-circus configuration.
     :returns: Mapping of daemon name to its merged environment.
@@ -2841,6 +2841,7 @@ def exec_(
 
     try:
         env_map = {
+            **config.env,
             **resolve_passthrough(config.env_passthrough),
             **({"SSH_AUTH_SOCK": SSH_AGENT_GUEST_SOCKET} if config.ssh else {}),
             **parse_env_assignments(env or []),

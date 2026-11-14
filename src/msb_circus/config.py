@@ -31,6 +31,7 @@ SUPPORTED_TOP_LEVEL_KEYS: frozenset[str] = frozenset(
     {
         "msb",
         "logging",
+        "env",
         "env_passthrough",
         "additional_dirs",
         "port_forwards",
@@ -437,7 +438,8 @@ class MsbConfig:
     :ivar daemons: Long-running processes supervised in the sandbox
         (``[[msb.daemons]]``).
     :ivar hooks: Project hooks (``[msb.hooks]``).
-    :ivar env: Sandbox-level environment variables (non-secret defaults).
+    :ivar env: Non-secret variables from ``[env]`` and ``[msb.env]``; set at
+        sandbox creation and passed with every exec, hook and daemon.
     :ivar env_passthrough: Host environment variables to pass into the
         sandbox. Literal names are required to exist on the host; entries
         are otherwise treated as glob or ``re:``-prefixed regex patterns
@@ -1462,6 +1464,42 @@ def _parse_string_dict(raw: Any, label: str) -> dict[str, str]:
     return result
 
 
+def _parse_env_tables(top_raw: Any, msb_raw: Any) -> dict[str, str]:
+    """Merge the top-level ``[env]`` and the ``[msb.env]`` tables.
+
+    ``[msb.env]`` wins for a key set in both. Values that contain ``$``
+    are skipped with a warning: agent-circus expands them at image build
+    time, but msb passes values literally.
+
+    :param top_raw: Raw ``[env]`` table or ``None``.
+    :param msb_raw: Raw ``[msb.env]`` table or ``None``.
+    :returns: Merged variables.
+    :raises ConfigurationError: If a table is malformed, a name is not a
+        valid environment variable name, or a name starts with ``MSB_``.
+    """
+    top = _parse_string_dict(top_raw, "env")
+    msb = _parse_string_dict(msb_raw, "msb.env")
+    merged = {**top, **msb}
+    for key in merged:
+        label = "msb.env" if key in msb else "env"
+        if not _ENV_NAME_PATTERN.fullmatch(key):
+            raise ConfigurationError(
+                f"{label} key {key!r} is not a valid environment variable name"
+            )
+        if key.startswith("MSB_"):
+            raise ConfigurationError(
+                f"{label} key {key!r} uses the MSB_ prefix, which msb reserves"
+            )
+    for key, value in merged.items():
+        if "$" in value:
+            logger.warning(
+                "Ignoring %s: msb-circus does not expand $ references in [env] "
+                "values; set the full value instead.",
+                key,
+            )
+    return {key: value for key, value in merged.items() if "$" not in value}
+
+
 def _parse_env_passthrough(raw: Any) -> tuple[str, ...]:
     """Parse the ``env_passthrough`` list.
 
@@ -1534,7 +1572,7 @@ def parse_config(config: dict[str, Any]) -> MsbConfig:
         port_forwards=_parse_port_forwards(config.get("port_forwards")),
         daemons=_parse_daemons(msb_raw.get("daemons")),
         hooks=_parse_hooks(msb_raw.get("hooks")),
-        env=_parse_string_dict(msb_raw.get("env"), "msb.env"),
+        env=_parse_env_tables(config.get("env"), msb_raw.get("env")),
         env_passthrough=_parse_env_passthrough(config.get("env_passthrough")),
         git_worktree_mirror=git.worktree_mirror if git is not None else False,
         git=git,

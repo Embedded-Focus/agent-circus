@@ -10,6 +10,7 @@
 [Lifecycle](#lifecycle) ·
 [Configuration](#configuration) ·
 [Hooks](#hooks) ·
+[Environment Variables](#environment-variables) ·
 [Secrets](#secrets) ·
 [Networking](#networking) ·
 [Host Entries](#host-entries) ·
@@ -567,6 +568,10 @@ name = "other-project"
 ``` toml
 env_passthrough = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
 
+[env]                                  # non-secret variables; see
+                                       # "Environment Variables"
+# GCX_KEYCHAIN = "off"
+
 [msb]
 # binary = "/usr/local/bin/msb"        # default: the bundled msb binary
 
@@ -650,6 +655,59 @@ patterns = []                          # globs or re:-prefixed regexes
 All fields are optional. The values above are the defaults. The
 `[[msb.daemons]]` and `[msb.hooks]` entries are examples; there are no
 daemons and no hooks by default.
+
+## Environment Variables
+
+Set fixed, non-secret variables for the sandbox in the `[env]` table:
+
+``` toml
+[env]
+GCX_KEYCHAIN = "off"
+GOPROXY = "https://proxy.corp.internal/go,direct"
+```
+
+msb-circus also reads the table `[msb.env]`. agent-circus ignores that
+table, so use it for values that only msb-circus should apply. If a
+variable is in both tables, `[msb.env]` wins.
+
+msb-circus applies the variables at these times:
+
+- when it creates the sandbox, so the services of the image (for
+  example the Docker engine) see them;
+- at every `msb-circus exec`, so a running sandbox gets a changed value
+  at the next command, without a new sandbox;
+- at every hook run and in the environment file of every daemon (see
+  [Hooks](#hooks) and [Daemons](#daemons)).
+
+A service of the image keeps the value that it had when the sandbox was
+created. To change such a value, re-create the sandbox
+(`msb-circus rm -f && msb-circus up`).
+
+When a variable is set in more than one place, the later source in this
+list wins:
+
+1. `[env]`, then `[msb.env]`
+2. `env_passthrough` (top level)
+3. `env_passthrough` and `env` of a hook or daemon
+4. `msb-circus exec -e KEY=VALUE`
+
+### Differences from agent-circus
+
+- agent-circus writes `[env]` into the image at build time, as `ENV`
+  lines. msb-circus does not change the image; it passes the variables
+  when it runs commands.
+- agent-circus expands `$` references, for example
+  `PATH = "/usr/local/go/bin:$PATH"`. msb passes values as they are, so
+  such a value would replace `PATH` with a broken one. msb-circus skips
+  every value that contains `$` and prints a warning. Write the full
+  value instead, or set the variable in a hook script.
+- Variable names must not start with `MSB_`. msb reserves this prefix
+  and rejects such variables, so msb-circus stops with an error.
+- Before this change, msb-circus ignored `[env]` without a message, and
+  it applied `[msb.env]` only when it created the sandbox.
+
+Do not put secrets in `[env]`: `config.toml` is often in Git. Use
+`env_passthrough` (see [Secrets](#secrets)).
 
 ## Secrets
 
@@ -847,8 +905,8 @@ files.
 `msb-circus exec` passes variables to one process, and they are gone when
 it ends. A daemon is started by s6, and s6 restarts it after a crash, so
 the variables must be stored in the guest. msb-circus therefore writes the
-environment of each daemon (`env`, `env_passthrough` and the top-level
-`env_passthrough`) to a file in the guest:
+environment of each daemon (`env`, `env_passthrough`, the top-level
+`env_passthrough`, and `[env]` / `[msb.env]`) to a file in the guest:
 
 - The file is `/run/circus-daemons/<name>/env.sh`. `/run/circus-daemons` is
   a separate tmpfs (memory only) that only root can read. The values do not
@@ -980,8 +1038,8 @@ env_passthrough = ["NPM_TOKEN"]            # host variables for this hook
 | `env` | `{}` | Extra variables |
 | `env_passthrough` | `[]` | Host variables for this hook, with the same rules as the top-level `env_passthrough` |
 
-A hook gets the same variables as a daemon: the top-level
-`env_passthrough`, `SSH_AUTH_SOCK` (with `[ssh]`), its own
+A hook gets the same variables as a daemon: `[env]` and `[msb.env]`, the
+top-level `env_passthrough`, `SSH_AUTH_SOCK` (with `[ssh]`), its own
 `env_passthrough`, and its `env`. If a plain name in `env_passthrough` is
 not set on the host, the hook fails. Variable names must not start with
 `MSB_`: msb reserves that prefix and rejects such variables.
