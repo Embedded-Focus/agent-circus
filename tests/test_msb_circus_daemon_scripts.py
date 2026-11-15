@@ -140,8 +140,17 @@ def test_render_log_run_script_matches_expected_text() -> None:
     assert render_log_run_script("web") == (
         "#!/bin/sh\n"
         "mkdir -p /var/log/circus-daemons/web\n"
+        "export TZ=UTC0\n"
         "exec /command/s6-log -b n10 s1000000 T /var/log/circus-daemons/web\n"
     )
+
+
+def test_render_log_run_script_stamps_in_utc_before_s6_log() -> None:
+    """s6-log stamps lines in local time; the logger pins UTC explicitly."""
+    script = render_log_run_script("web")
+    export_line = script.index("export TZ=UTC0\n")
+    exec_line = script.index("exec /command/s6-log")
+    assert export_line < exec_line
 
 
 def test_build_install_script_registers_two_daemons() -> None:

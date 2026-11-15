@@ -5,9 +5,10 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import sys
 import tempfile
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import Annotated
@@ -121,6 +122,19 @@ from .images import (
     build_podman_save_args,
     bundled_dockerfile_path,
 )
+from .logs import (
+    GUEST_LOG_SOURCES,
+    KERNEL_SOURCE,
+    LogSource,
+    build_follow_logs_script,
+    build_log_files_script,
+    build_logs_script,
+    build_plain_follow_script,
+    log_label,
+    normalize_log_line,
+    parse_log_files_output,
+    resolve_log_sources,
+)
 from .msb import MsbInvoker, check_version, probe_version, resolve_msb_binary
 from .ps import format_sandbox_json, format_sandbox_table
 from .sandbox import (
@@ -191,6 +205,9 @@ STOP_POLL_INTERVAL = 0.5
 
 #: Seconds msb-circus waits for an autostarted daemon's port to open.
 DAEMON_READY_TIMEOUT = 30
+
+#: Seconds a streaming cleanup waits after SIGTERM before SIGKILL.
+_STREAM_CLEANUP_TIMEOUT_S = 5.0
 
 
 def _monotonic() -> float:
@@ -2755,6 +2772,267 @@ def stop(
     name = sandbox_name_for_workspace(workspace)
     _stop_sandbox(invoker, config, name)
     typer.echo(f"✓ Stopped {name}")
+
+
+@app.command(name="logs")
+def logs(
+    sources: Annotated[
+        list[str] | None,
+        typer.Argument(
+            help="Log sources to show; default: all. Sources print grouped "
+            "by source in a fixed presentation order, not merged by time; "
+            "see --list for the available sources."
+        ),
+    ] = None,
+    lines: Annotated[
+        int,
+        typer.Option("--lines", "-n", min=1, help="Number of lines per source."),
+    ] = 50,
+    follow: Annotated[
+        bool,
+        typer.Option("--follow", "-f", help="Keep printing new log lines."),
+    ] = False,
+    list_sources: Annotated[
+        bool,
+        typer.Option("--list", help="List the log sources and their guest paths."),
+    ] = False,
+    labels: Annotated[
+        bool,
+        typer.Option(
+            "--labels/--no-labels",
+            help="Prefix every line with its source. Without labels, each "
+            "file is printed under a '==> path <==' header.",
+        ),
+    ] = True,
+    timestamps: Annotated[
+        bool,
+        typer.Option(
+            "--timestamps",
+            "-t",
+            help="Move the timestamps that sources embed in their lines "
+            "(daemons, dockerd) to a podman-style leading position. This "
+            "does not sort lines; lines without a per-line stamp print "
+            "unchanged.",
+        ),
+    ] = False,
+    workspace: Annotated[
+        Path,
+        typer.Option(
+            "--workspace",
+            "-w",
+            help="Workspace directory path.",
+            exists=True,
+            file_okay=False,
+            resolve_path=True,
+        ),
+    ] = Path("."),
+) -> None:
+    """Show the logs of the workspace sandbox VM."""
+    if list_sources:
+        typer.echo("Log sources of a sandbox (guest paths):")
+        typer.echo(
+            f"  {'kernel':<10} dmesg (in the guest)\n"
+            "            "
+            + KERNEL_SOURCE.description
+            + "; part of the default selection"
+        )
+        for source in GUEST_LOG_SOURCES:
+            typer.echo(
+                f"  {source.name:<10} {source.pattern}\n            {source.description}"
+            )
+        return
+    try:
+        selected = resolve_log_sources(sources)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    _config, invoker = _resolve_invoker(workspace)
+    name = sandbox_name_for_workspace(workspace)
+    _require_running_sandbox(invoker, name)
+    if follow:
+        _logs_follow(invoker, name, selected, lines, labels, timestamps)
+        return
+    try:
+        result = invoker.run(
+            build_exec_args(
+                name,
+                ["sh", "-c", build_logs_script(selected, lines, labels=labels)],
+                tty=None,
+            ),
+            check=False,
+        )
+    except MsbCommandError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    if result.returncode != 0:
+        typer.echo(
+            f"Error: reading the logs of {name} failed "
+            f"(exit code {result.returncode}): {(result.stderr or '').strip()}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    output = result.stdout or ""
+    if not output.strip():
+        typer.echo(
+            f"No log output found in {name}. The log files appear once the "
+            "services and daemons have written to them."
+        )
+        return
+    if timestamps:
+        output = (
+            "\n".join(normalize_log_line(line) for line in output.splitlines()) + "\n"
+        )
+    typer.echo(output, nl=False)
+
+
+def _terminate_process(proc: subprocess.Popen) -> None:
+    """Terminate *proc* and reap it; kill after a bounded timeout.
+
+    :param proc: The child process to stop.
+    """
+    proc.terminate()
+    try:
+        proc.wait(timeout=_STREAM_CLEANUP_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
+
+def _stream_logs(argv: list[str], transform: Callable[[str], str]) -> int:
+    """Run *argv* and print its stdout lines through *transform*.
+
+    Streams line by line (flushing per line) so a follower feels live;
+    the child's stderr passes through to the terminal. After normal end
+    of output the child is reaped and its real exit code returned —
+    never terminated. On Ctrl-C or any other streaming error the child
+    is stopped and reaped, and the exception propagates (the caller
+    turns ``KeyboardInterrupt`` into exit code 130). A viewer that
+    closed its end of the pipe (``... | head``) stops the child and
+    ends quietly with exit code 0; a nonzero child exit is never
+    converted to zero.
+
+    Shortcoming: without a PTY, the child (``msb exec``) may decide not
+    to allocate one guest-side; tail output does not need one.
+
+    :param argv: Full argv to execute, including the msb binary.
+    :param transform: Applied to every line (without its newline).
+    :returns: The child's exit code (0 after a broken pipe).
+    :raises MsbCommandError: If the child cannot be started.
+    """
+    try:
+        proc = subprocess.Popen(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            errors="replace",
+        )
+    except OSError as e:
+        raise MsbCommandError(f"Failed to execute {argv[0]}: {e}", returncode=-1) from e
+    assert proc.stdout is not None
+    try:
+        for line in proc.stdout:
+            sys.stdout.write(transform(line.rstrip("\n")) + "\n")
+            sys.stdout.flush()
+    except BrokenPipeError:
+        _terminate_process(proc)
+        return 0
+    except BaseException:
+        # KeyboardInterrupt and anything else: stop the child so no
+        # follower outlives the command, then let the caller react.
+        _terminate_process(proc)
+        raise
+    return proc.wait()
+
+
+def _logs_follow(
+    invoker: MsbInvoker,
+    name: str,
+    selected: tuple[LogSource, ...],
+    lines: int,
+    labels: bool,
+    timestamps: bool,
+) -> None:
+    """Follow the selected log sources of a sandbox.
+
+    Discovers the existing files first (so ``tail -F`` never retries a
+    missing path), then streams through one ``msb exec``. With labels,
+    one labeled ``tail -F`` pipeline per file runs in the guest (see
+    :func:`msb_circus.logs.build_follow_logs_script`); without labels,
+    a single plain ``tail -F`` follows every file — and the two-stage
+    kernel follower (limited snapshot plus ``dmesg --follow-new``, see
+    :func:`msb_circus.logs.build_plain_follow_script`) joins when the
+    kernel is selected. Order is preserved within each source; the
+    concurrent pipelines interleave sources by arrival.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param name: Sandbox name.
+    :param selected: Sources to follow; the kernel follows via a
+        snapshot plus ``dmesg --follow-new``.
+    :param lines: Number of trailing lines to print per source at start.
+    :param labels: Prefix every line with its source label.
+    :param timestamps: Normalize embedded stamps to a leading position.
+    :raises typer.Exit: On msb failures (code 1) or Ctrl-C (code 130).
+    """
+    file_sources = [source for source in selected if source.pattern is not None]
+    kernel_selected = any(source.pattern is None for source in selected)
+    try:
+        result = invoker.run(
+            build_exec_args(
+                name, ["sh", "-c", build_log_files_script(file_sources)], tty=None
+            ),
+            check=False,
+        )
+    except MsbCommandError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    if result.returncode != 0:
+        typer.echo(
+            f"Error: discovering the log files of {name} failed "
+            f"(exit code {result.returncode}): {(result.stderr or '').strip()}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    files = parse_log_files_output(result.stdout or "")
+    if not files and not kernel_selected:
+        typer.echo(f"No log files exist yet in {name}.")
+        return
+    if labels:
+        pairs = [(log_label(path), path) for path in files]
+        follow_argv = [
+            "sh",
+            "-c",
+            build_follow_logs_script(pairs, lines, kernel=kernel_selected),
+            "sh",
+            *(f"{label}|{path}" for label, path in pairs),
+        ]
+    elif kernel_selected:
+        follow_argv = [
+            "sh",
+            "-c",
+            build_plain_follow_script(lines),
+            "sh",
+            *files,
+        ]
+    else:
+        follow_argv = ["tail", "-F", "-n", str(max(lines, 1)), "--", *files]
+    exec_argv = build_exec_args(name, follow_argv, tty=None)
+    try:
+        if timestamps:
+            returncode = _stream_logs(
+                [str(invoker.binary), *exec_argv], normalize_log_line
+            )
+        else:
+            tail = invoker.run(exec_argv, check=False, capture_output=False)
+            returncode = tail.returncode
+    except KeyboardInterrupt:
+        raise typer.Exit(code=130) from None
+    except MsbCommandError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    if returncode != 0:
+        raise typer.Exit(code=returncode)
 
 
 @app.command()

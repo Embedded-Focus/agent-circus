@@ -201,12 +201,18 @@ exit 0
 def render_log_run_script(name: str) -> str:
     """Render the s6 ``log/run`` script that logs a daemon's stdout.
 
+    The logger runs with ``TZ=UTC0`` so s6-log's ``T`` action stamps
+    every line in UTC, regardless of the image's default timezone or a
+    provision hook changing ``/etc/localtime``. The host-side timestamp
+    normalization relies on this guarantee.
+
     :param name: Daemon name.
     :returns: The complete logger ``run`` script text with a final newline.
     """
     logd = _q(log_dir(name))
     return f"""#!/bin/sh
 mkdir -p {logd}
+export TZ=UTC0
 exec /command/s6-log -b n10 s1000000 T {logd}
 """
 

@@ -15,6 +15,7 @@
 [Networking](#networking) ·
 [Host Entries](#host-entries) ·
 [CA Certificates](#ca-certificates) ·
+[Logs](#logs) ·
 [Troubleshooting](#troubleshooting)
 
 ## Overview
@@ -945,7 +946,9 @@ The `STATE` column of `msb-circus daemons` shows one of these values:
 The logs are in the guest at `/var/log/circus-daemons/<name>/current`.
 They keep the daemon's stdout and stderr, with a timestamp per line, and
 survive a restart of the sandbox. s6 rotates them at 1 MB and keeps 10 old
-files.
+files. `msb-circus daemon logs <name>` reads them; `msb-circus logs`
+shows all daemon logs together with the other sandbox logs (see
+[Logs](#logs)).
 
 ### Daemon Secrets
 
@@ -976,6 +979,100 @@ Give a daemon only the secrets it needs.
   boots the sandbox without them.
 - `port` only checks TCP on `127.0.0.1` in the guest.
 - A daemon runs as root, like every other command in the sandbox.
+
+## Logs
+
+The command `msb-circus logs` shows the log output of the sandbox VM. It
+reads the log files that the sandbox services write inside the guest and
+prefixes every line with its source in square brackets, in the style of
+`docker compose logs`:
+
+``` text
+[kernel] [    0.079527] Run /init.krun as init process
+[bridge] --- circus-ssh-agent-bridge start 2026-01-01T10:00:02+00:00
+[dockerd] time="2026-01-01T10:00:00.000000000Z" level=info msg="Starting up"
+[hook.provision] gcx config set stacks.default.stack default
+[daemon.opencode-web] 2026-01-01 10:00:03.123456789 --- circus-daemon opencode-web start 2026-01-01T10:00:03+00:00
+[daemon.opencode-web] 2026-01-01 10:00:03.456789012 server listening on http://0.0.0.0:4096
+```
+
+| Label | Source name | Guest path | Content |
+| --- | --- | --- | --- |
+| `[kernel]` | `kernel` | `dmesg` in the guest | Kernel messages |
+| `[bridge]` | `bridge` | `/tmp/ssh-agent-bridge.log` | The SSH agent bridge |
+| `[dockerd]` | `dockerd` | `/tmp/dockerd.log` | The Docker engine daemon |
+| `[hook.<name>]` | `hooks` | `/var/log/msb-circus/*.log` | The last run of each hook |
+| `[daemon.<name>]` | `daemons` | `/var/log/circus-daemons/*/current` | Each [[msb.daemons]] entry |
+
+The output is grouped by source; the order above is a display
+convention, not event time. The kernel section comes first because its
+ring buffer covers the boot. The bridge and dockerd s6 services start
+independently, so their real relative order is not guaranteed. The
+command does not merge lines by event time.
+
+``` shell
+msb-circus logs               # all sources, last 50 lines each
+msb-circus logs -n 200        # more lines per source
+msb-circus logs dockerd       # one source only
+msb-circus logs dockerd kernel  # several sources
+msb-circus logs -t            # podman-style leading timestamps
+msb-circus logs -f            # follow all sources, labels included
+msb-circus logs --list        # list the sources and their guest paths
+```
+
+`-t`/`--timestamps` moves the stamps that sources embed in their lines
+to a podman-style leading position (RFC 3339, like `podman logs -t`).
+It does not sort lines:
+
+``` text
+2026-01-01T10:00:03.456789012+00:00 [daemon.opencode-web] server listening on http://0.0.0.0:4096
+2026-01-01T10:00:00.000000000Z [dockerd] level=info msg="Starting up"
+```
+
+Only lines that carry a stamp change:
+
+- Daemon lines carry s6-log stamps. s6-log stamps record when the
+  logger receives a complete line and contain no timezone; msb-circus
+  generates the daemon loggers with `TZ=UTC0`, so `-t` can label them
+  `+00:00`. Daemon logs written by an older sandbox (before this
+  guarantee) may carry another timezone and stay ambiguous; re-create
+  the sandbox or restart its daemons to switch new lines to UTC.
+- dockerd writes its own wall-clock timestamp on most of its lines
+  (logrus `time="..."` fields).
+- The kernel stamps are time since guest boot (`[    0.064705]` = 65 ms
+  after power-on), not wall-clock time.
+- Bridge and hook lines do not have a timestamp on every line.
+
+Unstamped lines and the kernel stamps print unchanged; msb-circus
+never invents a timestamp and never sorts lines.
+
+The kernel source reads `dmesg` in the guest. Follow mode prints a
+limited `dmesg` snapshot first and then follows only new records with
+`dmesg --follow-new`, which needs a readable `/dev/kmsg`. A kernel
+record arriving between the snapshot and the follower start can be
+missed.
+
+By default every line carries its source label. With `--no-labels`, each
+file is printed under a `==> path <==` header (the `tail` multi-file
+style) and the lines stay as the services wrote them; following without
+labels runs a single plain `tail -F`, joined by the two-stage kernel
+follower when the kernel is selected.
+
+``` text
+==> /tmp/dockerd.log <==
+time="2026-01-01T10:00:00.000000000Z" level=info msg="Starting up"
+```
+
+To follow a single daemon instead of all sources, use
+`msb-circus daemon logs -f <name>`.
+
+The command needs a running sandbox: a stopped sandbox keeps no guest
+processes, and a sandbox that failed to boot wrote nothing this command
+can reach. `msb-circus logs -f` ends when you press Ctrl-C; the sandbox
+keeps running. With labels, follow mode runs one labeled `tail -F`
+pipeline per file (plus the two-stage kernel follower) in the guest;
+the pipelines share one output stream, so line order is preserved
+within each source, but sources interleave by arrival.
 
 ## Hooks
 
@@ -1592,11 +1689,11 @@ sandbox do not get these certificates.
 
 ## Troubleshooting
 
-If the sandbox boots but the Docker engine stays unreachable, read the guest
+If the sandbox boots but the Docker engine stays unreachable, read the
 log of dockerd:
 
 ``` shell
-msb exec agents-<project> -- cat /tmp/dockerd.log
+msb-circus logs dockerd
 ```
 
 The log contains one `--- circus-dockerd start` line per (re)start of the
@@ -1616,7 +1713,8 @@ chmod g-w,o-w ~/.microsandbox
 
 If `up` or `start` reports that dockerd did not become ready, the warning
 names the probe error and the diagnostic commands. Run the commands from the
-warning and compare their output with the guest log above.
+warning and compare their output with the dockerd log
+(`msb-circus logs dockerd`).
 
 If `docker` commands fail with "Cannot connect to the Docker daemon" and
 the boot log says that the docker data root is on overlayfs, docker is
