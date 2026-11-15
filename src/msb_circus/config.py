@@ -82,6 +82,13 @@ SSH_AGENT_PORT_ENV_VAR = "CIRCUS_SSH_AGENT_VSOCK_PORT"
 #: Guest directory for copied SSH config files (the guest runs as root).
 SSH_GUEST_DIR = "/root/.ssh"
 
+#: Guest home directory. The guest runs as root, but msb does not
+#: guarantee ``HOME`` in the VM boot environment that s6 services (and
+#: thus daemons) inherit. Daemons get this as a default ``HOME`` so
+#: harnesses resolve their config below ``$HOME`` like in an interactive
+#: ``msb-circus exec`` shell.
+GUEST_HOME = "/root"
+
 #: Sandbox env var read by the image's dockerd service (seconds at
 #: shutdown). Not prefixed with ``MSB_``: msb reserves that prefix.
 DOCKERD_SHUTDOWN_TIMEOUT_ENV_VAR = "CIRCUS_DOCKERD_SHUTDOWN_TIMEOUT"

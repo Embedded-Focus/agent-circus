@@ -21,6 +21,7 @@ from .config import (
     DEFAULT_WORKDIR,
     DOCKER_VOLUME_SUFFIX,
     DOCKERD_SHUTDOWN_TIMEOUT_ENV_VAR,
+    GUEST_HOME,
     HOOK_NAMES,
     INIT_NONE,
     SSH_AGENT_GUEST_SOCKET,
@@ -2108,6 +2109,10 @@ def _daemon_envs(
     ``[env]``/``[msb.env]`` variables, the top-level ``env_passthrough``
     variables, ``SSH_AUTH_SOCK`` (when ``[ssh]`` is configured), the
     daemon's own ``env_passthrough`` variables, and its ``env`` entries.
+    ``HOME`` defaults to :data:`GUEST_HOME` (the guest runs as root, but
+    the s6 boot environment msb does not guarantee ``HOME``; harnesses
+    such as OpenCode resolve their config below ``$HOME``); explicit
+    configuration wins.
 
     :param config: Resolved msb-circus configuration.
     :returns: Mapping of daemon name to ``(environment, shell word
@@ -2115,10 +2120,16 @@ def _daemon_envs(
     :raises ConfigurationError: If a passthrough variable is unset on the
         host.
     """
-    return {
-        daemon.name: _merged_env(config, daemon.env_passthrough, daemon.env)
-        for daemon in config.daemons
-    }
+    envs: dict[str, tuple[dict[str, str], frozenset[str]]] = {}
+    for daemon in config.daemons:
+        env, shell_words = _merged_env(config, daemon.env_passthrough, daemon.env)
+        # Daemons run under s6 with the VM boot environment (with-contenv),
+        # which msb does not guarantee to carry HOME; an interactive exec
+        # shell always has it. Without HOME, harnesses like OpenCode cannot
+        # resolve their config below ~/.config and fall back to defaults.
+        env.setdefault("HOME", GUEST_HOME)
+        envs[daemon.name] = (env, shell_words)
+    return envs
 
 
 def _daemon_url(config: MsbConfig, port: int) -> str | None:
@@ -2778,6 +2789,8 @@ def start(
         _fail_on_occupied_ports(config)
     _prepare_ssh_agent(config)
     invoker.run(build_start_args(name))
+    _ensure_agent_config_copies(invoker, name)
+    _ensure_claude_trust(invoker, config, name, workspace)
     _ensure_host_entries(invoker, config, name)
     _ensure_ssh_files(invoker, config, name)
     _ensure_git_config(invoker, config, name)

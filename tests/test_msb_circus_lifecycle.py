@@ -14,7 +14,7 @@ from typer.testing import CliRunner
 
 import msb_circus.cli as cli_module
 from msb_circus.cli import _format_capacity, app
-from msb_circus.config import parse_config, sandbox_name_for_workspace
+from msb_circus.config import GUEST_HOME, parse_config, sandbox_name_for_workspace
 from msb_circus.exceptions import MsbCommandError
 from msb_circus.gitconfig import (
     GIT_GUEST_DIR,
@@ -520,6 +520,32 @@ def test_start_refreshes_git_config(tmp_path, fake_msb, monkeypatch):
     assert copies == [
         ["copy", "-q", str(host_gitconfig), f"{name}:{GIT_GUEST_HOST_CONFIG}"]
     ]
+
+
+def test_start_reapplies_claude_trust_after_config_copy(
+    tmp_path, fake_msb, monkeypatch
+):
+    """The start command merges trust after copying ~/.claude.json."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".claude.json").write_text("{}")
+    name = sandbox_name_for_workspace(tmp_path)
+    result = runner.invoke(app, ["start", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert ["start", name] in fake_msb["calls"]
+    calls = fake_msb["calls"]
+    copy_index = next(
+        i
+        for i, c in enumerate(calls)
+        if c[0] == "copy" and c[-1] == f"{name}:/root/.claude.json"
+    )
+    trust_index = next(
+        i
+        for i, c in enumerate(calls)
+        if c[0] == "exec" and any("hasTrustDialogAccepted" in a for a in c)
+    )
+    assert copy_index < trust_index
 
 
 def test_up_copies_symlinked_gitconfig_target(tmp_path, fake_msb, monkeypatch):
@@ -1771,6 +1797,26 @@ def test_daemon_url_returns_none_for_udp_forward():
         {"port_forwards": [{"guest_port": 4096, "host_port": 14096, "protocol": "udp"}]}
     )
     assert cli_module._daemon_url(config, 4096) is None
+
+
+def test_daemon_envs_defaults_home_to_guest_root():
+    config = parse_config({"msb": {"daemons": [{"name": "web", "command": ["x"]}]}})
+    envs = cli_module._daemon_envs(config)
+    assert envs["web"][0]["HOME"] == GUEST_HOME
+    # The default is literal; it must not expand as a guest shell word.
+    assert "HOME" not in envs["web"][1]
+
+
+def test_daemon_envs_explicit_home_wins_over_default():
+    config = parse_config(
+        {
+            "msb": {
+                "daemons": [{"name": "web", "command": ["x"], "env": {"HOME": "/data"}}]
+            }
+        }
+    )
+    envs = cli_module._daemon_envs(config)
+    assert envs["web"][0]["HOME"] == "/data"
 
 
 def test_daemon_envs_daemon_env_overrides_passthrough(monkeypatch):

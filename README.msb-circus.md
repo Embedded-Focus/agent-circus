@@ -900,6 +900,12 @@ Port mappings are fixed when the sandbox is created. If you add the
 A daemon also gets the variables of the top-level `env_passthrough`, and
 `SSH_AUTH_SOCK` when SSH agent forwarding is on. `env` wins over both.
 
+`HOME` defaults to `/root` (the guest runs as root). s6 daemons inherit
+the VM boot environment, which does not reliably carry `HOME`; without
+it, harnesses such as OpenCode cannot find their config below
+`~/.config` and fall back to their defaults. Set `HOME` in `env` to
+override it.
+
 Values of `env` that contain `$` are guest shell words: msb-circus
 expands the references when the daemon starts, against the daemon's
 environment (see ["Dollar References"](#dollar-references)).
