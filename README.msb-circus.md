@@ -1018,6 +1018,43 @@ msb-circus rewrites the routes file on every `up`, so new or changed
 daemons need no re-creation. Only the router port itself is fixed at
 sandbox creation.
 
+### Daemon Lookup
+
+How the proxy and the router find the daemon for one request:
+
+``` mermaid
+sequenceDiagram
+    autonumber
+    participant B as browser
+    participant P as msb-circus proxy (host)
+    participant M as msb
+    participant R as circus-router (guest)
+    participant D as daemon (guest)
+
+    B->>P: GET, Host: opencode-web.agents-foo.localhost
+    P->>P: split Host into daemon + sandbox names
+    P->>M: msb inspect agents-foo
+    M-->>P: ports, incl. the router forward 127.0.0.1:56263 -> 7780
+    Note over P: cached for 5 seconds
+    P->>R: connect to the router forward, replay the head
+    R->>R: first Host label -> routes.json
+    R->>D: connect to 127.0.0.1:4096 in the guest
+    D-->>R: response
+    R-->>P: response
+    P-->>B: response
+    Note over B,D: from here on: raw bytes both ways<br/>(WebSockets, SSE, streaming)
+```
+
+The two halves split the name between them. The proxy resolves the
+sandbox name through msb's own metadata (`msb inspect`); the guest
+router resolves the daemon name through the routes file. Neither reads
+your configuration at request time.
+
+If a step fails, you get a distinct error: unknown sandbox gives 404
+from the proxy, a sandbox without the router forward gives 502, an
+unknown daemon name gives 404 from the guest router, and a closed
+daemon port gives 502 from the guest router.
+
 ### Using the proxy
 
 Start the proxy in a terminal (a foreground process; you start it once
