@@ -19,17 +19,20 @@ from . import __version__
 from .config import (
     ADDITIONAL_DIRS_GUEST_BASE,
     AGENT_CONFIG_FILE_COPIES,
+    DEFAULT_PORT_HOST,
     DEFAULT_WORKDIR,
     DOCKER_VOLUME_SUFFIX,
     DOCKERD_SHUTDOWN_TIMEOUT_ENV_VAR,
     GUEST_HOME,
     HOOK_NAMES,
     INIT_NONE,
+    ROUTER_GUEST_PORT,
     SSH_AGENT_GUEST_SOCKET,
     SSH_AGENT_VSOCK_PORT,
     DaemonConfig,
     HookConfig,
     MsbConfig,
+    PortForward,
     docker_enabled,
     docker_volume_name_for_workspace,
     effective_mounts,
@@ -107,7 +110,7 @@ from .hooks import build_logs_command as build_hook_logs_command
 from .hooks import build_run_args as build_hook_run_args
 from .hooks import build_status_script as build_hook_status_script
 from .hooks import parse_status_output as parse_hook_status_output
-from .hostports import find_occupied_ports
+from .hostports import can_bind, find_occupied_ports, pick_free_port
 from .hosts import (
     loopback_names,
     read_hosts_file,
@@ -158,6 +161,7 @@ from .sandbox import (
     parse_sandbox_list_output,
     parse_size_mib,
     parse_volume_list_output,
+    router_forward,
 )
 from .skills import (
     CONFIG_MOUNT_SKILL_DIRS,
@@ -957,6 +961,9 @@ def _warn_on_port_drift(invoker: MsbInvoker, config: MsbConfig, name: str) -> No
     change them, so a config change only applies to a newly created
     sandbox. Failures here are non-fatal (probes, never raises).
 
+    The router forward msb-circus itself adds at creation (guest port
+    :data:`ROUTER_GUEST_PORT`) is filtered out before the compare.
+
     :param invoker: Invoker bound to the resolved msb binary.
     :param config: Resolved msb-circus configuration.
     :param name: Sandbox name to inspect.
@@ -970,6 +977,9 @@ def _warn_on_port_drift(invoker: MsbInvoker, config: MsbConfig, name: str) -> No
     except (MsbCommandError, ConfigurationError) as e:
         logger.debug("Port drift check for %s failed: %s", name, e)
         return
+    published = frozenset(
+        p for p in published if not (p[2] == ROUTER_GUEST_PORT and p[3] == "tcp")
+    )
     if published == configured:
         return
     logger.warning(
@@ -1200,6 +1210,56 @@ def _warn_on_trust_host_cas_drift(
         "sandbox creation only. Remove and re-create the sandbox to apply: "
         "msb-circus rm -f && msb-circus up.",
         state,
+        name,
+    )
+
+
+def boot_port_forwards(config: MsbConfig) -> tuple[PortForward, ...]:
+    """Return the configured port forwards plus the router forward.
+
+    The router forward publishes the guest's circus-router port on a
+    free host port, one per sandbox. It is skipped when the sandbox runs
+    without s6 (``init = "none"``), because the router cannot run there.
+
+    :param config: Resolved msb-circus configuration.
+    :returns: Port forwards to pass to ``msb run`` at creation.
+    """
+    if config.sandbox.init == INIT_NONE:
+        return config.port_forwards
+    return (
+        *config.port_forwards,
+        PortForward(
+            guest_port=ROUTER_GUEST_PORT,
+            host_port=pick_free_port(),
+            host=DEFAULT_PORT_HOST,
+        ),
+    )
+
+
+def _warn_on_occupied_router_port(invoker: MsbInvoker, name: str) -> None:
+    """Warn when the recorded router host port of a sandbox is taken.
+
+    msb re-binds the port forward of a stopped sandbox at ``msb start``;
+    when another process took the host port in the meantime, the proxy
+    cannot reach the sandbox. This is a warning only: the start itself
+    proceeds and msb reports its own conflicts. Never raises.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param name: Sandbox name to inspect.
+    """
+    ports = _fetch_sandbox_ports(invoker, name)
+    forward = router_forward(ports)
+    if forward is None:
+        return
+    host, host_port = forward
+    if can_bind(host, host_port, "tcp"):
+        return
+    logger.warning(
+        "Router port %s:%s of %s is taken by another process. The proxy "
+        "cannot reach this sandbox until it is re-created: "
+        "msb-circus rm -f && msb-circus up",
+        host,
+        host_port,
         name,
     )
 
@@ -2602,6 +2662,7 @@ def _ensure_sandbox_running(
     if existing is not None:
         logger.info("Starting existing sandbox %s...", name)
         _fail_on_occupied_ports(config)
+        _warn_on_occupied_router_port(invoker, name)
         invoker.run(build_start_args(name))
         _ensure_pi_trust(invoker, config, name, workspace)
         _ensure_agent_config_copies(invoker, name)
@@ -2641,7 +2702,7 @@ def _ensure_sandbox_running(
                         + resolve_agent_skill_mounts()
                     ),
                     net=config.network.mode,
-                    port_forwards=config.port_forwards,
+                    port_forwards=boot_port_forwards(config),
                     workdir=resolve_agent_workdir(config, workspace),
                     docker_disk=config.sandbox.docker_disk,
                     root_disk=config.sandbox.root_disk,
@@ -3065,6 +3126,7 @@ def start(
         running = set()
     if name not in running:
         _fail_on_occupied_ports(config)
+        _warn_on_occupied_router_port(invoker, name)
     _prepare_ssh_agent(config)
     invoker.run(build_start_args(name))
     _ensure_agent_config_copies(invoker, name)

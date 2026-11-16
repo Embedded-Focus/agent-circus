@@ -53,3 +53,24 @@ def test_find_occupied_ports_ignores_unassigned_bind_address():
         PortForward(guest_port=9999, host_port=9999, host="203.0.113.1"),
     ]
     assert find_occupied_ports(forwards) == []
+
+
+def test_pick_free_port_returns_bindable_port():
+    from msb_circus.hostports import pick_free_port
+
+    port = pick_free_port()
+    # The picked port is bindable again immediately (SO_REUSEADDR probe).
+    from msb_circus.hostports import can_bind
+
+    assert can_bind("127.0.0.1", port, "tcp")
+
+
+def test_can_bind_detects_occupied_tcp_port():
+    from msb_circus.hostports import can_bind
+
+    sock, port = _bound_tcp_socket()
+    try:
+        assert not can_bind("127.0.0.1", port, "tcp")
+        assert can_bind("127.0.0.1", port + 1, "tcp")
+    finally:
+        sock.close()

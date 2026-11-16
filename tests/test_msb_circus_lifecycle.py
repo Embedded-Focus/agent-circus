@@ -1840,3 +1840,94 @@ def test_daemon_envs_daemon_env_overrides_passthrough(monkeypatch):
     assert envs["web"][0]["CIRCUS_TEST_VAR"] == "from-daemon"
     # The daemon's own env entry wins, but has no $ -> literal.
     assert envs["web"][1] == set()
+
+
+def test_up_boot_adds_router_port_forward(tmp_path, fake_msb, monkeypatch):
+    """The boot adds one extra forward to the guest router port."""
+    monkeypatch.setattr(cli_module, "pick_free_port", lambda: 51234)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    assert len(run_calls) == 1
+    ports = [run_calls[0][i + 1] for i, a in enumerate(run_calls[0]) if a == "--port"]
+    assert "127.0.0.1:51234:7780" in ports
+
+
+def test_up_boot_without_init_has_no_router_forward(tmp_path, fake_msb):
+    """Without s6 the router cannot run, so no forward is published."""
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b'[msb.sandbox]\ninit = "none"\n')
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    ports = [run_calls[0][i + 1] for i, a in enumerate(run_calls[0]) if a == "--port"]
+    assert not any(p.endswith(":7780") for p in ports)
+
+
+def test_port_drift_ignores_router_forward(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b"[[port_forwards]]\ncontainer_port = 8000\n"
+    )
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["inspect_json"] = json.dumps(
+        {
+            "config": {
+                "network": {
+                    "ports": [
+                        {
+                            "guest_port": 8000,
+                            "host_bind": "127.0.0.1",
+                            "host_port": 8000,
+                            "protocol": "tcp",
+                        },
+                        {
+                            "guest_port": 7780,
+                            "host_bind": "127.0.0.1",
+                            "host_port": 51234,
+                            "protocol": "tcp",
+                        },
+                    ]
+                }
+            }
+        }
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "differ" not in result.output
+
+
+def test_start_warns_when_router_port_is_taken(tmp_path, fake_msb):
+    # The running-only probe (fake ignores --running) sees no sandbox, so
+    # the start path treats it as stopped and checks the router port.
+    fake_msb["list_output"] = json.dumps([])
+    blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    blocker.bind(("127.0.0.1", 0))
+    blocker.listen(1)
+    try:
+        host_port = blocker.getsockname()[1]
+        fake_msb["inspect_json"] = json.dumps(
+            {
+                "config": {
+                    "network": {
+                        "ports": [
+                            {
+                                "guest_port": 7780,
+                                "host_bind": "127.0.0.1",
+                                "host_port": host_port,
+                                "protocol": "tcp",
+                            }
+                        ]
+                    }
+                }
+            }
+        )
+        result = runner.invoke(app, ["start", "--workspace", str(tmp_path)])
+        assert result.exit_code == 0
+        assert "Router port" in result.output
+        assert "re-created" in result.output
+    finally:
+        blocker.close()

@@ -5,7 +5,8 @@ sandbox boots, but does not reliably fail when the port is already held
 by another process (e.g. a second VM) — the forward then silently
 answers with empty replies. This module probes each configured host
 port with a plain bind attempt so msb-circus can fail with a clear
-message before booting.
+message before booting. It also picks free host ports for the router
+forward that msb-circus adds at sandbox creation.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import socket
 from .config import PortForward
 
 
-def _can_bind(host: str, port: int, protocol: str) -> bool:
+def can_bind(host: str, port: int, protocol: str) -> bool:
     """Return ``True`` when *host*:*port* can still be bound on this host.
 
     The probe mimics a server socket (``SO_REUSEADDR`` set, so sockets in
@@ -43,6 +44,27 @@ def _can_bind(host: str, port: int, protocol: str) -> bool:
             # by anyone; msb reports the real error when it tries to bind.
             return e.errno == errno.EADDRNOTAVAIL
     return True
+
+
+#: Backward-compatible alias of :func:`can_bind`.
+_can_bind = can_bind
+
+
+def pick_free_port(host: str = "127.0.0.1") -> int:
+    """Return a TCP port on *host* that is free right now.
+
+    Binds port 0 and reads the port the kernel picked. Shortcoming:
+    another process can take the port before msb binds it; msb then
+    reports the conflict itself.
+
+    :param host: Host address to pick the port on.
+    :returns: The free port number.
+    """
+    with socket.socket(
+        socket.AF_INET if ":" not in host else socket.AF_INET6, socket.SOCK_STREAM
+    ) as sock:
+        sock.bind((host, 0))
+        return sock.getsockname()[1]
 
 
 def find_occupied_ports(

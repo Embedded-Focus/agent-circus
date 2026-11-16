@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from .config import DEFAULT_MEMORY, PortForward
+from .config import DEFAULT_MEMORY, ROUTER_GUEST_PORT, PortForward
 from .exceptions import ConfigurationError
 
 SANDBOX_COMMANDS = ("run", "create", "start", "stop", "list", "remove")
@@ -296,6 +296,25 @@ def configured_ports(
     return frozenset(
         (f.host, f.host_port, f.guest_port, f.protocol) for f in port_forwards
     )
+
+
+def router_forward(
+    ports: Iterable[tuple[str, int, int, str]],
+) -> tuple[str, int] | None:
+    """Return ``(host, host_port)`` of the router forward, if published.
+
+    :param ports: ``(host, host_port, guest_port, protocol)`` tuples as
+        returned by :func:`parse_inspect_ports_ordered`.
+    :returns: The first TCP entry with ``guest_port == ROUTER_GUEST_PORT``.
+        A wildcard host (``0.0.0.0``, ``::``, empty) maps to ``127.0.0.1``.
+        ``None`` when there is no such entry.
+    """
+    for host, host_port, guest_port, protocol in ports:
+        if protocol == "tcp" and guest_port == ROUTER_GUEST_PORT:
+            if host in ("0.0.0.0", "::", ""):
+                host = "127.0.0.1"
+            return host, host_port
+    return None
 
 
 @dataclass(frozen=True)

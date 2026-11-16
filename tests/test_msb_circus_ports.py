@@ -248,3 +248,37 @@ def test_configured_ports_matches_parsed_inspect_shape():
     assert configured_ports(forwards) == frozenset(
         {("127.0.0.1", 8000, 8000, "tcp"), ("0.0.0.0", 18080, 8080, "udp")}
     )
+
+
+def test_router_forward_finds_tcp_router_entry():
+    from msb_circus.sandbox import router_forward
+
+    ports = [
+        ("127.0.0.1", 8000, 8000, "tcp"),
+        ("127.0.0.1", 51234, 7780, "tcp"),
+    ]
+    assert router_forward(ports) == ("127.0.0.1", 51234)
+
+
+def test_router_forward_maps_wildcard_host_to_loopback():
+    from msb_circus.sandbox import router_forward
+
+    for wildcard in ("0.0.0.0", "::", ""):
+        assert router_forward([(wildcard, 51234, 7780, "tcp")]) == ("127.0.0.1", 51234)
+
+
+def test_router_forward_ignores_udp_and_other_ports():
+    from msb_circus.sandbox import router_forward
+
+    ports = [
+        ("127.0.0.1", 51234, 7780, "udp"),
+        ("127.0.0.1", 8000, 8000, "tcp"),
+    ]
+    assert router_forward(ports) is None
+
+
+def test_router_forward_none_when_absent():
+    from msb_circus.sandbox import router_forward
+
+    assert router_forward([]) is None
+    assert router_forward([("127.0.0.1", 8000, 8000, "tcp")]) is None
