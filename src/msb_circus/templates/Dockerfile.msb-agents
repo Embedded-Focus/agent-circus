@@ -72,14 +72,32 @@ RUN set -eu; \
 # Python 3.14 interpreter, provisioned by uv. The tarball is fetched from
 # astral-sh/python-build-standalone at build time; uv verifies it against the
 # checksum in its embedded manifest (fixed by the pinned uv version above).
+#
+# Layout note: uv installs the interpreter tree under
+# /opt/uv-python/cpython-<ver>-<arch>-gnu/ and keeps a stable
+# cpython-3.14-<arch>-gnu symlink to it. It does NOT create
+# /opt/uv-python/bin (uv puts --default executables in ~/.local/bin
+# instead), so PATH entries pointing there never worked. Bare `python3`
+# is exposed via symlinks in /usr/local/bin below — /usr/local/bin is on
+# every shell's default PATH, including plain `msb exec` shells, which do
+# not carry the image ENV (only s6's with-contenv does). This matters for
+# the circus-router install probe (command -v python3) and any guest tool
+# that runs python3 directly.
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python \
-    UV_PYTHON=3.14 \
-    PATH=/opt/uv-python/bin:${PATH}
+    UV_PYTHON=3.14
 
 RUN uv python install 3.14 --default
 
 # Pin the default interpreter for uv in this image
 RUN uv python pin 3.14 --global
+
+# Expose python3/python on the default PATH (see the layout note above).
+# The glob resolves through uv's stable cpython-3.14-<arch>-gnu symlink,
+# so it works on amd64 and arm64 and survives patch-version bumps.
+RUN set -eu; \
+    ln -sf /opt/uv-python/cpython-3.14-*/bin/python3 /usr/local/bin/python3; \
+    ln -sf /opt/uv-python/cpython-3.14-*/bin/python3 /usr/local/bin/python; \
+    /usr/local/bin/python3 -c 'import sys; assert sys.version_info[:2] == (3, 14)'
 
 # Always talk to the local dockerd socket, even if a DOCKER_HOST leaks in
 # from the session environment

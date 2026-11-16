@@ -3,6 +3,7 @@
 import base64
 import json
 import subprocess
+from pathlib import Path
 
 from msb_circus.config import ROUTER_GUEST_PORT
 from msb_circus.router import (
@@ -13,6 +14,8 @@ from msb_circus.router import (
     encode_router_script,
     router_script_source,
 )
+
+TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "src" / "msb_circus" / "templates"
 
 
 def test_install_script_writes_routes_json():
@@ -67,3 +70,19 @@ def test_install_script_routes_json_matches_expected_content():
     line = next(l for l in script.splitlines() if "routes.json.tmp" in l)
     expected = json.dumps(routes, sort_keys=True)
     assert f"'{expected}'" in line
+
+
+def test_image_puts_python3_on_the_default_path():
+    """The router probe runs in a plain msb exec shell, which does not
+    carry the image ENV: python3 must be reachable without it."""
+    dockerfile = (TEMPLATE_DIR / "Dockerfile.msb-agents").read_text()
+    # uv installs under /opt/uv-python/cpython-<ver>-<arch>-gnu/ and keeps a
+    # stable cpython-3.14-<arch>-gnu symlink; it never creates
+    # /opt/uv-python/bin, so the symlink must target the real bin dir.
+    assert (
+        "ln -sf /opt/uv-python/cpython-3.14-*/bin/python3 /usr/local/bin/python3"
+        in dockerfile
+    )
+    assert "ln -sf /opt/uv-python/bin/" not in dockerfile
+    # The image ENV must not promise a PATH entry that does not exist.
+    assert "PATH=/opt/uv-python/bin" not in dockerfile
