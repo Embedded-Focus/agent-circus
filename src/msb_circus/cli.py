@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import json
 import logging
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -22,6 +24,7 @@ from .config import (
     ADDITIONAL_DIRS_GUEST_BASE,
     AGENT_CONFIG_FILE_COPIES,
     DEFAULT_PORT_HOST,
+    DEFAULT_PROXY_PORT,
     DEFAULT_WORKDIR,
     DOCKER_VOLUME_SUFFIX,
     DOCKERD_SHUTDOWN_TIMEOUT_ENV_VAR,
@@ -29,6 +32,7 @@ from .config import (
     HOOK_NAMES,
     INIT_NONE,
     PROXY_DOMAIN,
+    PROXY_PORT_ENV_VAR,
     ROUTER_GUEST_PORT,
     SSH_AGENT_GUEST_SOCKET,
     SSH_AGENT_VSOCK_PORT,
@@ -42,6 +46,7 @@ from .config import (
     exposed_routes,
     load_config,
     load_hook_script,
+    proxy_url,
     resolve_agent_config_mounts,
     resolve_agent_skill_mounts,
     resolve_agent_workdir,
@@ -2247,6 +2252,45 @@ def _daemon_url(config: MsbConfig, port: int) -> str | None:
     return f"http://{host}:{forward.host_port}"
 
 
+def _proxy_port_or_default() -> int:
+    """Return the resolved proxy port, falling back to the default.
+
+    Uses ``resolve_proxy_port(None)``; an invalid
+    ``MSB_CIRCUS_PROXY_PORT`` falls back to :data:`DEFAULT_PROXY_PORT`
+    with a debug log (the URLs should not break over it).
+
+    :returns: The proxy host port to use in URL output.
+    """
+    try:
+        return resolve_proxy_port(None)
+    except ConfigurationError as e:
+        logger.debug(
+            "Ignoring invalid %s for URL output (%s); using %s",
+            PROXY_PORT_ENV_VAR,
+            e,
+            DEFAULT_PROXY_PORT,
+        )
+        return DEFAULT_PROXY_PORT
+
+
+def _display_url(config: MsbConfig, name: str, daemon: DaemonConfig) -> str | None:
+    """Return the URL shown to the user for a daemon.
+
+    Exposed daemons (a port plus ``expose``) show the central proxy URL;
+    others fall back to the direct ``[[port_forwards]]`` URL.
+
+    :param config: Resolved msb-circus configuration.
+    :param name: Sandbox name (the URL's second subdomain label).
+    :param daemon: Daemon to describe.
+    :returns: The URL, or ``None`` when the daemon has no port.
+    """
+    if daemon.port is None:
+        return None
+    if daemon.expose:
+        return proxy_url(daemon.name, name, _proxy_port_or_default())
+    return _daemon_url(config, daemon.port)
+
+
 def _wait_for_daemon_port(
     invoker: MsbInvoker, config: MsbConfig, name: str, daemon: DaemonConfig
 ) -> bool:
@@ -2278,7 +2322,7 @@ def _wait_for_daemon_port(
     except MsbCommandError as e:
         logger.debug("Port wait for daemon %s in %s failed: %s", daemon.name, name, e)
         result = None
-    url = _daemon_url(config, port)
+    url = _display_url(config, name, daemon)
     if result is not None and result.returncode == 0:
         logger.info(
             "Daemon %s is ready on guest port %s%s",
@@ -3667,7 +3711,7 @@ def _print_daemon_ready(
         return
     if not _wait_for_daemon_port(invoker, config, name, daemon):
         return
-    url = _daemon_url(config, daemon.port)
+    url = _display_url(config, name, daemon)
     if url:
         print(f"  {url}")
 
@@ -3716,7 +3760,7 @@ def daemons_list(
     rows = [["NAME", "STATE", "PID", "UPTIME", "PORT", "URL"]]
     for daemon in config.daemons:
         status = statuses.get(daemon.name)
-        url = _daemon_url(config, daemon.port) if daemon.port is not None else None
+        url = _display_url(config, name, daemon) if daemon.port is not None else None
         rows.append(
             [
                 daemon.name,
@@ -3743,6 +3787,149 @@ def daemons_list(
             ]
         )
     print(_format_columns(rows))
+
+
+def _proxy_probe_running(port: int) -> bool:
+    """Return whether something listens on 127.0.0.1:*port* right now.
+
+    :param port: Host port to probe.
+    :returns: ``True`` when a TCP connect succeeds within 0.5 s.
+    """
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+@app.command(name="urls")
+def urls(
+    workspace: Annotated[
+        Path,
+        typer.Option(
+            "--workspace",
+            "-w",
+            help="Workspace directory path.",
+            exists=True,
+            file_okay=False,
+            resolve_path=True,
+        ),
+    ] = Path("."),
+    proxy_port: Annotated[
+        int | None,
+        typer.Option(
+            "--proxy-port",
+            help="Port the proxy runs on (default: MSB_CIRCUS_PROXY_PORT or 7700).",
+        ),
+    ] = None,
+    format_: Annotated[
+        str,
+        typer.Option(
+            "--format",
+            help="Output format: table or json.",
+        ),
+    ] = "table",
+) -> None:
+    """List the proxy URLs of the exposed daemons of this workspace."""
+    if format_ not in ("table", "json"):
+        typer.echo(
+            f"Error: unsupported --format {format_!r} (expected table or json)",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    config, invoker = _resolve_invoker(workspace)
+    name = sandbox_name_for_workspace(workspace)
+    try:
+        port = resolve_proxy_port(proxy_port)
+    except ConfigurationError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    rows = [
+        daemon for daemon in config.daemons if daemon.port is not None and daemon.expose
+    ]
+    if not rows:
+        typer.echo(
+            "No exposed daemons. A daemon with a port in [[msb.daemons]] "
+            "is exposed by default."
+        )
+        return
+    if len(name) > 63:
+        typer.echo(
+            "Note: the sandbox name is longer than 63 characters; browsers "
+            "may not resolve the URL.",
+            err=True,
+        )
+    if not _proxy_probe_running(port):
+        typer.echo(
+            "Note: the proxy is not running. Start it with: msb-circus proxy",
+            err=True,
+        )
+    _note_sandbox_router_state(invoker, name)
+    if format_ == "json":
+        print(
+            json.dumps(
+                [
+                    {
+                        "name": daemon.name,
+                        "port": daemon.port,
+                        "url": proxy_url(daemon.name, name, port),
+                        "direct_url": (
+                            _daemon_url(config, daemon.port)
+                            if daemon.port is not None
+                            else None
+                        ),
+                    }
+                    for daemon in rows
+                ]
+            )
+        )
+        return
+    table_rows: list[list[str]] = [["NAME", "PORT", "URL", "DIRECT"]]
+    for daemon in rows:
+        direct = "-"
+        if daemon.port is not None:
+            direct = _daemon_url(config, daemon.port) or "-"
+        table_rows.append(
+            [
+                daemon.name,
+                str(daemon.port),
+                proxy_url(daemon.name, name, port),
+                direct,
+            ]
+        )
+    print(_format_columns(table_rows))
+
+
+def _note_sandbox_router_state(invoker: MsbInvoker, name: str) -> None:
+    """Print a stderr note when the sandbox cannot serve URLs yet.
+
+    Distinguishes a missing sandbox from one created without the router
+    forward. Never raises; inspect failures stay silent.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param name: Sandbox name.
+    """
+    ports = _fetch_sandbox_ports(invoker, name)
+    if ports and router_forward(ports) is not None:
+        return
+    if ports:
+        typer.echo(
+            f"Note: sandbox {name} was created without the router port. "
+            "Re-create it: msb-circus rm -f && msb-circus up",
+            err=True,
+        )
+        return
+    try:
+        sandboxes = _list_sandboxes(invoker, running_only=False)
+    except (MsbCommandError, ConfigurationError) as e:
+        logger.debug("Sandbox list for the urls notes failed: %s", e)
+        return
+    if not any(sandbox.name == name for sandbox in sandboxes):
+        typer.echo(
+            f"Note: sandbox {name} does not exist yet. The URLs work after: "
+            "msb-circus up",
+            err=True,
+        )
 
 
 @app.command(name="hooks")

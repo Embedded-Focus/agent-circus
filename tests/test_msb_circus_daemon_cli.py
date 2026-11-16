@@ -85,7 +85,12 @@ def test_daemons_lists_configured_and_registered_daemons(tmp_path, fake_msb):
     assert "2230" in lines["web"]
     assert "45s" in lines["web"]
     assert "4096" in lines["web"]
-    assert "http://127.0.0.1:14096" in lines["web"]
+    # Exposed daemons show the central proxy URL, not the direct forward.
+    assert "http://127.0.0.1:14096" not in lines["web"]
+    assert (
+        f"http://web.{sandbox_name_for_workspace(tmp_path)}.localhost:7700/"
+        in lines["web"]
+    )
     assert "not registered" in lines["db"]
 
 
