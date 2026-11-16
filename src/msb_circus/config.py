@@ -13,6 +13,7 @@ import logging
 import os
 import re
 import tomllib
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -95,6 +96,15 @@ DOCKERD_SHUTDOWN_TIMEOUT_ENV_VAR = "CIRCUS_DOCKERD_SHUTDOWN_TIMEOUT"
 
 #: Host file that ``[hosts]`` entries are read from.
 DEFAULT_HOSTS_FILE = "/etc/hosts"
+
+#: Guest TCP port of the circus-router s6 service (one per sandbox).
+ROUTER_GUEST_PORT = 7780
+#: Default host port of ``msb-circus proxy``.
+DEFAULT_PROXY_PORT = 7700
+#: Host environment variable that overrides the proxy port.
+PROXY_PORT_ENV_VAR = "MSB_CIRCUS_PROXY_PORT"
+#: Domain suffix of proxy URLs (browsers resolve *.localhost to loopback).
+PROXY_DOMAIN = "localhost"
 
 #: Read-write bind mounts of host agent harness config directories into the
 #: guest, mirroring agent-circus's ``DEFAULT_AGENT_CONFIG_MOUNTS``. Values
@@ -298,6 +308,8 @@ class DaemonConfig:
     :ivar autostart: Start the daemon on every sandbox boot.
     :ivar port: Optional guest TCP port the daemon listens on; used to
         wait for readiness and to show a URL. It does not forward a port.
+    :ivar expose: Route the daemon's port through the central proxy (only
+        effective with a port).
     :ivar workdir: Optional guest working directory.
     :ivar env: Extra environment variables for the daemon.
     :ivar env_passthrough: Host environment variables passed to the
@@ -308,6 +320,7 @@ class DaemonConfig:
     command: tuple[str, ...]
     autostart: bool = True
     port: int | None = None
+    expose: bool = True
     workdir: str | None = None
     env: dict[str, str] = field(default_factory=dict)
     env_passthrough: tuple[str, ...] = ()
@@ -1046,6 +1059,11 @@ def _parse_port_forwards(raw: Any) -> tuple[PortForward, ...]:
             raise ConfigurationError(
                 f"port_forwards[{index}] protocol must be 'tcp' or 'udp'"
             )
+        if guest_port == ROUTER_GUEST_PORT and protocol == "tcp":
+            raise ConfigurationError(
+                f"port_forwards[{index}] guest_port {ROUTER_GUEST_PORT} is "
+                "reserved for the msb-circus router"
+            )
         forwards.append(
             PortForward(
                 guest_port=guest_port,
@@ -1084,6 +1102,7 @@ def _parse_daemons(raw: Any) -> tuple[DaemonConfig, ...]:
             "command",
             "autostart",
             "port",
+            "expose",
             "workdir",
             "env",
             "env_passthrough",
@@ -1116,6 +1135,16 @@ def _parse_daemons(raw: Any) -> tuple[DaemonConfig, ...]:
         port = entry.get("port")
         if port is not None:
             port = _validate_port(port, f"{label}.port")
+        if port == ROUTER_GUEST_PORT:
+            raise ConfigurationError(
+                f"{label}.port {ROUTER_GUEST_PORT} is reserved for the "
+                "msb-circus router"
+            )
+        expose = entry.get("expose", True)
+        if not isinstance(expose, bool):
+            raise ConfigurationError(f"{label}.expose must be true or false")
+        if "expose" in entry and expose and port is None:
+            raise ConfigurationError(f"{label}.expose needs a port")
         workdir = entry.get("workdir")
         if workdir is not None and (not isinstance(workdir, str) or not workdir):
             raise ConfigurationError(f"{label}.workdir must be a non-empty string")
@@ -1140,12 +1169,66 @@ def _parse_daemons(raw: Any) -> tuple[DaemonConfig, ...]:
                 command=tuple(command),
                 autostart=autostart,
                 port=port,
+                expose=expose,
                 workdir=workdir,
                 env=env,
                 env_passthrough=tuple(env_passthrough),
             )
         )
     return tuple(daemons)
+
+
+def exposed_routes(daemons: Sequence[DaemonConfig]) -> dict[str, int]:
+    """Return the daemon routes for the guest router.
+
+    :param daemons: Configured daemons.
+    :returns: Mapping of daemon name to guest TCP port, for every daemon
+        with a port and ``expose`` set, in configuration order.
+    """
+    return {
+        daemon.name: daemon.port
+        for daemon in daemons
+        if daemon.port is not None and daemon.expose
+    }
+
+
+def resolve_proxy_port(
+    cli_value: int | None, environ: Mapping[str, str] | None = None
+) -> int:
+    """Return the host port of the central proxy.
+
+    Precedence: *cli_value*, then ``MSB_CIRCUS_PROXY_PORT``, then
+    :data:`DEFAULT_PROXY_PORT`.
+
+    :param cli_value: Port given on the command line, if any.
+    :param environ: Environment mapping, defaults to :data:`os.environ`.
+    :returns: The resolved host port.
+    :raises ConfigurationError: If the environment value is not a port
+        number in 1..65535.
+    """
+    if cli_value is not None:
+        return cli_value
+    env = os.environ if environ is None else environ
+    raw = env.get(PROXY_PORT_ENV_VAR)
+    if raw is None:
+        return DEFAULT_PROXY_PORT
+    try:
+        return _validate_port(int(raw), f"{PROXY_PORT_ENV_VAR}")
+    except ValueError as e:
+        raise ConfigurationError(
+            f"{PROXY_PORT_ENV_VAR} must be an integer in range 1..65535"
+        ) from e
+
+
+def proxy_url(daemon: str, sandbox: str, port: int) -> str:
+    """Return the proxy URL of a daemon.
+
+    :param daemon: Daemon name (first subdomain label).
+    :param sandbox: Sandbox name (second subdomain label).
+    :param port: Host port of the central proxy.
+    :returns: URL like ``http://opencode-web.agents-foo.localhost:7700/``.
+    """
+    return f"http://{daemon}.{sandbox}.{PROXY_DOMAIN}:{port}/"
 
 
 def _parse_hooks(raw: Any) -> HooksConfig:
