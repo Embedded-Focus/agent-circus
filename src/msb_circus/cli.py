@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import errno
 import logging
 import os
 import subprocess
@@ -26,6 +28,7 @@ from .config import (
     GUEST_HOME,
     HOOK_NAMES,
     INIT_NONE,
+    PROXY_DOMAIN,
     ROUTER_GUEST_PORT,
     SSH_AGENT_GUEST_SOCKET,
     SSH_AGENT_VSOCK_PORT,
@@ -43,6 +46,7 @@ from .config import (
     resolve_agent_skill_mounts,
     resolve_agent_workdir,
     resolve_mounts,
+    resolve_proxy_port,
     sandbox_name_for_workspace,
 )
 from .daemons import (
@@ -140,6 +144,7 @@ from .logs import (
     resolve_log_sources,
 )
 from .msb import MsbInvoker, check_version, probe_version, resolve_msb_binary
+from .proxy import RouterResolver, serve
 from .ps import format_sandbox_json, format_sandbox_table
 from .router import (
     EXIT_NO_PYTHON,
@@ -4026,6 +4031,53 @@ def hook_logs(
         raise typer.Exit(code=1) from e
     if result.returncode != 0:
         raise typer.Exit(code=result.returncode)
+
+
+@app.command(name="proxy")
+def proxy(
+    port: Annotated[
+        int | None,
+        typer.Option("--port", "-p", help="Host port to listen on (default: 7700)."),
+    ] = None,
+    workspace: Annotated[
+        Path,
+        typer.Option(
+            "--workspace",
+            "-w",
+            help="Workspace directory path.",
+            exists=True,
+            file_okay=False,
+            resolve_path=True,
+        ),
+    ] = Path("."),
+) -> None:
+    """Serve all exposed daemons of all sandboxes on one local port."""
+    _config, invoker = _resolve_invoker(workspace)
+    try:
+        resolved_port = resolve_proxy_port(port)
+    except ConfigurationError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    typer.echo(
+        f"msb-circus proxy listening on http://127.0.0.1:{resolved_port} "
+        "(Ctrl-C to stop)"
+    )
+    typer.echo(
+        f"URL pattern: http://<daemon>.<sandbox>.{PROXY_DOMAIN}:{resolved_port}/"
+    )
+    try:
+        asyncio.run(serve(resolved_port, RouterResolver(invoker)))
+    except KeyboardInterrupt:
+        raise typer.Exit(code=0) from None
+    except OSError as e:
+        if e.errno == errno.EADDRINUSE:
+            typer.echo(
+                f"Error: port {resolved_port} is in use. Is another msb-circus "
+                "proxy running? Use --port or MSB_CIRCUS_PROXY_PORT.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from e
+        raise
 
 
 def run_cli() -> None:
