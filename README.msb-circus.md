@@ -835,7 +835,14 @@ mapping when it is already bound (for example by a second VM); the probe is
 best-effort, so msb may still report a conflict grabbed between probe and
 boot.
 
-## Daemons
+msb-circus adds one extra port forward at sandbox creation: the router
+forward. It publishes the guest's HTTP router on a free host port
+(guest port 7780; see [Central Proxy](#central-proxy)). It appears in
+`msb-circus ps` like any other forward. Guest port 7780 is reserved: do
+not use it for a daemon or a `[[port_forwards]]` entry (msb-circus
+rejects a TCP forward to 7780). When `up` starts a stopped sandbox whose
+router host port was taken by another process in the meantime, msb-circus
+prints a warning; the sandbox then needs a re-creation.
 
 A daemon is a long-running process that msb-circus starts and supervises
 in the sandbox, for example a web interface of a harness or a dev server.
@@ -853,25 +860,21 @@ the SSH agent bridge) are not daemons; you do not configure them.
 ### OpenCode Web Interface
 
 This example runs the OpenCode server in the sandbox and makes it
-reachable from the host at `http://127.0.0.1:4096`:
+reachable from the host browser at
+`http://opencode-web.<sandbox>.localhost:7700/` through the
+[central proxy](#central-proxy):
 
 ``` toml
 [[msb.daemons]]
 name = "opencode-web"
-command = ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096"]
+command = ["opencode", "serve", "--port", "4096"]
 port = 4096
 env_passthrough = ["OPENCODE_PASSWORD"]
-
-[[port_forwards]]
-container_port = 4096
 ```
 
-- `--hostname 0.0.0.0` is necessary. A server that binds to `127.0.0.1` in
-  the guest cannot be reached through a port forward (see
-  [Port Forwarding](#port-forwarding)).
-- `port` does not forward the port. It tells msb-circus to wait until the
-  daemon accepts connections, and to show the URL of a matching
-  `[[port_forwards]]` entry. Port forwards stay a separate setting.
+- No `[[port_forwards]]` entry is needed. A daemon with a `port` is
+  exposed through the central proxy by default, and the daemon can bind
+  to `127.0.0.1` in the guest; the router reaches it there.
 - OpenCode always requires a login: user `opencode` and a password.
   `env_passthrough` reads the password from `OPENCODE_PASSWORD` in your
   host shell. The variable must be set; otherwise msb-circus registers no
@@ -881,10 +884,9 @@ container_port = 4096
   `msb-circus daemon logs opencode-web | grep 'server password'`. The
   password then stays in plain text in the daemon log.
 - Do not put the password in `env`: `config.toml` is often in Git.
-
-Port mappings are fixed when the sandbox is created. If you add the
-`[[port_forwards]]` entry to an existing sandbox, re-create it with
-`msb-circus rm -f && msb-circus up`.
+- A direct `[[port_forwards]]` entry still works as before, for example
+  when a client needs a fixed host port. An exposed daemon then shows
+  both URLs (`msb-circus urls`).
 
 ### Daemon Settings
 
@@ -894,6 +896,7 @@ Port mappings are fixed when the sandbox is created. If you add the
 | `command` | (required) | Command and arguments, as a list. No shell runs it; use `["sh", "-c", "..."]` for shell syntax. |
 | `autostart` | `true` | Start the daemon on every boot. With `false`, start it with `msb-circus daemon start`. |
 | `port` | none | Guest TCP port. msb-circus waits up to 30 seconds for it after a start, and shows the URL. |
+| `expose` | `true` | Route the port through the central proxy (only effective with a `port`). |
 | `workdir` | the `[msb.agent]` workdir | Guest working directory |
 | `env` | none | Extra environment variables |
 | `env_passthrough` | none | Host environment variables, with the same patterns as the top-level `env_passthrough` |
@@ -979,6 +982,95 @@ Give a daemon only the secrets it needs.
   boots the sandbox without them.
 - `port` only checks TCP on `127.0.0.1` in the guest.
 - A daemon runs as root, like every other command in the sandbox.
+
+## Central Proxy
+
+The central proxy reaches every web daemon of every sandbox at one host
+port, by name. You do not need a `[[port_forwards]]` entry per daemon,
+there is no host port clash between sandboxes, and adding a daemon later
+does not need a re-creation of the sandbox:
+
+``` text
+http://<daemon>.<sandbox>.localhost:7700/
+e.g. http://opencode-web.agents-myproject.localhost:7700/
+```
+
+Browsers, Chrome, Firefox and curl resolve `*.localhost` names to the
+loopback interface, so the URL works without an `/etc/hosts` entry. Other
+clients may need one.
+
+### How it works
+
+``` mermaid
+flowchart LR
+    A["🌐<br/>browser<br/>/ curl"]
+    B["msb-circus<br/>proxy<br/><i>on the host</i>"]
+    F["msb<br/>port forward"]
+    R["circus-router<br/><i>in the guest</i>"]
+    D["📦<br/>daemon"]
+    A -- "http://opencode-web.agents-foo.localhost:7700/" --> B
+    B -- "accepts only *.localhost names<br/>finds the router host port<br/>via msb inspect (cached 5 s)" --> F
+    F -- "127.0.0.1:auto-picked port<br/>to guest :7780<br/>(one per sandbox, added at creation)" --> R
+    R -- "looks up the first Host label<br/>in routes.json, e.g. opencode-web: 4096" --> D
+```
+
+msb-circus rewrites the routes file on every `up`, so new or changed
+daemons need no re-creation. Only the router port itself is fixed at
+sandbox creation.
+
+### Using the proxy
+
+Start the proxy in a terminal (a foreground process; you start it once
+per login session):
+
+``` shell
+msb-circus proxy
+msb-circus proxy --port 7701        # or: MSB_CIRCUS_PROXY_PORT=7701
+```
+
+The proxy port is not a config file key. The order is: `--port`, then
+`MSB_CIRCUS_PROXY_PORT`, then `7700`.
+
+List the URLs of this workspace's exposed daemons:
+
+``` shell
+msb-circus urls                     # table with NAME, PORT, URL, DIRECT
+msb-circus urls --format json       # machine-readable, notes on stderr
+```
+
+The proxy binds to `127.0.0.1` and `[::1]` only, never to a wildcard
+address. It accepts only `*.localhost` host names; any other name (for
+example a foreign domain that resolves to `127.0.0.1`) gets HTTP 421.
+This is a DNS rebinding guard.
+
+To stop a daemon from being reachable through the proxy, set
+`expose = false` on its `[[msb.daemons]]` entry. A daemon without a
+`port` is never exposed.
+
+### Known limits
+
+- Routing happens per connection, not per request. After the first
+  request head, the proxy and the router only copy bytes (this is what
+  makes WebSockets, SSE and streaming responses work). A client that
+  reuses one keep-alive connection for a different host name stays on
+  the first backend; browsers do not do this over plain HTTP/1.1.
+- HTTP/1.x only. No TLS and no HTTP/2 on the proxy port. Non-HTTP
+  protocols still need `[[port_forwards]]`.
+- The proxy is a foreground process. There is no auto-start.
+- Sandboxes created before this feature need one re-creation
+  (`msb-circus rm -f && msb-circus up`) to get the router port.
+- The router host port is picked at creation. If another process takes
+  it later, `up` warns, and the sandbox needs a re-creation.
+- The router needs `python3` in the guest image. The bundled image has
+  it. Custom images without it get a warning and the proxy cannot reach
+  their daemons.
+- `*.localhost` resolution: Chrome, Firefox and curl resolve it to the
+  loopback. Other clients may need an `/etc/hosts` entry.
+- The `Host` header is not rewritten. Dev servers with strict host
+  allow-lists may reject `*.localhost` names; Vite allows `.localhost`
+  subdomains by default.
+- Every local process can reach every exposed daemon through the proxy.
+  This is the same exposure as loopback port forwards today.
 
 ## Logs
 

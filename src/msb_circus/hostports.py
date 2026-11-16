@@ -76,4 +76,4 @@ def find_occupied_ports(
     :returns: Subset of *forwards* whose ``host:``:attr:`PortForward.host_port`
         pair cannot be bound right now.
     """
-    return [f for f in forwards if not _can_bind(f.host, f.host_port, f.protocol)]
+    return [f for f in forwards if not can_bind(f.host, f.host_port, f.protocol)]
