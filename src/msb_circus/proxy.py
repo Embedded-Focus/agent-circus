@@ -318,7 +318,7 @@ async def handle(
         await writer.drain()
         writer.close()
         return
-    logger.info("%s -> %s:%s (%s)", host, address[0], address[1], daemon)
+    logger.debug("%s -> %s:%s (%s)", host, address[0], address[1], daemon)
     uw.write(head)
     await uw.drain()
     await splice(reader, writer, ur, uw)
@@ -354,7 +354,8 @@ async def serve(port: int, resolver: RouterResolver) -> None:
         servers.append(v6)
     except OSError as e:
         logger.debug("IPv6 proxy listener on [::1]:%s not available: %s", port, e)
-    logger.info("msb-circus proxy listening on http://127.0.0.1:%s", port)
+    # The CLI command already echoes the listening line to the terminal;
+    # a per-connection log would be too noisy, so this stays at debug.
     try:
         await asyncio.gather(*(server.serve_forever() for server in servers))
     finally:
