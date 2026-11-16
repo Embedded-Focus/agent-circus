@@ -1728,9 +1728,12 @@ def test_up_registers_daemons_on_new_sandbox(tmp_path, fake_msb):
 
 
 def test_up_without_daemons_does_not_touch_s6_services(tmp_path, fake_msb):
+    """Without daemons only the router service (always installed) is touched."""
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
-    assert not [c for c in fake_msb["calls"] if any("s6-svscanctl" in a for a in c)]
+    assert not [
+        c for c in fake_msb["calls"] if c[0] == "exec" and "circus-daemon" in c[-1]
+    ]
 
 
 def test_up_registers_daemons_in_already_running_sandbox(tmp_path, fake_msb):
@@ -1931,3 +1934,43 @@ def test_start_warns_when_router_port_is_taken(tmp_path, fake_msb):
         assert "re-created" in result.output
     finally:
         blocker.close()
+
+
+def test_up_installs_router_before_daemons(tmp_path, fake_msb):
+    """The router install exec runs before the daemon install exec."""
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b'[[msb.daemons]]\nname = "web"\ncommand = ["sleep", "1"]\nport = 4096\n'
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    execs = [c for c in fake_msb["calls"] if c[0] == "exec" and len(c) >= 4]
+    router_indexes = [i for i, c in enumerate(execs) if "circus-router" in c[-1]]
+    daemon_indexes = [i for i, c in enumerate(execs) if "circus-daemon" in c[-1]]
+    assert router_indexes and daemon_indexes
+    assert router_indexes[0] < daemon_indexes[0]
+
+
+def test_router_install_failure_does_not_abort_up(tmp_path, fake_msb):
+    """A failed router install only warns; up still registers daemons."""
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b'[[msb.daemons]]\nname = "web"\ncommand = ["sleep", "1"]\nport = 4096\n'
+    )
+    real_run = FakeInvoker.run
+
+    def run_with_router_failure(self, args, **kwargs):
+        if args[0] == "exec" and "circus-router" in args[-1]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="boom")
+        return real_run(self, args, **kwargs)
+
+    FakeInvoker.run = run_with_router_failure
+    try:
+        result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    finally:
+        FakeInvoker.run = real_run
+    assert result.exit_code == 0
+    assert "Router" in result.output or "router" in result.output
+    assert [c for c in fake_msb["calls"] if c[0] == "exec" and "circus-daemon" in c[-1]]

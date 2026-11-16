@@ -217,6 +217,36 @@ exec /command/s6-log -b n10 s1000000 T {logd}
 """
 
 
+def svscan_wait_lines() -> list[str]:
+    """Return the shell lines that wait for s6-svscan to become ready.
+
+    The lines assume ``set -eu`` and expect s6-overlay as PID 1. They
+    abort with exit code 3 when ``/command/s6-svscanctl`` is missing and
+    with :data:`EXIT_SVSCAN_NOT_READY` when s6-svscan does not start in
+    time (see :data:`SVSCAN_WAIT_TRIES`).
+
+    :returns: Shell lines ending with the loop's ``done`` line.
+    """
+    return [
+        "if [ ! -x /command/s6-svscanctl ]; then",
+        '    echo "msb-circus daemons need s6-overlay as PID 1 in the sandbox image" >&2',
+        "    exit 3",
+        "fi",
+        # Right after boot, s6-overlay may not have started s6-svscan yet;
+        # s6-svscanctl then exits 100. A rescan request (-a) is harmless,
+        # so use it as a readiness probe before touching the scan directory.
+        "i=0",
+        f"until /command/s6-svscanctl -a {S6_SCANDIR} 2>/dev/null; do",
+        "    i=$((i + 1))",
+        f'    if [ "$i" -ge {SVSCAN_WAIT_TRIES} ]; then',
+        f'        echo "s6-svscan is not running on {S6_SCANDIR}" >&2',
+        f"        exit {EXIT_SVSCAN_NOT_READY}",
+        "    fi",
+        f"    sleep {SVSCAN_WAIT_INTERVAL_S}",
+        "done",
+    ]
+
+
 def build_install_script(daemons: Sequence[DaemonConfig], workdir: str) -> str:
     """Render a POSIX ``sh`` script that registers all daemons with s6.
 
@@ -236,22 +266,7 @@ def build_install_script(daemons: Sequence[DaemonConfig], workdir: str) -> str:
     lines: list[str] = [
         "set -eu",
         "umask 077",
-        "if [ ! -x /command/s6-svscanctl ]; then",
-        '    echo "msb-circus daemons need s6-overlay as PID 1 in the sandbox image" >&2',
-        "    exit 3",
-        "fi",
-        # Right after boot, s6-overlay may not have started s6-svscan yet;
-        # s6-svscanctl then exits 100. A rescan request (-a) is harmless,
-        # so use it as a readiness probe before touching the scan directory.
-        "i=0",
-        f"until /command/s6-svscanctl -a {S6_SCANDIR} 2>/dev/null; do",
-        "    i=$((i + 1))",
-        f'    if [ "$i" -ge {SVSCAN_WAIT_TRIES} ]; then',
-        f'        echo "s6-svscan is not running on {S6_SCANDIR}" >&2',
-        f"        exit {EXIT_SVSCAN_NOT_READY}",
-        "    fi",
-        f"    sleep {SVSCAN_WAIT_INTERVAL_S}",
-        "done",
+        *svscan_wait_lines(),
         "mkdir -p /run/circus-daemons",
         "if ! mountpoint -q /run/circus-daemons; then",
         "    mount -t tmpfs -o size=1m,mode=0700 tmpfs /run/circus-daemons",

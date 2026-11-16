@@ -36,6 +36,7 @@ from .config import (
     docker_enabled,
     docker_volume_name_for_workspace,
     effective_mounts,
+    exposed_routes,
     load_config,
     load_hook_script,
     resolve_agent_config_mounts,
@@ -140,6 +141,11 @@ from .logs import (
 )
 from .msb import MsbInvoker, check_version, probe_version, resolve_msb_binary
 from .ps import format_sandbox_json, format_sandbox_table
+from .router import (
+    EXIT_NO_PYTHON,
+    build_router_install_script,
+    encode_router_script,
+)
 from .sandbox import (
     SandboxInfo,
     VolumeInfo,
@@ -2287,6 +2293,103 @@ def _wait_for_daemon_port(
     return False
 
 
+def _ensure_router(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
+    """Install or update the circus-router s6 service in the sandbox.
+
+    The router carries the routes of every exposed daemon, so it is
+    (re)installed on every boot, start and reuse, like the daemons.
+    Never raises: failures warn (when any daemon is exposed; otherwise a
+    debug note suffices) and leave the sandbox running without a router,
+    so the proxy cannot reach its daemons.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param config: Resolved msb-circus configuration.
+    :param name: Sandbox name.
+    """
+    if config.sandbox.init == INIT_NONE:
+        return
+    routes = exposed_routes(config.daemons)
+    script = build_router_install_script(routes)
+    try:
+        result = invoker.run(
+            build_exec_args(
+                name,
+                ["sh", "-c", script],
+                env=encode_router_script(),
+                tty=None,
+            ),
+            check=False,
+        )
+    except MsbCommandError as e:
+        _warn_router_failed(name, routes, str(e), None)
+        return
+    if result.returncode == 0:
+        if routes:
+            logger.info("Router installed in %s (%d route(s))", name, len(routes))
+        return
+    reason = (result.stderr or result.stdout or "").strip()
+    _warn_router_failed(name, routes, reason, result.returncode)
+
+
+def _warn_router_failed(
+    name: str,
+    routes: dict[str, int],
+    reason: str,
+    returncode: int | None,
+) -> None:
+    """Log a router install failure as a warning or a debug note.
+
+    Without exposed daemons there is nothing the proxy could reach, so a
+    failure only matters at debug level.
+
+    :param name: Sandbox name.
+    :param routes: Exposed daemon routes that were meant to be installed.
+    :param reason: Captured failure reason.
+    :param returncode: Exit code of the install exec, or ``None`` when it
+        could not run at all.
+    """
+    message = _router_failure_message(name, routes, reason, returncode)
+    if routes:
+        logger.warning("%s", message)
+    else:
+        logger.debug("%s", message)
+
+
+def _router_failure_message(
+    name: str,
+    routes: dict[str, int],
+    reason: str,
+    returncode: int | None,
+) -> str:
+    """Build the failure message for a router install attempt.
+
+    :param name: Sandbox name.
+    :param routes: Exposed daemon routes of the install attempt.
+    :param reason: Captured failure reason (stderr/stdout or exception).
+    :param returncode: Exit code of the install exec, or ``None``.
+    :returns: The log message text.
+    """
+    if returncode == 3:
+        return (
+            f"The router is not installed in {name}: the sandbox image has "
+            "no s6-overlay as PID 1"
+        )
+    if returncode == EXIT_SVSCAN_NOT_READY:
+        return f"The router is not installed in {name}: s6-svscan did not start"
+    if returncode == EXIT_NO_PYTHON:
+        return (
+            f"The sandbox image has no python3; the proxy cannot reach the "
+            f"daemons of {name}. Install python3 in the image or re-create "
+            "the sandbox with an image that has it"
+        )
+    detail = (
+        f" (exit code {returncode}): {reason}"
+        if returncode is not None
+        else f": {reason}"
+    )
+    return f"The router is not installed in {name}{detail}"
+
+
 def _ensure_daemons(
     invoker: MsbInvoker, config: MsbConfig, name: str, workspace: Path
 ) -> None:
@@ -2656,6 +2759,7 @@ def _ensure_sandbox_running(
         ):
             _exit_on_hook_failure()
         if sync_daemons:
+            _ensure_router(invoker, config, name)
             _ensure_daemons(invoker, config, name, workspace)
         return
 
@@ -2749,6 +2853,7 @@ def _ensure_sandbox_running(
         invoker, config, name, workspace, run_provision=True, quiet=quiet
     ):
         _exit_on_hook_failure()
+    _ensure_router(invoker, config, name)
     _ensure_daemons(invoker, config, name, workspace)
 
 
@@ -3151,6 +3256,7 @@ def start(
         invoker, config, name, workspace, run_provision=True, quiet=False
     ):
         _exit_on_hook_failure()
+    _ensure_router(invoker, config, name)
     _ensure_daemons(invoker, config, name, workspace)
 
 
