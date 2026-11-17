@@ -74,7 +74,7 @@ flowchart LR
         engine["Docker / Podman<br/>+ Compose"]
         builder["podman / docker build"]
         msb["msb runtime"]
-        proxy["msb-circus proxy<br/>127.0.0.1:7700"]
+        proxy["msb-circus proxy<br/>127.0.0.1:7700<br/>+ dashboard on localhost"]
         agent[(ssh-agent socket)]
         hostfiles[("~/.claude, ~/.codex, ~/.pi,<br/>/etc/hosts, ~/.ssh/*")]
     end
@@ -191,7 +191,10 @@ flowchart TB
         hosts["hosts.py<br/>parse, select, validate,<br/>render host lines"]
         gitc["gitconfig.py<br/>resolve host gitconfig,<br/>check public keys, render<br/>managed gitconfig"]
         hostports["hostports.py<br/>host port availability, pick_free_port"]
-        proxyb["proxy.py<br/>host proxy: *.localhost routing,<br/>RouterResolver (msb inspect cache)"]
+        proxyb["proxy.py<br/>host proxy: *.localhost routing,<br/>RouterResolver (msb inspect cache)"
+        ]
+        stats["proxy_stats.py<br/>ConnectionTracker: per-connection<br/>records, route totals, traffic buckets"]
+        dash["dashboard.py / dashboard_http.py<br/>collector, view builders, hints,<br/>HTTP app for localhost hosts"]
         routerb["router.py<br/>router install script, base64 transport"]
         tracing["tracing.py<br/>TraceSession: resource samples,<br/>ACP transport events, payloads"]
     end
@@ -203,6 +206,7 @@ flowchart TB
     cli --> sandbox & execb & images & ps
     cli --> ssh & hosts & hostports & tracing & gitc
     cli --> proxyb & routerb
+    proxyb --> stats & dash
     cli --> msb
     images --> tpl
     sandbox --> config
@@ -267,7 +271,7 @@ flowchart TB
         socat["circus-ssh-agent-bridge (longrun)<br/>only if CIRCUS_SSH_AGENT_VSOCK_PORT set<br/>/run/ssh-agent.sock <-> VSOCK 2:22022<br/>log: /tmp/ssh-agent-bridge.log"]
         execs["msb exec sessions:<br/>harnesses, ACP streams, setup scripts"]
         daemons["circus-daemon-&lt;name&gt; (runtime s6 services, [[msb.daemons]])<br/>/run/service/circus-daemon-&lt;name&gt;<br/>env: /run/circus-daemons (tmpfs, 0700)<br/>log: /var/log/circus-daemons/&lt;name&gt;"]
-        router["circus-router (runtime s6 service, one per sandbox)<br/>/run/service/circus-router<br/>script: /run/circus-router/router.py<br/>routes: /run/circus-router/routes.json (mtime-reloaded)<br/>log: /var/log/circus-router"]
+        router["circus-router (runtime s6 service, one per sandbox)<br/>/run/service/circus-router<br/>script: /run/circus-router/router.py<br/>routes: /run/circus-router/routes.json (mtime-reloaded)<br/>status: Host _circus, /status JSON (routes, reachability)<br/>log: /var/log/circus-router"]
         msbdir["/.msb: scripts/, tls/, heartbeat.json, rootfs"]
         disks["/workspace (bind), /workspaces/&lt;name&gt; (bind),<br/>/root/.claude, /root/.codex (bind),<br/>/var/lib/docker (mount-owned ext4 disk,<br/>or named volume with docker_disk_persist)"]
     end
@@ -435,6 +439,7 @@ KVM, docker socket, or msb runtime.
 | Init system (s6-overlay) | implemented; pending live verification (plan-msb-s6.md) |
 | Daemons (`[[msb.daemons]]`, runtime s6 services) | implemented, pending live verification |
 | Central proxy (`msb-circus proxy`, guest `circus-router`, `msb-circus urls`) | implemented, pending live verification |
+| Dashboard (`http://localhost:7700/`, `msb-circus dashboard`, `_circus` status endpoint) | implemented, pending live verification |
 
 ## 9. Work in progress
 

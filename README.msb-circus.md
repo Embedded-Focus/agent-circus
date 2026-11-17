@@ -1077,12 +1077,68 @@ msb-circus urls --format json       # machine-readable, notes on stderr
 
 The proxy binds to `127.0.0.1` and `[::1]` only, never to a wildcard
 address. It accepts only `*.localhost` host names; any other name (for
-example a foreign domain that resolves to `127.0.0.1`) gets HTTP 421.
-This is a DNS rebinding guard.
+example a foreign domain that resolves to `127.0.0.1`) gets HTTP 421
+with a pointer to the dashboard. This is a DNS rebinding guard.
 
 To stop a daemon from being reachable through the proxy, set
 `expose = false` on its `[[msb.daemons]]` entry. A daemon without a
 `port` is never exposed.
+
+### Dashboard
+
+While the proxy runs, it serves a live dashboard on the same port:
+
+``` shell
+msb-circus proxy
+# Dashboard: http://localhost:7700/
+msb-circus dashboard               # print the URL and open the browser
+msb-circus dashboard --no-browser  # only print the URL
+```
+
+The page shows, refreshed every few seconds:
+
+- every msb sandbox: state, age, workspace path and published ports;
+- every daemon in every running sandbox: s6 state, uptime, port, whether
+  the port answers, and a clickable proxy URL;
+- every connection through the proxy: active ones, recent ones (the
+  first request line and response status of each connection), per-route
+  totals and a traffic sparkline for the last 10 minutes;
+- a fix hint with a copyable command for every problem it finds.
+
+Daemon details come from the running guest, so a stopped sandbox shows
+no daemons. Sandboxes with a router from before this feature show
+"outdated"; run `msb-circus up` once in that workspace to update it.
+
+The dashboard counts **connections, not requests**: the proxy routes per
+connection, so a page load that reuses one keep-alive connection counts
+once. Only the first request and the first response status of each
+connection are recorded.
+
+Privacy: the connection log stores the method and the path, never the
+query string (it may contain tokens), and never headers or bodies.
+Dashboard requests themselves are not logged. All data lives in the
+proxy's memory and is lost when the proxy exits.
+
+The dashboard is read-only; it never changes anything. Every problem it
+finds comes with a copyable command:
+
+| Problem | Command |
+|---|---|
+| Sandbox is stopped | `msb-circus up` |
+| Created without the router port | `msb-circus rm -f && msb-circus up` |
+| Router does not answer | `msb-circus up` |
+| Router older than msb-circus | `msb-circus up` |
+| Daemon failed (crash limit) | `msb-circus daemon restart <name>` |
+| Daemon runs but port is closed | `msb-circus daemon logs <name>` |
+| Daemon is stopped | `msb-circus daemon start <name>` |
+
+Security: the dashboard answers only on the loopback names
+(`localhost`, `127.0.0.1`, `[::1]`), is read-only, and is served with a
+strict Content-Security-Policy (no inline script, same-origin
+resources only). Every local process that can open the page can read
+it — the same exposure as `msb list`. The log viewer shows the same
+data as `msb-circus daemon logs`, including any secrets a daemon
+prints (for example a generated password).
 
 ### Known limits
 
@@ -1094,6 +1150,14 @@ To stop a daemon from being reachable through the proxy, set
 - HTTP/1.x only. No TLS and no HTTP/2 on the proxy port. Non-HTTP
   protocols still need `[[port_forwards]]`.
 - The proxy is a foreground process. There is no auto-start.
+- The dashboard only exists while the proxy runs. Traffic history is in
+  memory only and covers 10 minutes; it resets when the proxy restarts.
+- Daemon details need a sandbox that runs a current router; run
+  `msb-circus up` once after updating msb-circus.
+- Counts are per connection, and only the first request and response of
+  a keep-alive connection are recorded.
+- Direct `[[port_forwards]]` traffic does not pass the proxy and is not
+  shown in the dashboard.
 - Sandboxes created before this feature need one re-creation
   (`msb-circus rm -f && msb-circus up`) to get the router port.
 - The router host port is picked at creation. If another process takes
