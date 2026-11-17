@@ -27,6 +27,14 @@
     }
   }
 
+  function read(key) {
+    try {
+      return localStorage.getItem(STORAGE_PREFIX + key);
+    } catch (e) {
+      return null;
+    }
+  }
+
   function showMessage(nodes) {
     var box = el("shell-message");
     box.replaceChildren(...nodes);
@@ -36,6 +44,95 @@
   function hideMessage() {
     el("shell-message").hidden = true;
   }
+
+  // ---- themes -------------------------------------------------------------
+
+  var THEMES = Array.isArray(window.MSB_SHELL_THEMES) ? window.MSB_SHELL_THEMES : [];
+  // Used only when shell-themes.js failed to load.
+  var FALLBACK_THEME = {
+    id: "msb-dark",
+    scheme: "dark",
+    colors: {
+      background: "#1a1a19",
+      foreground: "#f0efec",
+      cursor: "#3987e5",
+      cursorAccent: "#1a1a19",
+      selectionBackground: "#3987e54d",
+    },
+  };
+  var darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+  var term = null; // set once the terminal exists
+
+  function themeById(id) {
+    for (var i = 0; i < THEMES.length; i++) {
+      if (THEMES[i].id === id) return THEMES[i];
+    }
+    return null;
+  }
+
+  // The stored choice: a theme id or "auto" (also for unknown ids).
+  function currentChoice() {
+    var stored = read("shell-theme");
+    return stored && themeById(stored) ? stored : "auto";
+  }
+
+  // "auto" follows the dashboard's Theme button (auto | light | dark),
+  // and the OS setting when that button is on "auto".
+  function resolveTheme(choice) {
+    var named = choice === "auto" ? null : themeById(choice);
+    if (named) return named;
+    var dashboard = read("theme");
+    var dark = dashboard === "dark" || (dashboard !== "light" && darkQuery.matches);
+    return themeById(dark ? "msb-dark" : "msb-light") || FALLBACK_THEME;
+  }
+
+  function applyShellTheme() {
+    var choice = currentChoice();
+    var theme = resolveTheme(choice);
+    document.documentElement.dataset.theme = theme.scheme;
+    el("terminal").style.setProperty("--term-bg", theme.colors.background);
+    el("shell-theme").value = choice;
+    // A copy, so xterm never holds the shared object.
+    if (term) term.options.theme = Object.assign({}, theme.colors);
+  }
+
+  function buildThemeMenu() {
+    var select = el("shell-theme");
+    var auto = make("option", null, "Auto (dashboard theme)");
+    auto.value = "auto";
+    var nodes = [auto];
+    var group = null;
+    THEMES.forEach(function (theme) {
+      if (!group || group.label !== theme.group) {
+        group = make("optgroup");
+        group.label = theme.group;
+        nodes.push(group);
+      }
+      var option = make("option", null, theme.label);
+      option.value = theme.id;
+      group.append(option);
+    });
+    select.replaceChildren(...nodes);
+  }
+
+  buildThemeMenu();
+  applyShellTheme();
+
+  el("shell-theme").addEventListener("change", function (event) {
+    store("shell-theme", event.target.value);
+    applyShellTheme();
+  });
+  darkQuery.addEventListener("change", applyShellTheme);
+  window.addEventListener("storage", function (event) {
+    // event.key is null when another tab clears all storage.
+    if (
+      event.key === null ||
+      event.key === STORAGE_PREFIX + "theme" ||
+      event.key === STORAGE_PREFIX + "shell-theme"
+    ) {
+      applyShellTheme();
+    }
+  });
 
   var TOKEN_HELP =
     "This browser has no valid shell token. Open the dashboard with ";
@@ -79,20 +176,13 @@
   function cssVar(name) {
     return styles.getPropertyValue(name).trim();
   }
-  var dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-  var term = new Terminal({
+  term = new Terminal({
     cursorBlink: true,
     fontFamily: cssVar("--mono"),
     fontSize: parseInt(localStorage.getItem(STORAGE_PREFIX + "shell-font-size") || "14", 10),
     scrollback: 5000,
     convertEol: false,
-    theme: {
-      background: cssVar("--surface-1"),
-      foreground: cssVar("--text-primary"),
-      cursor: cssVar("--accent"),
-      cursorAccent: cssVar("--surface-1"),
-      selectionBackground: dark ? "rgba(57, 135, 229, 0.3)" : "rgba(42, 120, 214, 0.3)",
-    },
+    theme: Object.assign({}, resolveTheme(currentChoice()).colors),
   });
   var fit = new FitAddon.FitAddon();
   term.loadAddon(fit);

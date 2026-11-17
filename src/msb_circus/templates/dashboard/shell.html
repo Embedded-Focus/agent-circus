@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="shell.css" />
     <script src="vendor/xterm/xterm.js" defer></script>
     <script src="vendor/xterm/addon-fit.js" defer></script>
+    <script src="shell-themes.js" defer></script>
     <script src="shell.js" defer></script>
   </head>
   <body>
@@ -16,6 +17,7 @@
       <span id="shell-sandbox" class="mono"></span>
       <span id="shell-status" class="st" aria-live="polite"></span>
       <span class="spacer"></span>
+      <select id="shell-theme" title="Terminal theme" aria-label="Terminal theme"></select>
       <button id="shell-font-down" type="button" title="Smaller text">A−</button>
       <button id="shell-font-up" type="button" title="Larger text">A+</button>
       <button id="shell-reconnect" type="button" hidden>Reconnect</button>

@@ -779,7 +779,7 @@ def test_dashboard_page_keeps_strict_csp():
 
 
 def test_shell_assets_are_packaged():
-    for path in ("/shell", "/shell.css", "/shell.js"):
+    for path in ("/shell", "/shell.css", "/shell.js", "/shell-themes.js"):
         file_name, _ = STATIC_FILES[path]
         resource = resources.files("msb_circus").joinpath(
             f"templates/dashboard/{file_name}"

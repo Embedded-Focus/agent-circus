@@ -45,6 +45,7 @@ STATIC_FILES: dict[str, tuple[str, str]] = {
     "/shell": ("shell.html", "text/html; charset=utf-8"),
     "/shell.css": ("shell.css", "text/css; charset=utf-8"),
     "/shell.js": ("shell.js", "text/javascript; charset=utf-8"),
+    "/shell-themes.js": ("shell-themes.js", "text/javascript; charset=utf-8"),
     "/vendor/xterm/xterm.js": (
         "vendor/xterm/xterm.js",
         "text/javascript; charset=utf-8",

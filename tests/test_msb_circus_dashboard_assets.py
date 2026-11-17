@@ -166,6 +166,7 @@ def test_shell_html_has_no_inline_script_or_style():
         "shell-back",
         "shell-sandbox",
         "shell-status",
+        "shell-theme",
         "shell-font-down",
         "shell-font-up",
         "shell-reconnect",
@@ -197,3 +198,33 @@ def test_shell_js_parses():
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_shell_html_loads_themes_before_shell_js():
+    html = _shell_html()
+    themes_at = html.index('src="shell-themes.js"')
+    shell_at = html.index('src="shell.js"')
+    assert themes_at < shell_at, "shell-themes.js must load before shell.js"
+    tag_start = html.rindex("<script", 0, themes_at)
+    tag_end = html.index(">", themes_at)
+    assert "defer" in html[tag_start:tag_end], "shell-themes.js must have defer"
+
+
+def test_shell_js_applies_themes():
+    js = _shell_js()
+    for needle in (
+        "MSB_SHELL_THEMES",
+        '"shell-theme"',
+        "term.options.theme",
+        "prefers-color-scheme",
+        '"storage"',
+        'read("theme")',
+        "optgroup",
+        "--term-bg",
+    ):
+        assert needle in js, f"shell.js lacks theme handling: {needle}"
+
+
+def test_shell_js_has_no_hard_coded_selection_rgba():
+    js = _shell_js()
+    assert "rgba(" not in js, "shell.js must not hard-code selection colors"
