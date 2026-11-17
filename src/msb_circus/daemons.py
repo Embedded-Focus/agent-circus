@@ -136,7 +136,7 @@ def encode_env_files(
     shipped in a single environment variable.
 
     :param envs: Mapping of daemon name to ``(environment, shell word
-        names)`` as returned by :func:`msb_circus.cli._merged_env`.
+        names)`` as returned by :func:`msb_circus.envs.merged_env`.
     :returns: Mapping of environment variable name (see
         :func:`env_transport_var`) to the base64-encoded file content.
     """

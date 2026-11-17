@@ -5,8 +5,14 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
+from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
+from .config import SSH_AGENT_GUEST_SOCKET
 from .exceptions import ConfigurationError
+
+if TYPE_CHECKING:
+    from .config import MsbConfig
 
 REDACTED = "<redacted>"
 
@@ -25,7 +31,7 @@ def _matches_glob(name: str, pattern: str) -> bool:
 def resolve_passthrough(
     names: tuple[str, ...] | list[str],
     *,
-    environ: dict[str, str] | None = None,
+    environ: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Resolve host environment variables for pass-through.
 
@@ -124,3 +130,52 @@ def quote_shell_word(value: str) -> str:
             out.append(char)
             i += 1
     return '"' + "".join(out) + '"'
+
+
+def merged_env(
+    config: MsbConfig,
+    env_passthrough: tuple[str, ...],
+    env: Mapping[str, str],
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> tuple[dict[str, str], frozenset[str]]:
+    """Return the environment of a daemon or hook, plus its shell words.
+
+    In increasing precedence: the ``[env]``/``[msb.env]`` variables, the
+    top-level ``env_passthrough`` variables, ``SSH_AUTH_SOCK`` (when
+    ``[ssh]`` is configured), *env_passthrough*, and *env*.
+
+    Values are classified by origin and content: user-authored values
+    (``[env]``/``[msb.env]`` and *env*) containing ``$`` are guest shell
+    words whose references expand in the guest; passthrough values stay
+    literal even when they contain ``$`` (host secrets), and values
+    without ``$`` are literal because quoting them would change nothing.
+    A later source overrides both the value and the classification of a
+    key.
+
+    :param config: Resolved msb-circus configuration.
+    :param env_passthrough: Extra passthrough patterns of the entry.
+    :param env: Extra variables of the entry.
+    :param environ: Host environment for passthrough resolution, defaults
+        to :data:`os.environ` (injected by the web shell tests).
+    :returns: Tuple of the merged environment and the names of the keys
+        whose values are guest shell words.
+    :raises ConfigurationError: If a passthrough variable is unset on the host.
+    """
+    merged: dict[str, str] = {}
+    origins: dict[str, bool] = {}  # True: shell word, False: literal
+
+    def put(values: Mapping[str, str], *, shell_word: bool) -> None:
+        """Merge *values*, overriding value and origin of known keys."""
+        merged.update(values)
+        origins.update(dict.fromkeys(values, shell_word))
+
+    put(config.env, shell_word=True)
+    put(resolve_passthrough(config.env_passthrough, environ=environ), shell_word=False)
+    if config.ssh:
+        put({"SSH_AUTH_SOCK": SSH_AGENT_GUEST_SOCKET}, shell_word=False)
+    put(resolve_passthrough(env_passthrough, environ=environ), shell_word=False)
+    put(env, shell_word=True)
+    return merged, frozenset(
+        k for k, shell_word in origins.items() if shell_word and "$" in merged[k]
+    )

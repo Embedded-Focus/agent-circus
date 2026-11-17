@@ -36,7 +36,6 @@ from .config import (
     PROXY_DOMAIN,
     PROXY_PORT_ENV_VAR,
     ROUTER_GUEST_PORT,
-    SSH_AGENT_GUEST_SOCKET,
     SSH_AGENT_VSOCK_PORT,
     DaemonConfig,
     HookConfig,
@@ -74,7 +73,7 @@ from .daemons import (
 )
 from .dashboard import DashboardCollector
 from .dashboard_http import DashboardApp
-from .envs import parse_env_assignments, resolve_passthrough
+from .envs import merged_env, parse_env_assignments
 from .exceptions import ConfigurationError, MsbCircusError, MsbCommandError
 from .exec_ import (
     S6_PID1_COMM,
@@ -2153,51 +2152,6 @@ def _sandbox_creation_env(env: Mapping[str, str]) -> dict[str, str]:
     return {k: v for k, v in env.items() if "$" not in v}
 
 
-def _merged_env(
-    config: MsbConfig,
-    env_passthrough: tuple[str, ...],
-    env: Mapping[str, str],
-) -> tuple[dict[str, str], frozenset[str]]:
-    """Return the environment of a daemon or hook, plus its shell words.
-
-    In increasing precedence: the ``[env]``/``[msb.env]`` variables, the
-    top-level ``env_passthrough`` variables, ``SSH_AUTH_SOCK`` (when
-    ``[ssh]`` is configured), *env_passthrough*, and *env*.
-
-    Values are classified by origin and content: user-authored values
-    (``[env]``/``[msb.env]`` and *env*) containing ``$`` are guest shell
-    words whose references expand in the guest; passthrough values stay
-    literal even when they contain ``$`` (host secrets), and values
-    without ``$`` are literal because quoting them would change nothing.
-    A later source overrides both the value and the classification of a
-    key.
-
-    :param config: Resolved msb-circus configuration.
-    :param env_passthrough: Extra passthrough patterns of the entry.
-    :param env: Extra variables of the entry.
-    :returns: Tuple of the merged environment and the names of the keys
-        whose values are guest shell words.
-    :raises ConfigurationError: If a passthrough variable is unset on the host.
-    """
-    merged: dict[str, str] = {}
-    origins: dict[str, bool] = {}  # True: shell word, False: literal
-
-    def put(values: Mapping[str, str], *, shell_word: bool) -> None:
-        """Merge *values*, overriding value and origin of known keys."""
-        merged.update(values)
-        origins.update(dict.fromkeys(values, shell_word))
-
-    put(config.env, shell_word=True)
-    put(resolve_passthrough(config.env_passthrough), shell_word=False)
-    if config.ssh:
-        put({"SSH_AUTH_SOCK": SSH_AGENT_GUEST_SOCKET}, shell_word=False)
-    put(resolve_passthrough(env_passthrough), shell_word=False)
-    put(env, shell_word=True)
-    return merged, frozenset(
-        k for k, shell_word in origins.items() if shell_word and "$" in merged[k]
-    )
-
-
 def _daemon_envs(
     config: MsbConfig,
 ) -> dict[str, tuple[dict[str, str], frozenset[str]]]:
@@ -2220,7 +2174,7 @@ def _daemon_envs(
     """
     envs: dict[str, tuple[dict[str, str], frozenset[str]]] = {}
     for daemon in config.daemons:
-        env, shell_words = _merged_env(config, daemon.env_passthrough, daemon.env)
+        env, shell_words = merged_env(config, daemon.env_passthrough, daemon.env)
         # Daemons run under s6 with the VM boot environment (with-contenv),
         # which msb does not guarantee to carry HOME; an interactive exec
         # shell always has it. Without HOME, harnesses like OpenCode cannot
@@ -2555,7 +2509,7 @@ def _run_hook(
 
     key = hook_key_hash(content) if hook.name == "provision" else None
     try:
-        merged, shell_keys = _merged_env(config, hook.env_passthrough, hook.env)
+        merged, shell_keys = merged_env(config, hook.env_passthrough, hook.env)
         runner_env = build_run_env(content, key, hook.timeout)
         env = {**merged, **runner_env}
         # The runner's own variables are literal and win over user values.
@@ -3484,7 +3438,7 @@ def exec_(
 
     try:
         # -e assignments are user-authored shell words, same as [env].
-        env_map, shell_keys = _merged_env(
+        env_map, shell_keys = merged_env(
             config, env_passthrough=(), env=parse_env_assignments(env or [])
         )
         shell_env = {k: env_map[k] for k in shell_keys}

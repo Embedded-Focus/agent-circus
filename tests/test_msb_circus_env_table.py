@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 import msb_circus.cli as cli_module
 from msb_circus.cli import app
 from msb_circus.config import parse_config, warn_unsupported_keys
+from msb_circus.envs import merged_env
 from msb_circus.exceptions import ConfigurationError
 
 runner = CliRunner()
@@ -117,7 +118,7 @@ def test_env_is_not_reported_as_unsupported(caplog):
 def test_merged_env_puts_env_table_below_passthrough(monkeypatch):
     config = parse_config({"env": {"A": "$REF", "B": "env"}, "env_passthrough": ["B"]})
     monkeypatch.setenv("B", "host")
-    merged, shell_words = cli_module._merged_env(config, env_passthrough=(), env={})
+    merged, shell_words = merged_env(config, env_passthrough=(), env={})
     assert merged["A"] == "$REF"
     assert merged["B"] == "host"
     # A: user-authored with $ -> shell word; B: overridden by passthrough
@@ -128,7 +129,7 @@ def test_merged_env_puts_env_table_below_passthrough(monkeypatch):
 def test_merged_env_shell_words_need_dollar(monkeypatch):
     """Values without $ are literal; quoting them would change nothing."""
     config = parse_config({"env": {"A": "plain"}})
-    _, shell_words = cli_module._merged_env(config, env_passthrough=(), env={})
+    _, shell_words = merged_env(config, env_passthrough=(), env={})
     assert shell_words == set()
 
 
@@ -226,3 +227,16 @@ def test_sandbox_creation_env_drops_expandable_values():
     assert cli_module._sandbox_creation_env(
         {"A": "plain", "PATH": "$PATH:/opt/bin", "B": "a$$b"}
     ) == {"A": "plain"}
+
+
+def test_merged_env_uses_given_environ():
+    config = parse_config({"env_passthrough": ["HOME"]})
+    merged, _ = merged_env(config, env_passthrough=(), env={}, environ={"HOME": "/x"})
+    assert merged["HOME"] == "/x"
+
+
+def test_merged_env_without_environ_reads_os_environ(monkeypatch):
+    config = parse_config({"env_passthrough": ["CIRCUS_TEST_VAR"]})
+    monkeypatch.setenv("CIRCUS_TEST_VAR", "from-os")
+    merged, _ = merged_env(config, env_passthrough=(), env={})
+    assert merged["CIRCUS_TEST_VAR"] == "from-os"
