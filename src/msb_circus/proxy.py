@@ -31,8 +31,10 @@ from .exceptions import MsbCommandError
 from .sandbox import build_inspect_args, parse_inspect_ports_ordered, router_forward
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable
+    from collections.abc import Awaitable, Callable
     from subprocess import CompletedProcess
+
+    from .proxy_stats import ConnectionTracker
 
 
 class _MsbRunner(Protocol):
@@ -142,14 +144,22 @@ async def read_head(reader: asyncio.StreamReader) -> bytes | None:
         return None
 
 
-async def pipe(src: asyncio.StreamReader, dst: asyncio.StreamWriter) -> None:
+async def pipe(
+    src: asyncio.StreamReader,
+    dst: asyncio.StreamWriter,
+    on_data: Callable[[bytes], None] | None = None,
+) -> None:
     """Copy bytes until EOF, then half-close *dst*.
 
     :param src: Stream to read from.
     :param dst: Stream to write to; its write end is half-closed at EOF.
+    :param on_data: Optional callback invoked with every chunk before it
+        is written to *dst* (used for connection accounting).
     """
     try:
         while data := await src.read(CHUNK):
+            if on_data is not None:
+                on_data(data)
             dst.write(data)
             await dst.drain()
         if dst.can_write_eof():
@@ -158,16 +168,21 @@ async def pipe(src: asyncio.StreamReader, dst: asyncio.StreamWriter) -> None:
         pass
 
 
-async def splice(cr, cw, ur, uw) -> None:
+async def splice(
+    cr, cw, ur, uw, on_up: Callable[[bytes], None] | None = None,
+    on_down: Callable[[bytes], None] | None = None,
+) -> None:
     """Copy both directions until both end, then close both writers.
 
     :param cr: Client-side stream reader.
     :param cw: Client-side stream writer.
     :param ur: Upstream stream reader.
     :param uw: Upstream stream writer.
+    :param on_up: Optional callback for client -> upstream chunks.
+    :param on_down: Optional callback for upstream -> client chunks.
     """
     try:
-        await asyncio.gather(pipe(cr, uw), pipe(ur, cw))
+        await asyncio.gather(pipe(cr, uw, on_up), pipe(ur, cw, on_down))
     finally:
         for w in (uw, cw):
             w.close()
@@ -251,6 +266,7 @@ async def handle(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
     resolver: _RouterResolverLike,
+    tracker: ConnectionTracker | None = None,
 ) -> None:
     """Forward one proxy connection to a sandbox router.
 
@@ -261,70 +277,105 @@ async def handle(
     :param reader: Client-side stream reader.
     :param writer: Client-side stream writer.
     :param resolver: Sandbox-to-router resolver.
+    :param tracker: Optional connection tracker for dashboard accounting.
     """
+    peername = writer.get_extra_info("peername")
+    if isinstance(peername, tuple) and len(peername) >= 2:
+        client = f"{peername[0]}:{peername[1]}"
+    else:
+        client = "-"
     head = await read_head(reader)
-    if head is None:
-        writer.write(
-            error_response(400, "Bad Request", "Malformed or oversized request head")
+    record = None
+    if tracker is not None:
+        host_hint = extract_host(head) if head is not None else None
+        parsed_hint = parse_proxy_host(host_hint) if host_hint is not None else None
+        record = tracker.open(
+            client=client,
+            head=head,
+            host=host_hint,
+            sandbox=parsed_hint[1] if parsed_hint else None,
+            daemon=parsed_hint[0] if parsed_hint else None,
         )
+
+    def fail(status: int, reason: str, text: str) -> None:
+        """Answer an error, account it and close the connection."""
+        if tracker is not None and record is not None:
+            tracker.reject(record, status, text)
+        writer.write(error_response(status, reason, text))
+
+    async def finish() -> None:
+        """Drain, close the client and stop accounting."""
         await writer.drain()
         writer.close()
+        if tracker is not None and record is not None:
+            tracker.close(record)
+
+    if head is None:
+        fail(400, "Bad Request", "Malformed or oversized request head")
+        await finish()
         return
     host = extract_host(head)
     parsed = parse_proxy_host(host) if host is not None else None
     if parsed is None:
-        writer.write(
-            error_response(
-                421,
-                "Misdirected Request",
-                "Use http://<daemon>.<sandbox>.localhost:<port>/ — list URLs "
-                "with: msb-circus urls",
-            )
+        fail(
+            421,
+            "Misdirected Request",
+            "Use http://<daemon>.<sandbox>.localhost:<port>/ — open "
+            "http://localhost:<port>/ for the dashboard, or list URLs "
+            "with: msb-circus urls",
         )
-        await writer.drain()
-        writer.close()
+        await finish()
         return
     daemon, sandbox = parsed
     lookup = await resolver.resolve(sandbox)
     if lookup.status == "unknown":
-        writer.write(error_response(404, "Not Found", f"No sandbox named {sandbox!r}"))
-        await writer.drain()
-        writer.close()
+        fail(404, "Not Found", f"No sandbox named {sandbox!r}")
+        await finish()
         return
     if lookup.status == "no-router" or lookup.address is None:
-        writer.write(
-            error_response(
-                502,
-                "Bad Gateway",
-                f"Sandbox {sandbox!r} was created without the router port. "
-                "Re-create it: msb-circus rm -f && msb-circus up",
-            )
+        fail(
+            502,
+            "Bad Gateway",
+            f"Sandbox {sandbox!r} was created without the router port. "
+            "Re-create it: msb-circus rm -f && msb-circus up",
         )
-        await writer.drain()
-        writer.close()
+        await finish()
         return
     address = lookup.address
     try:
         ur, uw = await asyncio.open_connection(*address, limit=MAX_HEAD_BYTES)
     except OSError:
-        writer.write(
-            error_response(
-                502,
-                "Bad Gateway",
-                f"Sandbox {sandbox!r} does not answer. Is it running? Start "
-                "it with: msb-circus up",
-            )
+        fail(
+            502,
+            "Bad Gateway",
+            f"Sandbox {sandbox!r} does not answer. Is it running? Start "
+            "it with: msb-circus up",
         )
-        await writer.drain()
-        writer.close()
+        await finish()
         return
     logger.debug("%s -> %s:%s (%s)", host, address[0], address[1], daemon)
     uw.write(head)
     await uw.drain()
-    await splice(reader, writer, ur, uw)
+    try:
+        await splice(
+            reader,
+            writer,
+            ur,
+            uw,
+            on_up=(lambda data: tracker.add_up(record, data)) if tracker else None,
+            on_down=(lambda data: tracker.add_down(record, data)) if tracker else None,
+        )
+    finally:
+        if tracker is not None and record is not None:
+            tracker.close(record)
 
 
-async def serve(port: int, resolver: RouterResolver) -> None:
+async def serve(
+    port: int,
+    resolver: RouterResolver,
+    *,
+    tracker: ConnectionTracker | None = None,
+) -> None:
     """Run the proxy server until cancelled.
 
     Binds ``127.0.0.1`` (required) and ``::1`` (best effort; browsers may
@@ -333,12 +384,13 @@ async def serve(port: int, resolver: RouterResolver) -> None:
 
     :param port: Host port to listen on.
     :param resolver: Sandbox-to-router resolver.
+    :param tracker: Optional connection tracker for dashboard accounting.
     """
     loop = asyncio.get_running_loop()
     background: set[asyncio.Task[None]] = set()
 
     def _accepted(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        task = loop.create_task(_guarded(reader, writer, resolver))
+        task = loop.create_task(_guarded(reader, writer, resolver, tracker))
         background.add(task)
         task.add_done_callback(background.discard)
 
@@ -368,11 +420,12 @@ async def _guarded(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
     resolver: _RouterResolverLike,
+    tracker: ConnectionTracker | None = None,
 ) -> None:
     """Run one handler and log instead of raising, so one bad connection
     never kills the server."""
     try:
-        await handle(reader, writer, resolver)
+        await handle(reader, writer, resolver, tracker)
     except Exception:
         logger.exception("Proxy connection handler failed")
         with contextlib.suppress(Exception):
