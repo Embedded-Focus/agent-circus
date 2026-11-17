@@ -1093,7 +1093,23 @@ msb-circus proxy
 # Dashboard: http://localhost:7700/
 msb-circus dashboard               # print the URL and open the browser
 msb-circus dashboard --no-browser  # only print the URL
+msb-circus dashboard --here        # open this workspace's sandbox detail view
 ```
+
+The overview shows the sandboxes as a **list** (one row per sandbox:
+state, daemon counts, problem icons, active connections, a small
+traffic sparkline and the age). A click anywhere on a row opens the
+sandbox's detail view. A **List | Cards** switch brings back the card
+layout; the choice is remembered. The filter input and the two
+checkboxes (`show stopped`, `show other msb sandboxes`) work in both
+layouts.
+
+The **detail view** (`#/sandbox/<name>`) shows everything about one
+sandbox: state, age, workspace, router state, fix hints, a full daemon
+table with proxy links and log buttons, this sandbox's own traffic and
+connections, the published ports and copyable `msb-circus` commands.
+The address can be bookmarked; the browser back button returns to the
+list.
 
 The page shows, refreshed every few seconds:
 
@@ -1118,6 +1134,13 @@ Privacy: the connection log stores the method and the path, never the
 query string (it may contain tokens), and never headers or bodies.
 Dashboard requests themselves are not logged. All data lives in the
 proxy's memory and is lost when the proxy exits.
+
+Traffic is tracked per sandbox: each sandbox keeps its own last 100
+connections and its own 10-minute series, so a busy sandbox cannot
+push a quiet sandbox's connections out of the view. The proxy tracks
+at most 64 sandboxes and forgets the least recently used one first;
+an evicted sandbox loses its traffic history until new traffic
+arrives.
 
 The dashboard is read-only; it never changes anything. Every problem it
 finds comes with a copyable command:
@@ -1152,6 +1175,12 @@ prints (for example a generated password).
 - The proxy is a foreground process. There is no auto-start.
 - The dashboard only exists while the proxy runs. Traffic history is in
   memory only and covers 10 minutes; it resets when the proxy restarts.
+- Per-sandbox traffic is kept for at most 64 sandboxes; the least
+  recently used one is evicted and loses its history. Per-route totals
+  (`traffic.routes`) are unbounded.
+- The sandbox list has no column sorting.
+- A dashboard table re-renders every 2 s; text selection inside a table
+  is lost on refresh.
 - Daemon details need a sandbox that runs a current router; run
   `msb-circus up` once after updating msb-circus.
 - Counts are per connection, and only the first request and response of
