@@ -8,11 +8,48 @@
     <script src="dashboard.js" defer></script>
   </head>
   <body>
-    <header>
-      <h1>Dashboard</h1>
+    <header class="topbar">
+      <h1 class="brand">msb-circus <span class="brand-sub">dashboard</span></h1>
+      <span id="proxy-label" class="proxy-label mono"></span>
+      <span class="spacer"></span>
+      <span id="live-status" class="live" aria-live="polite"></span>
+      <span id="updated-at" class="updated"></span>
+      <button id="theme-toggle" class="icon-btn" type="button" title="Theme">◐</button>
+      <button id="pause-toggle" class="icon-btn" type="button" title="Pause polling">⏸</button>
     </header>
-    <main>
-      <p>Placeholder. The dashboard page arrives in a later change.</p>
-    </main>
+
+    <div id="banner" class="banner" hidden></div>
+
+    <section class="kpis" aria-label="Overview">
+      <div class="kpi" id="kpi-sandboxes"></div>
+      <div class="kpi" id="kpi-daemons"></div>
+      <div class="kpi" id="kpi-active"></div>
+      <div class="kpi kpi-traffic" id="kpi-traffic"></div>
+    </section>
+
+    <section class="controls">
+      <input id="filter" type="search" placeholder="filter…" aria-label="Filter" />
+      <label class="check">
+        <input id="show-stopped" type="checkbox" checked />
+        show stopped
+      </label>
+      <label class="check">
+        <input id="show-other" type="checkbox" />
+        show other msb sandboxes
+      </label>
+    </section>
+
+    <section aria-label="Sandboxes">
+      <h2 class="section-title">Sandboxes</h2>
+      <div id="sandboxes" class="cards"></div>
+    </section>
+
+    <section aria-label="Connections">
+      <h2 class="section-title">Connections</h2>
+      <div id="conn-tabs" class="tabs" role="tablist"></div>
+      <div id="connections"></div>
+    </section>
+
+    <footer id="footer" class="footer"></footer>
   </body>
 </html>

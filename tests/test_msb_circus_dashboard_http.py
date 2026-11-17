@@ -100,7 +100,7 @@ def test_respond_serves_index_with_security_headers():
     assert b"Content-Security-Policy: default-src 'self'" in response
     assert b"X-Content-Type-Options: nosniff" in response
     assert b"Cache-Control: no-store" in response
-    assert b"Dashboard" in response
+    assert b"<title>msb-circus dashboard</title>" in response
 
 
 def test_respond_api_state_matches_contract():
