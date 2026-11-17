@@ -54,6 +54,7 @@ def test_parse_request_line_truncates_long_path():
     head = b"GET /" + b"a" * 500 + b" HTTP/1.1\r\n\r\n"
     method, path = parse_request_line(head)
     assert method == "GET"
+    assert path is not None
     assert len(path) == 120
 
 
@@ -170,7 +171,9 @@ def test_tracker_route_stats_track_active_total_and_bytes():
 def test_tracker_recent_is_bounded():
     tracker = ConnectionTracker(clock=lambda: 0.0)
     for _ in range(RECENT_LIMIT + 5):
-        record = tracker.open(client="c", head=None, host=None, sandbox=None, daemon=None)
+        record = tracker.open(
+            client="c", head=None, host=None, sandbox=None, daemon=None
+        )
         tracker.close(record)
     snapshot = tracker.snapshot()
     # The internal deque keeps RECENT_LIMIT records; the snapshot exposes
@@ -245,7 +248,9 @@ def test_proxy_records_spliced_connection(tmp_path):
         backend_server = await asyncio.start_server(backend, "127.0.0.1", 0)
         backend_port = backend_server.sockets[0].getsockname()[1]
         routes_file = Path(tmp_path / "routes.json")
-        await asyncio.to_thread(routes_file.write_text, json.dumps({"web": backend_port}))
+        await asyncio.to_thread(
+            routes_file.write_text, json.dumps({"web": backend_port})
+        )
         router_server = await asyncio.start_server(
             lambda r, w: router.handle(r, w, router.Routes(str(routes_file))),
             "127.0.0.1",
