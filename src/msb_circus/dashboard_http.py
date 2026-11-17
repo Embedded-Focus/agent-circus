@@ -45,6 +45,15 @@ STATIC_FILES: dict[str, tuple[str, str]] = {
     "/shell": ("shell.html", "text/html; charset=utf-8"),
     "/shell.css": ("shell.css", "text/css; charset=utf-8"),
     "/shell.js": ("shell.js", "text/javascript; charset=utf-8"),
+    "/vendor/xterm/xterm.js": (
+        "vendor/xterm/xterm.js",
+        "text/javascript; charset=utf-8",
+    ),
+    "/vendor/xterm/xterm.css": ("vendor/xterm/xterm.css", "text/css; charset=utf-8"),
+    "/vendor/xterm/addon-fit.js": (
+        "vendor/xterm/addon-fit.js",
+        "text/javascript; charset=utf-8",
+    ),
 }
 
 #: Security headers on every dashboard response. The strict CSP allows

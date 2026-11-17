@@ -1,17 +1,18 @@
----
 repos:
 - repo: https://github.com/astral-sh/ruff-pre-commit
-  # ruff version; keep in sync with the ruff locked in uv.lock.
   rev: v0.17.3
   hooks:
   - id: ruff-check
-    args: [--fix]
+    args:
+    - --fix
+    exclude: ^src/msb_circus/templates/dashboard/vendor/
   - id: ruff-format
+    exclude: ^src/msb_circus/templates/dashboard/vendor/
 - repo: https://github.com/astral-sh/ty-pre-commit
-  # ty version; keep in sync with the ty locked in uv.lock.
   rev: v0.0.95
   hooks:
   - id: ty
+    exclude: ^src/msb_circus/templates/dashboard/vendor/
 - repo: local
   hooks:
   - id: pytest
