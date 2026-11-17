@@ -3,8 +3,12 @@
 The tracker records one :class:`ConnectionRecord` per proxied
 connection: who connected, which Host it named, the first request line,
 the first response status, byte counters and the outcome. It also keeps
-per-route totals and a fixed-length series of time buckets for the
-dashboard's traffic sparkline.
+per-route totals, and a fixed-length series of time buckets for the
+dashboard's traffic sparkline — globally and per sandbox (the
+per-sandbox history is bounded: at most SANDBOX_TRACK_LIMIT sandboxes
+are tracked, the least recently used one is evicted first and loses its
+history; a connection still open for an evicted sandbox is re-added on
+the next update).
 
 Everything runs on the proxy's event loop thread, so there are no locks.
 The clock is injectable for deterministic tests. Privacy: only the
@@ -16,9 +20,9 @@ from __future__ import annotations
 import math
 import re
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 #: Number of closed connections kept for the dashboard.
@@ -29,6 +33,12 @@ BUCKET_SECONDS = 10
 BUCKET_COUNT = 60
 #: Longest path stored per connection.
 MAX_PATH_CHARS = 120
+#: Closed connections kept per sandbox.
+SANDBOX_RECENT_LIMIT = 100
+#: Sandboxes with per-sandbox traffic data; the least recently used
+#: one is dropped first. Bounds memory when clients send many
+#: different (also unknown) sandbox names.
+SANDBOX_TRACK_LIMIT = 64
 
 _STATUS_LINE = re.compile(rb"^HTTP/1\.[01] (\d{3})")
 
@@ -168,6 +178,59 @@ class _Bucket:
     bytes_down: int = 0
 
 
+class _Series:
+    """Fixed-length series of traffic buckets."""
+
+    def __init__(self) -> None:
+        self._buckets: deque[_Bucket] = deque(maxlen=BUCKET_COUNT)
+
+    def bucket(self, when: float) -> _Bucket:
+        """Return the bucket covering *when*, extending the series.
+
+        :param when: Epoch seconds to bucket for.
+        :returns: The bucket covering *when*.
+        """
+        key = math.floor(when / BUCKET_SECONDS) * BUCKET_SECONDS
+        if not self._buckets or self._buckets[-1].t < key:
+            self._buckets.append(_Bucket(t=key))
+        return self._buckets[-1]
+
+    def render(self, now: float) -> list[dict[str, Any]]:
+        """Return exactly BUCKET_COUNT bucket dicts, oldest first.
+
+        The series ends at *now*'s bucket; missing keys render as zeros.
+
+        :param now: Current epoch seconds.
+        :returns: One dict per bucket with ``t``, ``connections``,
+            ``errors`` and ``bytes`` keys.
+        """
+        current = math.floor(now / BUCKET_SECONDS) * BUCKET_SECONDS
+        buckets: list[dict[str, Any]] = []
+        by_key = {b.t: b for b in self._buckets}
+        for offset in range(BUCKET_COUNT - 1, -1, -1):
+            t = current - offset * BUCKET_SECONDS
+            b = by_key.get(t)
+            buckets.append(
+                {
+                    "t": t,
+                    "connections": b.connections if b else 0,
+                    "errors": b.errors if b else 0,
+                    "bytes": (b.bytes_up + b.bytes_down) if b else 0,
+                }
+            )
+        return buckets
+
+
+@dataclass
+class _SandboxTraffic:
+    """Traffic data of one sandbox."""
+
+    series: _Series = field(default_factory=_Series)
+    recent: deque[ConnectionRecord] = field(
+        default_factory=lambda: deque(maxlen=SANDBOX_RECENT_LIMIT)
+    )
+
+
 class ConnectionTracker:
     """Record proxied connections and aggregate traffic, in memory.
 
@@ -185,18 +248,28 @@ class ConnectionTracker:
         self._active: dict[int, ConnectionRecord] = {}
         self._recent: deque[ConnectionRecord] = deque(maxlen=RECENT_LIMIT)
         self._routes: dict[tuple[str, str], RouteStats] = {}
-        self._buckets: deque[_Bucket] = deque(maxlen=BUCKET_COUNT)
+        self._series = _Series()
+        self._sandboxes: OrderedDict[str, _SandboxTraffic] = OrderedDict()
 
-    def _bucket(self, when: float) -> _Bucket:
-        """Return the current bucket, extending the series if needed.
+    def _sandbox(self, name: str) -> _SandboxTraffic:
+        """Return (and mark as recently used) the traffic of *name*.
 
-        :param when: Epoch seconds to bucket for.
-        :returns: The bucket covering *when*.
+        Creates the entry when missing and evicts the least recently
+        used entry when the limit is exceeded. An evicted sandbox loses
+        its history; a connection that is still open when its sandbox is
+        evicted is re-added on the next update.
+
+        :param name: Sandbox name.
+        :returns: The sandbox's traffic data.
         """
-        key = math.floor(when / BUCKET_SECONDS) * BUCKET_SECONDS
-        if not self._buckets or self._buckets[-1].t < key:
-            self._buckets.append(_Bucket(t=key))
-        return self._buckets[-1]
+        entry = self._sandboxes.get(name)
+        if entry is None:
+            entry = _SandboxTraffic()
+            self._sandboxes[name] = entry
+        self._sandboxes.move_to_end(name)
+        while len(self._sandboxes) > SANDBOX_TRACK_LIMIT:
+            self._sandboxes.popitem(last=False)
+        return entry
 
     def open(
         self,
@@ -235,7 +308,9 @@ class ConnectionTracker:
         )
         self._next_id += 1
         self._active[record.id] = record
-        self._bucket(now).connections += 1
+        self._series.bucket(now).connections += 1
+        if sandbox is not None:
+            self._sandbox(sandbox).series.bucket(now).connections += 1
         if sandbox is not None and daemon is not None:
             stats = self._routes.setdefault((sandbox, daemon), RouteStats())
             stats.active += 1
@@ -256,7 +331,9 @@ class ConnectionTracker:
         record.status = status
         record.error = error
         now = self._clock()
-        self._bucket(now).errors += 1
+        self._series.bucket(now).errors += 1
+        if record.sandbox is not None:
+            self._sandbox(record.sandbox).series.bucket(now).errors += 1
         if record.sandbox is not None and record.daemon is not None:
             self._routes[(record.sandbox, record.daemon)].errors += 1
         self.close(record)
@@ -268,7 +345,10 @@ class ConnectionTracker:
         :param data: The copied chunk.
         """
         record.bytes_up += len(data)
-        self._bucket(self._clock()).bytes_up += len(data)
+        now = self._clock()
+        self._series.bucket(now).bytes_up += len(data)
+        if record.sandbox is not None:
+            self._sandbox(record.sandbox).series.bucket(now).bytes_up += len(data)
         if record.sandbox is not None and record.daemon is not None:
             self._routes[(record.sandbox, record.daemon)].bytes_up += len(data)
 
@@ -284,7 +364,10 @@ class ConnectionTracker:
         if record.bytes_down == 0:
             record.status = parse_response_status(data)
         record.bytes_down += len(data)
-        self._bucket(self._clock()).bytes_down += len(data)
+        now = self._clock()
+        self._series.bucket(now).bytes_down += len(data)
+        if record.sandbox is not None:
+            self._sandbox(record.sandbox).series.bucket(now).bytes_down += len(data)
         if record.sandbox is not None and record.daemon is not None:
             self._routes[(record.sandbox, record.daemon)].bytes_down += len(data)
 
@@ -304,41 +387,49 @@ class ConnectionTracker:
         if record.outcome != "rejected":
             record.outcome = "closed"
             if record.status is not None and record.status >= 500:
-                self._bucket(now).errors += 1
+                self._series.bucket(now).errors += 1
+                if record.sandbox is not None:
+                    self._sandbox(record.sandbox).series.bucket(now).errors += 1
                 if record.sandbox is not None and record.daemon is not None:
                     self._routes[(record.sandbox, record.daemon)].errors += 1
         self._recent.appendleft(record)
+        if record.sandbox is not None:
+            self._sandbox(record.sandbox).recent.appendleft(record)
         if record.sandbox is not None and record.daemon is not None:
             self._routes[(record.sandbox, record.daemon)].active -= 1
 
-    def snapshot(self) -> dict[str, Any]:
+    def snapshot(self, sandbox: str | None = None) -> dict[str, Any]:
         """Return the ``traffic`` object of the dashboard state API.
 
-        :returns: Dict with ``active`` (oldest first), ``recent`` (newest
-            first, at most 100), ``routes`` (sorted by sandbox, daemon)
-            and ``series`` (exactly BUCKET_COUNT buckets, oldest first).
+        Without *sandbox*, the global view: ``active`` (oldest first),
+        ``recent`` (newest first, at most 100), ``routes`` (sorted by
+        sandbox, daemon), ``series`` (exactly BUCKET_COUNT buckets,
+        oldest first) and ``by_sandbox`` (a compact summary per tracked
+        sandbox; reading does not change the LRU order).
+
+        With *sandbox*, the same keys filtered to that sandbox:
+        ``active`` and ``routes`` filtered, ``recent`` from the
+        sandbox's own recent list, ``series`` from its own buckets. An
+        unknown name gives empty lists and zero buckets; ``by_sandbox``
+        is not present.
+
+        :param sandbox: Optional sandbox name to scope the answer to.
+        :returns: The traffic dict of the state API.
         """
         now = self._clock()
-        current = math.floor(now / BUCKET_SECONDS) * BUCKET_SECONDS
-        buckets: list[dict[str, Any]] = []
-        by_key = {b.t: b for b in self._buckets}
-        for offset in range(BUCKET_COUNT - 1, -1, -1):
-            t = current - offset * BUCKET_SECONDS
-            b = by_key.get(t)
-            buckets.append(
+        if sandbox is not None:
+            active = [
+                r.to_json(now)
+                for r in self._active.values()
+                if r.sandbox == sandbox
+            ]
+            entry = self._sandboxes.get(sandbox)
+            recent = [
+                r.to_json(now) for r in list(entry.recent)[:100]
+            ] if entry is not None else []
+            routes = [
                 {
-                    "t": t,
-                    "connections": b.connections if b else 0,
-                    "errors": b.errors if b else 0,
-                    "bytes": (b.bytes_up + b.bytes_down) if b else 0,
-                }
-            )
-        return {
-            "active": [r.to_json(now) for r in self._active.values()],
-            "recent": [r.to_json(now) for r in list(self._recent)[:100]],
-            "routes": [
-                {
-                    "sandbox": sandbox,
+                    "sandbox": name,
                     "daemon": daemon,
                     "active": stats.active,
                     "total": stats.total,
@@ -347,10 +438,55 @@ class ConnectionTracker:
                     "bytes_down": stats.bytes_down,
                     "last_at": stats.last_at,
                 }
-                for (sandbox, daemon), stats in sorted(self._routes.items())
+                for (name, daemon), stats in sorted(self._routes.items())
+                if name == sandbox
+            ]
+            buckets = (
+                entry.series.render(now)
+                if entry is not None
+                else _Series().render(now)
+            )
+            return {
+                "active": active,
+                "recent": recent,
+                "routes": routes,
+                "series": {"bucket_s": BUCKET_SECONDS, "buckets": buckets},
+            }
+
+        buckets = self._series.render(now)
+        by_sandbox: dict[str, dict[str, Any]] = {}
+        active_counts: dict[str, int] = {}
+        for record in self._active.values():
+            if record.sandbox is not None:
+                active_counts[record.sandbox] = active_counts.get(record.sandbox, 0) + 1
+        for name, entry in self._sandboxes.items():
+            rendered = entry.series.render(now)
+            by_sandbox[name] = {
+                "active": active_counts.get(name, 0),
+                "connections": sum(b["connections"] for b in rendered),
+                "errors": sum(b["errors"] for b in rendered),
+                "bytes": sum(b["bytes"] for b in rendered),
+                "spark": [b["connections"] for b in rendered],
+            }
+        return {
+            "active": [r.to_json(now) for r in self._active.values()],
+            "recent": [r.to_json(now) for r in list(self._recent)[:100]],
+            "routes": [
+                {
+                    "sandbox": name,
+                    "daemon": daemon,
+                    "active": stats.active,
+                    "total": stats.total,
+                    "errors": stats.errors,
+                    "bytes_up": stats.bytes_up,
+                    "bytes_down": stats.bytes_down,
+                    "last_at": stats.last_at,
+                }
+                for (name, daemon), stats in sorted(self._routes.items())
             ],
             "series": {
                 "bucket_s": BUCKET_SECONDS,
                 "buckets": buckets,
             },
+            "by_sandbox": by_sandbox,
         }

@@ -343,3 +343,132 @@ def test_proxy_records_rejected_host_as_421(tmp_path):
     assert record["sandbox"] is None
     assert record["daemon"] is None
     assert snapshot["series"]["buckets"][-1]["errors"] == 1
+
+
+def _open_close(tracker, sandbox, daemon="web", *, status=None, up=b"", down=b""):
+    record = tracker.open(
+        client="c",
+        head=b"GET / HTTP/1.1\r\nHost: %s.%s.localhost:7700\r\n\r\n"
+        % (daemon.encode(), sandbox.encode()),
+        host=f"{daemon}.{sandbox}.localhost:7700",
+        sandbox=sandbox,
+        daemon=daemon,
+    )
+    if up:
+        tracker.add_up(record, up)
+    if down:
+        tracker.add_down(record, down)
+    tracker.close(record)
+    return record
+
+
+def test_snapshot_without_scope_has_by_sandbox_summary():
+    tracker = ConnectionTracker(clock=lambda: 1000.0)
+    _open_close(tracker, "agents-foo", down=b"HTTP/1.1 200 OK\r\n" + b"x" * 100)
+    _open_close(tracker, "agents-bar")
+    open_record = tracker.open(
+        client="c", head=None, host=None, sandbox="agents-foo", daemon="web"
+    )
+    tracker.close(open_record)
+    open_record = tracker.open(
+        client="c", head=None, host=None, sandbox="agents-foo", daemon="web"
+    )
+    summary = tracker.snapshot()["by_sandbox"]
+    assert set(summary) == {"agents-foo", "agents-bar"}
+    foo = summary["agents-foo"]
+    assert foo["active"] == 1
+    assert foo["connections"] == 3
+    assert foo["bytes"] == len(b"HTTP/1.1 200 OK\r\n") + 100
+    assert len(foo["spark"]) == 60
+    assert sum(foo["spark"]) == 3
+
+
+def test_snapshot_scope_filters_active_recent_routes_and_series():
+    tracker = ConnectionTracker(clock=lambda: 1000.0)
+    _open_close(tracker, "agents-foo", down=b"HTTP/1.1 200 OK\r\n")
+    open_foo = tracker.open(
+        client="c", head=None, host=None, sandbox="agents-foo", daemon="web"
+    )
+    _open_close(tracker, "agents-bar", down=b"HTTP/1.1 200 OK\r\n")
+    scoped = tracker.snapshot("agents-foo")
+    assert len(scoped["active"]) == 1
+    assert scoped["active"][0]["id"] == open_foo.id
+    assert len(scoped["recent"]) == 1
+    assert scoped["recent"][0]["sandbox"] == "agents-foo"
+    assert [r["sandbox"] for r in scoped["routes"]] == ["agents-foo"]
+    assert len(scoped["series"]["buckets"]) == 60
+    assert sum(b["connections"] for b in scoped["series"]["buckets"]) == 2
+    assert "by_sandbox" not in scoped
+
+
+def test_snapshot_scope_keeps_quiet_sandbox_history():
+    from msb_circus.proxy_stats import RECENT_LIMIT
+
+    tracker = ConnectionTracker(clock=lambda: 1000.0)
+    _open_close(tracker, "agents-quiet")
+    for i in range(RECENT_LIMIT + 10):
+        _open_close(tracker, "agents-busy")
+    global_snapshot = tracker.snapshot()
+    assert all(r["sandbox"] != "agents-quiet" for r in global_snapshot["recent"])
+    scoped = tracker.snapshot("agents-quiet")
+    assert len(scoped["recent"]) == 1
+    assert scoped["recent"][0]["sandbox"] == "agents-quiet"
+
+
+def test_snapshot_scope_unknown_sandbox_is_empty():
+    tracker = ConnectionTracker(clock=lambda: 1000.0)
+    scoped = tracker.snapshot("agents-ghost")
+    assert scoped["active"] == []
+    assert scoped["recent"] == []
+    assert scoped["routes"] == []
+    buckets = scoped["series"]["buckets"]
+    assert len(buckets) == 60
+    assert all(b["connections"] == 0 and b["errors"] == 0 and b["bytes"] == 0 for b in buckets)
+
+
+def test_rejected_connection_counts_for_its_sandbox():
+    tracker = ConnectionTracker(clock=lambda: 1000.0)
+    record = tracker.open(
+        client="c",
+        head=b"GET / HTTP/1.1\r\nHost: web.agents-foo.localhost:7700\r\n\r\n",
+        host="web.agents-foo.localhost:7700",
+        sandbox="agents-foo",
+        daemon="web",
+    )
+    tracker.reject(record, 404, "No sandbox named 'agents-foo'")
+    summary = tracker.snapshot()["by_sandbox"]
+    assert summary["agents-foo"]["errors"] == 1
+    assert summary["agents-foo"]["connections"] == 1
+    scoped = tracker.snapshot("agents-foo")
+    assert len(scoped["recent"]) == 1
+    assert scoped["recent"][0]["outcome"] == "rejected"
+
+
+def test_sandbox_tracking_is_bounded_lru():
+    from msb_circus.proxy_stats import SANDBOX_TRACK_LIMIT
+
+    tracker = ConnectionTracker(clock=lambda: 1000.0)
+    # Open for names 0..N, then touch name 0 again, then one more name.
+    for i in range(SANDBOX_TRACK_LIMIT):
+        _open_close(tracker, f"agents-s{i}")
+    _open_close(tracker, "agents-s0")
+    _open_close(tracker, f"agents-s{SANDBOX_TRACK_LIMIT}")
+    by_sandbox = tracker.snapshot()["by_sandbox"]
+    assert f"agents-s{SANDBOX_TRACK_LIMIT}" in by_sandbox
+    assert "agents-s0" in by_sandbox  # recently used, kept
+    assert "agents-s1" not in by_sandbox  # least recently used, evicted
+    assert len(by_sandbox) == SANDBOX_TRACK_LIMIT
+
+
+def test_snapshot_does_not_change_lru_order():
+    from msb_circus.proxy_stats import SANDBOX_TRACK_LIMIT
+
+    tracker = ConnectionTracker(clock=lambda: 1000.0)
+    for i in range(SANDBOX_TRACK_LIMIT):
+        _open_close(tracker, f"agents-s{i}")
+    # Reading the snapshot repeatedly must not reorder the LRU dict.
+    for _ in range(3):
+        tracker.snapshot()
+    _open_close(tracker, f"agents-s{SANDBOX_TRACK_LIMIT}")
+    by_sandbox = tracker.snapshot()["by_sandbox"]
+    assert "agents-s0" not in by_sandbox  # oldest, evicted
