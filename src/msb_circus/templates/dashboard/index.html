@@ -51,5 +51,23 @@
     </section>
 
     <footer id="footer" class="footer"></footer>
+
+    <dialog id="log-dialog" class="log-dialog">
+      <div class="log-head">
+        <strong id="log-title"></strong>
+        <span class="spacer"></span>
+        <label class="check">
+          lines
+          <select id="log-lines">
+            <option value="100">100</option>
+            <option value="200" selected>200</option>
+            <option value="1000">1000</option>
+          </select>
+        </label>
+        <button id="log-refresh" class="btn" type="button">Refresh</button>
+        <button id="log-close" class="btn" type="button">Close</button>
+      </div>
+      <pre id="log-body" class="log-body mono"></pre>
+    </dialog>
   </body>
 </html>

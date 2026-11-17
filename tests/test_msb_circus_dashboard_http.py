@@ -277,3 +277,85 @@ def _proxy_scenario(lookup, host: str, tmp_path: Path):
             await server.wait_closed()
 
     return asyncio.run(scenario())
+
+
+class LogCollector:
+    """Fake collector with a canned view and a recording daemon_log."""
+
+    def __init__(self):
+        self.view = {
+            "name": "agents-foo",
+            "status": "Running",
+            "running": True,
+            "managed": True,
+            "daemons": [{"name": "web"}],
+        }
+        self.calls = []
+
+    async def sandboxes(self):
+        return [self.view], 0.0, None
+
+    async def daemon_log(self, sandbox, daemon, lines):
+        self.calls.append((sandbox, daemon, lines))
+        if sandbox != self.view["name"]:
+            raise KeyError(f"no running managed sandbox named {sandbox!r}")
+        if daemon == "boom":
+            raise KeyError(f"no daemon named 'boom' in sandbox {sandbox!r}")
+        return "log line\n"
+
+
+def _logs_app():
+    collector = LogCollector()
+    app = DashboardApp(cast("DashboardCollector", collector), ConnectionTracker(), 7700)
+    return app, collector
+
+
+def _get(path: str, app: DashboardApp) -> bytes:
+    head = f"GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n".encode()
+    return asyncio.run(app.respond(head))
+
+
+def test_api_logs_returns_log_text():
+    app, collector = _logs_app()
+    response = _get("/api/logs?sandbox=agents-foo&daemon=web&lines=50", app)
+    assert response.startswith(b"HTTP/1.1 200 OK")
+    assert response.endswith(b"log line\n")
+    assert collector.calls == [("agents-foo", "web", 50)]
+
+
+def test_api_logs_lines_clamped():
+    app, collector = _logs_app()
+    _get("/api/logs?sandbox=agents-foo&daemon=web&lines=99999", app)
+    assert collector.calls[0][2] == 1000
+    _get("/api/logs?sandbox=agents-foo&daemon=web&lines=-5", app)
+    assert collector.calls[1][2] == 1
+    _get("/api/logs?sandbox=agents-foo&daemon=web", app)
+    assert collector.calls[2][2] == 200
+
+
+def test_api_logs_unknown_daemon_is_404_json():
+    app, _ = _logs_app()
+    response = _get("/api/logs?sandbox=agents-foo&daemon=boom", app)
+    assert response.startswith(b"HTTP/1.1 404 Not Found")
+    body = json.loads(response.split(b"\r\n\r\n", 1)[1])
+    assert "error" in body
+
+
+def test_api_logs_bad_daemon_name_is_404():
+    app, collector = _logs_app()
+    response = _get("/api/logs?sandbox=agents-foo&daemon=../etc", app)
+    assert response.startswith(b"HTTP/1.1 404 Not Found")
+    assert collector.calls == []
+
+
+def test_api_logs_unknown_sandbox_is_404():
+    app, _ = _logs_app()
+    response = _get("/api/logs?sandbox=nope&daemon=x", app)
+    assert response.startswith(b"HTTP/1.1 404 Not Found")
+
+
+def test_api_logs_router_daemon_allowed():
+    app, collector = _logs_app()
+    response = _get("/api/logs?sandbox=agents-foo&daemon=_router", app)
+    assert response.startswith(b"HTTP/1.1 200 OK")
+    assert collector.calls == [("agents-foo", "_router", 200)]

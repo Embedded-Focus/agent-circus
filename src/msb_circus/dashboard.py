@@ -531,6 +531,7 @@ class DashboardCollector:
         from .daemons import build_logs_command
         from .exec_ import build_exec_args
 
+        await self.sandboxes()  # make sure the views are fresh
         view = next(
             (
                 v

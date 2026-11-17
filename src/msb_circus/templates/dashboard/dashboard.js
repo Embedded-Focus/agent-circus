@@ -403,6 +403,9 @@
           row.append(make("span", "port", active + " active conn"));
         }
       }
+      if (sandbox.running) {
+        row.append(logsButton(sandbox.name, d.name));
+      }
       card.append(row);
     });
 
@@ -424,6 +427,12 @@
             .join(", ")
       );
       card.append(fwd);
+    }
+
+    if (sandbox.running) {
+      var logRow = make("div", "daemon-row");
+      logRow.append(logsButton(sandbox.name, "_router", "Router log"));
+      card.append(logRow);
     }
     return card;
   }
@@ -725,6 +734,58 @@
     store("show-other", el("show-other").checked ? "1" : "0");
     if (state.data) renderSandboxes(state.data, Date.now() / 1000);
   });
+
+  // ---- log viewer ---------------------------------------------------------
+
+  var logTarget = null; // { sandbox, daemon }
+
+  function openLogDialog(sandbox, daemon) {
+    logTarget = { sandbox: sandbox, daemon: daemon };
+    el("log-title").textContent =
+      daemon === "_router"
+        ? "Router log — " + sandbox
+        : "Daemon log — " + daemon + " (" + sandbox + ")";
+    el("log-body").textContent = "Loading…";
+    el("log-dialog").showModal();
+    fetchLog();
+  }
+
+  function fetchLog() {
+    if (!logTarget) return;
+    var lines = el("log-lines").value;
+    var url =
+      "/api/logs?sandbox=" + encodeURIComponent(logTarget.sandbox) +
+      "&daemon=" + encodeURIComponent(logTarget.daemon) +
+      "&lines=" + encodeURIComponent(lines);
+    el("log-body").textContent = "Loading…";
+    fetch(url, { cache: "no-store" })
+      .then(function (response) {
+        if (!response.ok) throw new Error("HTTP " + response.status);
+        return response.text();
+      })
+      .then(function (text) {
+        el("log-body").textContent = text || "(empty)";
+      })
+      .catch(function (e) {
+        el("log-body").textContent = "Could not load the log: " + e.message;
+      });
+  }
+
+  el("log-refresh").addEventListener("click", fetchLog);
+  el("log-lines").addEventListener("change", fetchLog);
+  el("log-close").addEventListener("click", function () {
+    el("log-dialog").close();
+  });
+
+  /** Small button that opens the log dialog for a daemon. */
+  function logsButton(sandbox, daemon, label) {
+    var btn = make("button", "copy-btn", label || "Logs");
+    btn.type = "button";
+    btn.addEventListener("click", function () {
+      openLogDialog(sandbox, daemon);
+    });
+    return btn;
+  }
 
   // ---- polling ------------------------------------------------------------
 

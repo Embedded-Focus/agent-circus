@@ -536,3 +536,51 @@ tr.open-row .pulse {
 .footer .mono {
   color: var(--text-secondary);
 }
+
+/* Log dialog */
+
+.btn {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 3px 10px;
+}
+
+.btn:hover {
+  border-color: var(--accent);
+}
+
+.log-dialog {
+  width: min(900px, 92vw);
+  max-height: 80vh;
+  background: var(--surface-1);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+
+.log-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.log-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.log-body {
+  max-height: 60vh;
+  overflow: auto;
+  background: var(--surface-0);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 0;
+  padding: 10px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

@@ -12,11 +12,14 @@ reaches the dashboard.
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Callable, Sequence
 from importlib import resources
 from typing import TYPE_CHECKING
+from urllib.parse import parse_qs
 
+from .exceptions import MsbCommandError
 from .proxy_stats import parse_request_line
 
 if TYPE_CHECKING:
@@ -47,6 +50,13 @@ SECURITY_HEADERS: tuple[tuple[str, str], ...] = (
 )
 
 _LOOPBACK_NAMES = {"localhost", "127.0.0.1", "[::1]", "::1"}
+
+#: Valid daemon names for the log endpoint (config.DAEMON_NAME_PATTERN).
+_DAEMON_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+
+#: Default and bounds of the lines parameter of /api/logs.
+LOG_LINES_DEFAULT = 200
+LOG_LINES_MAX = 1000
 
 
 def _host_without_port(host: str) -> str:
@@ -152,6 +162,8 @@ class DashboardApp:
             return self._static_response(path)
         if path == "/api/state":
             return await self._api_state()
+        if path == "/api/logs":
+            return await self._api_logs(head)
         if path == "/healthz":
             return http_response(200, "OK", b"ok\n", "text/plain; charset=utf-8")
         return http_response(
@@ -201,3 +213,48 @@ class DashboardApp:
         }
         body = json.dumps(payload).encode()
         return http_response(200, "OK", body, "application/json")
+
+    async def _api_logs(self, head: bytes) -> bytes:
+        """Render the ``/api/logs`` answer for one request head.
+
+        The query string is read here and never logged or stored. The
+        sandbox must be a running managed sandbox of the last views and
+        the daemon one of its daemons (or ``_router`` for the router
+        log).
+
+        :param head: Raw request head bytes.
+        :returns: The full response bytes (text/plain log or JSON 404).
+        """
+        request_line = head.split(b"\r\n", 1)[0]
+        target = request_line.decode("latin-1").partition(" ")[2].partition(" ")[0]
+        query = parse_qs(target.partition("?")[2])
+        sandbox = (query.get("sandbox") or [None])[0]
+        daemon = (query.get("daemon") or [None])[0]
+        try:
+            lines = int((query.get("lines") or [LOG_LINES_DEFAULT])[0])
+        except ValueError:
+            lines = LOG_LINES_DEFAULT
+        lines = max(1, min(lines, LOG_LINES_MAX))
+        if not sandbox or not daemon:
+            return self._logs_error("sandbox and daemon parameters are required")
+        if daemon != "_router" and not _DAEMON_NAME.fullmatch(daemon):
+            return self._logs_error(f"invalid daemon name {daemon!r}")
+        try:
+            text = await self.collector.daemon_log(sandbox, daemon, lines)
+        except KeyError as e:
+            return self._logs_error(str(e.args[0] if e.args else e))
+        except (MsbCommandError, OSError, ValueError) as e:
+            return self._logs_error(f"log fetch failed: {e}")
+        return http_response(
+            200, "OK", text.encode("utf-8", "replace"), "text/plain; charset=utf-8"
+        )
+
+    @staticmethod
+    def _logs_error(message: str) -> bytes:
+        """Render a JSON 404 for a rejected log request.
+
+        :param message: Human-readable error text.
+        :returns: The full response bytes.
+        """
+        body = json.dumps({"error": message}).encode()
+        return http_response(404, "Not Found", body, "application/json")

@@ -451,3 +451,100 @@ def test_collector_sorts_managed_running_first():
     collector, _, _ = _collector()
     views, _, _ = asyncio.run(collector.sandboxes())
     assert [v["name"] for v in views] == ["agents-a", "agents-b", "other-x"]
+
+
+class LogInvoker:
+    """Records list/inspect/exec calls; returns canned outputs."""
+
+    behavior: ClassVar[dict] = {}
+
+    def run(self, args, **kwargs):
+        self.behavior.setdefault("calls", []).append(args)
+        if args[0] == "list":
+            return SimpleNamespace(
+                returncode=0, stdout=self.behavior["list_output"], stderr=""
+            )
+        if args[0] == "inspect":
+            return SimpleNamespace(
+                returncode=0,
+                stdout=self.behavior.get("inspect_json", INSPECT_JSON),
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="log line\n", stderr="")
+
+
+def _log_collector(list_output=None):
+
+    LogInvoker.behavior = {
+        "list_output": list_output
+        or json.dumps(
+            [
+                {"name": "agents-foo", "status": "Running", "created_at": 1.0},
+            ]
+        ),
+        "inspect_json": INSPECT_JSON,
+    }
+    invoker = LogInvoker()
+    clock = {"now": 0.0}
+
+    async def router_fetch(address, timeout=2.0):
+        return _router_status()
+
+    collector = DashboardCollector(
+        invoker, 7700, clock=lambda: clock["now"], router_fetch=router_fetch
+    )
+
+    def prepare():
+        async def run():
+            await collector.sandboxes()
+
+        asyncio.run(run())
+        # Freeze the refresh cache so daemon_log does not re-run msb list.
+        collector._generated_at = clock["now"] + 10_000.0
+
+    return collector, invoker, clock, prepare
+
+
+def test_collector_daemon_log_builds_exec_argv():
+    collector, _invoker, _, prepare = _log_collector()
+    prepare()
+    text = asyncio.run(collector.daemon_log("agents-foo", "web", 50))
+    assert text == "log line\n"
+    args = next(c for c in LogInvoker.behavior["calls"] if c[0] == "exec")
+    assert args[1] != "--tty" and args[1] != "--no-tty"  # tty=None
+    joined = " ".join(args)
+    assert "agents-foo" in joined
+    assert "tail" in joined
+    assert "-n" in joined and "50" in joined
+    assert "current" in joined
+
+
+def test_collector_router_log_tails_router_log_dir():
+    collector, _invoker, _, prepare = _log_collector()
+    prepare()
+    asyncio.run(collector.daemon_log("agents-foo", "_router", 100))
+    args = next(c for c in LogInvoker.behavior["calls"] if c[0] == "exec")
+    joined = " ".join(args)
+    assert "/var/log/circus-router/current" in joined
+    assert "100" in joined
+
+
+def test_collector_daemon_log_unknown_sandbox():
+    collector, _, _, prepare = _log_collector()
+    prepare()
+    with pytest.raises(KeyError):
+        asyncio.run(collector.daemon_log("agents-nope", "web", 10))
+
+
+def test_collector_daemon_log_unknown_daemon():
+    collector, _, _, prepare = _log_collector()
+    prepare()
+    with pytest.raises(KeyError):
+        asyncio.run(collector.daemon_log("agents-foo", "nope", 10))
+
+
+def test_collector_daemon_log_rejects_bad_daemon_name():
+    collector, _, _, prepare = _log_collector()
+    prepare()
+    with pytest.raises(KeyError):
+        asyncio.run(collector.daemon_log("agents-foo", "../etc", 10))
