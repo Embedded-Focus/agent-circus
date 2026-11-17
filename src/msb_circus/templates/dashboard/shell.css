@@ -1,1 +1,138 @@
-/* placeholder */
+/* Browser shell page. Colour variables mirror dashboard.css; xterm.js
+   creates its own <style> elements at runtime, which the /shell CSP
+   allows via style-src 'unsafe-inline'. */
+
+:root {
+  color-scheme: light;
+  --surface-0: #f4f4f2;
+  --surface-1: #fcfcfb;
+  --border: #e2e1dc;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #7a7975;
+  --accent: #2a78d6;
+  --good: #0ca30c;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface-0: #121211;
+    --surface-1: #1a1a19;
+    --border: #2e2e2b;
+    --text-primary: #f0efec;
+    --text-secondary: #c3c2b7;
+    --text-muted: #8f8e86;
+    --accent: #3987e5;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-0: #121211;
+  --surface-1: #1a1a19;
+  --border: #2e2e2b;
+  --text-primary: #f0efec;
+  --text-secondary: #c3c2b7;
+  --text-muted: #8f8e86;
+  --accent: #3987e5;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-1);
+  color: var(--text-primary);
+  font: 14px/1.45 var(--sans);
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.shell-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 36px;
+  padding: 0 12px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.shell-bar a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.shell-bar button {
+  background: var(--surface-0);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 2px 9px;
+}
+
+.shell-bar button:hover {
+  border-color: var(--accent);
+}
+
+.spacer {
+  flex: 1;
+}
+
+#shell-status .ic {
+  font-style: normal;
+}
+
+.st-good .ic { color: var(--good); }
+.st-serious .ic { color: var(--serious); }
+.st-critical .ic { color: var(--critical); }
+.st-neutral .ic { color: var(--text-muted); }
+
+.shell-message {
+  background: var(--surface-0);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 13px;
+  padding: 10px 14px;
+  flex: none;
+}
+
+.shell-message code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+#terminal {
+  flex: 1;
+  min-height: 0;
+  padding: 4px;
+  background: var(--surface-1);
+}

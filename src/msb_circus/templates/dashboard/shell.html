@@ -4,10 +4,23 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>shell · msb-circus</title>
+    <link rel="stylesheet" href="vendor/xterm/xterm.css" />
     <link rel="stylesheet" href="shell.css" />
+    <script src="vendor/xterm/xterm.js" defer></script>
+    <script src="vendor/xterm/addon-fit.js" defer></script>
     <script src="shell.js" defer></script>
   </head>
   <body>
-    <p>Placeholder. The shell page arrives in a later change.</p>
+    <header class="shell-bar">
+      <a id="shell-back" href="/">msb-circus</a>
+      <span id="shell-sandbox" class="mono"></span>
+      <span id="shell-status" class="st" aria-live="polite"></span>
+      <span class="spacer"></span>
+      <button id="shell-font-down" type="button" title="Smaller text">A−</button>
+      <button id="shell-font-up" type="button" title="Larger text">A+</button>
+      <button id="shell-reconnect" type="button" hidden>Reconnect</button>
+    </header>
+    <div id="shell-message" class="shell-message" hidden></div>
+    <div id="terminal"></div>
   </body>
 </html>

@@ -91,13 +91,18 @@ def test_index_contains_required_ids():
 
 def test_dashboard_js_routes_by_hash():
     js = _js()
-    for needle in ("hashchange", "#/sandbox/", "encodeURIComponent", "decodeURIComponent"):
+    for needle in (
+        "hashchange",
+        "#/sandbox/",
+        "encodeURIComponent",
+        "decodeURIComponent",
+    ):
         assert needle in js, f"dashboard.js does not handle routing: {needle}"
 
 
 def test_dashboard_js_has_list_and_cards_layouts():
     js = _js()
-    for needle in ('data-layout', '"list"', '"cards"', "miniSparkline", "by_sandbox"):
+    for needle in ("data-layout", '"list"', '"cards"', "miniSparkline", "by_sandbox"):
         assert needle in js, f"dashboard.js lacks list/cards support: {needle}"
 
 
@@ -119,6 +124,74 @@ def test_dashboard_js_reads_contract_keys():
 def test_dashboard_js_parses():
     result = subprocess.run(
         ["node", "--check", str(DASHBOARD_DIR / "dashboard.js")],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+SHELL_DIR = DASHBOARD_DIR
+
+
+def _shell_js() -> str:
+    return (SHELL_DIR / "shell.js").read_text()
+
+
+def _shell_html() -> str:
+    return (SHELL_DIR / "shell.html").read_text()
+
+
+def test_shell_js_never_uses_html_injection():
+    js = _shell_js()
+    for needle in (
+        "innerHTML",
+        "outerHTML",
+        "insertAdjacentHTML",
+        "document.write",
+        "eval(",
+        "new Function",
+    ):
+        assert needle not in js, f"shell.js must not use {needle}"
+
+
+def test_shell_html_has_no_inline_script_or_style():
+    import re
+
+    html = _shell_html()
+    assert "<script>" not in html
+    assert "style=" not in html
+    assert not re.search(r"\son[a-z]+=", html)
+    for required in (
+        "shell-back",
+        "shell-sandbox",
+        "shell-status",
+        "shell-font-down",
+        "shell-font-up",
+        "shell-reconnect",
+        "shell-message",
+        "terminal",
+    ):
+        assert f'id="{required}"' in html, f"missing #{required}"
+
+
+def test_shell_js_sends_hello_with_token_and_size():
+    js = _shell_js()
+    for needle in ('"hello"', "token", "cols", "rows", "binaryType"):
+        assert needle in js, f"shell.js does not send {needle}"
+
+
+def test_dashboard_js_strips_token_from_hash():
+    js = _js()
+    assert "replaceState" in js
+    # The localStorage key (built from the prefix constant).
+    assert 'STORAGE_PREFIX + "shell-token"' in js
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_shell_js_parses():
+    result = subprocess.run(
+        ["node", "--check", str(SHELL_DIR / "shell.js")],
         capture_output=True,
         text=True,
         check=False,

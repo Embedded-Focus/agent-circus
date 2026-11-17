@@ -113,6 +113,14 @@ button {
   color: var(--text-primary);
 }
 
+.shell-badge {
+  font-size: 12px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 8px;
+}
+
 .live .dot {
   color: var(--good);
 }

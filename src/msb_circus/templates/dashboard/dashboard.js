@@ -66,6 +66,58 @@
     layout: "list", // list | cards (overview only)
   };
 
+  // ---- shell token and buttons ----------------------------------------------
+
+  /** Store a token from the address hash and strip it from the URL. */
+  function takeTokenFromHash() {
+    var match = /(?:^#|[&?])token=([A-Za-z0-9_-]{32,})/.exec(window.location.hash || "");
+    if (!match) return;
+    try {
+      localStorage.setItem(STORAGE_PREFIX + "shell-token", match[1]);
+    } catch (e) {
+      return;
+    }
+    var hash = window.location.hash;
+    var start = match.index;
+    var end = start + match[0].length;
+    // Drop a separator (& or ?) directly before the token, if any.
+    if (start > 0 && (hash[start - 1] === "&" || hash[start - 1] === "?")) {
+      start -= 1;
+    }
+    var newHash = hash.slice(0, start) + hash.slice(end);
+    window.history.replaceState(null, "", window.location.pathname +
+      window.location.search + newHash);
+  }
+
+  function hasShellToken() {
+    try {
+      return !!localStorage.getItem(STORAGE_PREFIX + "shell-token");
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function shellEnabled(data) {
+    return !!(data && data.proxy && data.proxy.shell && data.proxy.shell.enabled);
+  }
+
+  /** Shell link for a running managed sandbox (or a disabled button). */
+  function shellButton(sandboxName, data) {
+    if (!shellEnabled(data)) return null;
+    if (!hasShellToken()) {
+      var disabled = make("button", "copy-btn", "Shell");
+      disabled.type = "button";
+      disabled.disabled = true;
+      disabled.title = "Open the dashboard with msb-circus dashboard to enable the shell";
+      return disabled;
+    }
+    var link = make("a", "copy-btn", "Shell");
+    link.href = "/shell?sandbox=" + encodeURIComponent(sandboxName);
+    link.target = "_blank";
+    link.rel = "noopener";
+    return link;
+  }
+
   // ---- routing --------------------------------------------------------------
 
   /** Parse the location hash into a route object. */
@@ -86,6 +138,7 @@
 
   /** Apply state.route to the DOM and restart polling for its scope. */
   function applyRoute() {
+    takeTokenFromHash();
     var route = parseRoute(window.location.hash);
     var scopeChanged =
       route.view !== state.route.view ||
@@ -421,7 +474,11 @@
     nameLink.href = detailHref(sandbox.name);
     head.append(
       nameLink,
-      sandboxPill(sandbox),
+      sandboxPill(sandbox)
+    );
+    var shell = shellButton(sandbox.name, state.data);
+    if (shell) head.append(shell);
+    head.append(
       make("span", "spacer"),
       make(
         "span",
@@ -663,6 +720,8 @@
       var moreLink = make("a", null, "Details →", "Open the detail view");
       moreLink.href = detailHref(s.name);
       moreCell.append(moreLink);
+      var shell = shellButton(s.name, state.data);
+      if (shell) moreCell.append(shell);
 
       tr.append(
         statusCell,
@@ -906,6 +965,19 @@
 
   function renderLive() {
     var live = el("live-status");
+    var badge = el("shell-badge");
+    if (state.data && shellEnabled(state.data)) {
+      var sessions = ((state.data.proxy || {}).shell || {}).sessions || [];
+      if (sessions.length > 0) {
+        badge.hidden = false;
+        badge.textContent = "▣ " + sessions.length + " shell" +
+          (sessions.length === 1 ? "" : "s");
+      } else {
+        badge.hidden = true;
+      }
+    } else {
+      badge.hidden = true;
+    }
     if (state.failed) {
       live.className = "live st-serious";
       live.replaceChildren(make("span", "ic dot", "!"), make("span", null, " offline"));
@@ -987,7 +1059,10 @@
     el("detail-name").textContent = name;
     el("detail-title").textContent = name;
     el("detail-pill").replaceChildren(sandboxPill(sandbox));
-    renderDetailMeta(sandbox, now);
+    var pillCell = el("detail-pill");
+    var pillShell = shellButton(name, data);
+    if (pillShell) pillCell.append(" ", pillShell);
+    renderDetailMeta(sandbox, now, data);
 
     var hintsEl = el("detail-hints");
     hintsEl.replaceChildren(hintRows(sandbox));
@@ -1004,7 +1079,7 @@
     return [dt, dd];
   }
 
-  function renderDetailMeta(sandbox, now) {
+  function renderDetailMeta(sandbox, now, data) {
     var dl = el("detail-meta");
     var pairs = [];
     pairs.push(...metaPair("Status", make("span", null, sandbox.status || "-")));
@@ -1044,6 +1119,38 @@
         make("span", null, sandbox.managed ? "msb-circus sandbox" : "other msb sandbox")
       )
     );
+    if (shellEnabled(data)) {
+      var sessions = ((data.proxy || {}).shell || {}).sessions || [];
+      var mine = sessions.filter(function (s) {
+        return s.sandbox === sandbox.name;
+      });
+      var shellCell = make("span");
+      shellCell.append(
+        make("span", null, String(mine.length)),
+        make(
+          "span",
+          null,
+          mine.length
+            ? " (" +
+                mine
+                  .map(function (s) {
+                    return fmtClock(s.started_at);
+                  })
+                  .join(", ") +
+                ")"
+            : ""
+        )
+      );
+      pairs.push(...metaPair("Shells", shellCell));
+    } else if (sandbox.managed && sandbox.running) {
+      var off = make("span");
+      off.append(
+        make("span", null, "Browser shell is off. Restart the proxy with: ")
+      );
+      off.append(make("code", null, "msb-circus proxy --shell"));
+      off.append(copyButton("msb-circus proxy --shell"));
+      pairs.push(...metaPair("Shells", off));
+    }
     dl.replaceChildren(...pairs);
   }
 
