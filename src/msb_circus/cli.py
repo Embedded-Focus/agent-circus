@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import webbrowser
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -70,6 +71,8 @@ from .daemons import (
     format_duration,
     parse_status_output,
 )
+from .dashboard import DashboardCollector
+from .dashboard_http import DashboardApp
 from .envs import parse_env_assignments, resolve_passthrough
 from .exceptions import ConfigurationError, MsbCircusError, MsbCommandError
 from .exec_ import (
@@ -150,6 +153,7 @@ from .logs import (
 )
 from .msb import MsbInvoker, check_version, probe_version, resolve_msb_binary
 from .proxy import RouterResolver, serve
+from .proxy_stats import ConnectionTracker
 from .ps import format_sandbox_json, format_sandbox_table
 from .router import (
     EXIT_NO_PYTHON,
@@ -3900,6 +3904,38 @@ def urls(
     print(_format_columns(table_rows))
 
 
+@app.command(name="dashboard")
+def dashboard(
+    proxy_port: Annotated[
+        int | None,
+        typer.Option(
+            "--proxy-port",
+            help="Port the proxy runs on (default: MSB_CIRCUS_PROXY_PORT or 7700).",
+        ),
+    ] = None,
+    no_browser: Annotated[
+        bool,
+        typer.Option("--no-browser", help="Only print the URL."),
+    ] = False,
+) -> None:
+    """Open the dashboard of the running msb-circus proxy."""
+    try:
+        port = resolve_proxy_port(proxy_port)
+    except ConfigurationError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    url = f"http://localhost:{port}/"
+    typer.echo(url)
+    if not _proxy_probe_running(port):
+        typer.echo(
+            "Note: the proxy is not running. Start it with: msb-circus proxy",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if not no_browser:
+        webbrowser.open(url)
+
+
 def _note_sandbox_router_state(invoker: MsbInvoker, name: str) -> None:
     """Print a stderr note when the sandbox cannot serve URLs yet.
 
@@ -4252,8 +4288,19 @@ def proxy(
     typer.echo(
         f"URL pattern: http://<daemon>.<sandbox>.{PROXY_DOMAIN}:{resolved_port}/"
     )
+    typer.echo(f"Dashboard: http://localhost:{resolved_port}/")
     try:
-        asyncio.run(serve(resolved_port, RouterResolver(invoker)))
+        tracker = ConnectionTracker()
+        collector = DashboardCollector(invoker, resolved_port)
+        dashboard = DashboardApp(collector, tracker, resolved_port)
+        asyncio.run(
+            serve(
+                resolved_port,
+                RouterResolver(invoker),
+                tracker=tracker,
+                dashboard=dashboard,
+            )
+        )
     except KeyboardInterrupt:
         raise typer.Exit(code=0) from None
     except OSError as e:

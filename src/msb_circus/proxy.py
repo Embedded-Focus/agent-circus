@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from .config import ConfigurationError
+from .dashboard_http import is_dashboard_host
 from .exceptions import MsbCommandError
 from .sandbox import build_inspect_args, parse_inspect_ports_ordered, router_forward
 
@@ -34,6 +35,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from subprocess import CompletedProcess
 
+    from .dashboard_http import DashboardApp
     from .proxy_stats import ConnectionTracker
 
 
@@ -169,7 +171,11 @@ async def pipe(
 
 
 async def splice(
-    cr, cw, ur, uw, on_up: Callable[[bytes], None] | None = None,
+    cr,
+    cw,
+    ur,
+    uw,
+    on_up: Callable[[bytes], None] | None = None,
     on_down: Callable[[bytes], None] | None = None,
 ) -> None:
     """Copy both directions until both end, then close both writers.
@@ -267,27 +273,39 @@ async def handle(
     writer: asyncio.StreamWriter,
     resolver: _RouterResolverLike,
     tracker: ConnectionTracker | None = None,
+    dashboard: DashboardApp | None = None,
 ) -> None:
     """Forward one proxy connection to a sandbox router.
 
     Reads the request head, validates the Host, resolves the sandbox's
     router and splices the connection. The guest router answers 404 and
-    502 for unknown or down daemons itself.
+    502 for unknown or down daemons itself. Connections addressed to
+    the loopback names are answered by the dashboard and not tracked.
 
     :param reader: Client-side stream reader.
     :param writer: Client-side stream writer.
     :param resolver: Sandbox-to-router resolver.
     :param tracker: Optional connection tracker for dashboard accounting.
+    :param dashboard: Optional dashboard app for loopback hosts.
     """
+    head = await read_head(reader)
+    if (
+        head is not None
+        and dashboard is not None
+        and is_dashboard_host(extract_host(head))
+    ):
+        writer.write(await dashboard.respond(head))
+        await writer.drain()
+        writer.close()
+        return
     peername = writer.get_extra_info("peername")
     if isinstance(peername, tuple) and len(peername) >= 2:
         client = f"{peername[0]}:{peername[1]}"
     else:
         client = "-"
-    head = await read_head(reader)
-    record = None
+    host = extract_host(head) if head is not None else None
     if tracker is not None:
-        host_hint = extract_host(head) if head is not None else None
+        host_hint = host
         parsed_hint = parse_proxy_host(host_hint) if host_hint is not None else None
         record = tracker.open(
             client=client,
@@ -356,15 +374,13 @@ async def handle(
     logger.debug("%s -> %s:%s (%s)", host, address[0], address[1], daemon)
     uw.write(head)
     await uw.drain()
+    on_up = None
+    on_down = None
+    if tracker is not None and record is not None:
+        on_up = lambda data: tracker.add_up(record, data)
+        on_down = lambda data: tracker.add_down(record, data)
     try:
-        await splice(
-            reader,
-            writer,
-            ur,
-            uw,
-            on_up=(lambda data: tracker.add_up(record, data)) if tracker else None,
-            on_down=(lambda data: tracker.add_down(record, data)) if tracker else None,
-        )
+        await splice(reader, writer, ur, uw, on_up=on_up, on_down=on_down)
     finally:
         if tracker is not None and record is not None:
             tracker.close(record)
@@ -375,6 +391,7 @@ async def serve(
     resolver: RouterResolver,
     *,
     tracker: ConnectionTracker | None = None,
+    dashboard: DashboardApp | None = None,
 ) -> None:
     """Run the proxy server until cancelled.
 
@@ -385,12 +402,13 @@ async def serve(
     :param port: Host port to listen on.
     :param resolver: Sandbox-to-router resolver.
     :param tracker: Optional connection tracker for dashboard accounting.
+    :param dashboard: Optional dashboard app for loopback hosts.
     """
     loop = asyncio.get_running_loop()
     background: set[asyncio.Task[None]] = set()
 
     def _accepted(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        task = loop.create_task(_guarded(reader, writer, resolver, tracker))
+        task = loop.create_task(_guarded(reader, writer, resolver, tracker, dashboard))
         background.add(task)
         task.add_done_callback(background.discard)
 
@@ -421,11 +439,12 @@ async def _guarded(
     writer: asyncio.StreamWriter,
     resolver: _RouterResolverLike,
     tracker: ConnectionTracker | None = None,
+    dashboard: DashboardApp | None = None,
 ) -> None:
     """Run one handler and log instead of raising, so one bad connection
     never kills the server."""
     try:
-        await handle(reader, writer, resolver, tracker)
+        await handle(reader, writer, resolver, tracker, dashboard)
     except Exception:
         logger.exception("Proxy connection handler failed")
         with contextlib.suppress(Exception):
