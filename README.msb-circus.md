@@ -1205,8 +1205,16 @@ something.
 
 Handling: Ctrl+Shift+C / Ctrl+Shift+V copy and paste (on macOS
 Cmd+C/Cmd+V work as usual), A+ / A− change the font size, and
-Reconnect starts a new shell. Closing the tab ends the shell; there
-is no detach. Run long jobs in `tmux` inside the guest.
+Reconnect starts a new shell. The **Theme** menu in the shell's top
+bar picks the terminal colors; **Auto** follows the dashboard's
+light/dark Theme button. The browser remembers the choice for all
+shells. Available themes: msb-circus light and dark, Modus Operandi,
+Modus Operandi Tinted, Modus Vivendi, Modus Vivendi Tinted, Catppuccin
+Latte and Mocha, Dracula, Gruvbox Light and Dark, Nord, Solarized
+Light and Dark. Only the color values are taken from these projects;
+each theme in `shell-themes.js` names its source. Closing the tab ends
+the shell; there is no detach. Run long jobs in `tmux` inside the
+guest.
 
 Known limits of the shell: a sandbox whose workspace directory is gone
 or unknown cannot get a browser shell (use `msb-circus exec` in a
@@ -1217,7 +1225,11 @@ depends on msb reading the new size after `SIGWINCH` (if it does not,
 visible in the host process list while a shell runs, as with
 `msb-circus exec` today; the shell page needs
 `style-src 'unsafe-inline'` for xterm.js, but scripts stay restricted
-to the same origin.
+to the same origin; the two msb-circus themes use xterm's default ANSI
+colors, which are hard to read on the light background for yellow and
+white text (pick Modus Operandi for a light theme with tuned ANSI
+colors); Solarized has a lower text contrast (about 4.1:1 in Solarized
+Light) by design.
 
 ### Known limits
 
