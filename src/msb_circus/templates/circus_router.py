@@ -16,6 +16,13 @@ backend; browsers do not do this over plain HTTP/1.1.
 The ``Host`` header is forwarded unchanged. Dev servers with a strict
 host allow-list (e.g. Vite's ``server.allowedHosts``) may reject
 ``*.localhost`` names; Vite allows ``.localhost`` subdomains by default.
+
+The router also answers its own status endpoint on host ``_circus`` (a
+name the daemon grammar rejects, so it can never clash and a browser
+cannot reach it through the central proxy): ``GET /status`` returns a
+JSON object with the router's start time, its routes, the TCP
+reachability of each routed port, and the output of a daemon status
+script. The central proxy's dashboard polls this endpoint per sandbox.
 """
 
 from __future__ import annotations
@@ -28,12 +35,28 @@ import logging
 import os
 import re
 import sys
+import time
 
 MAX_HEAD_BYTES = 64 * 1024
 HEAD_TIMEOUT_S = 10.0
 CHUNK = 64 * 1024
 #: How long a blocked connect to a daemon may take, in seconds.
 CONNECT_TIMEOUT_S = 10.0
+
+#: Host header value of the router's own status endpoint. The underscore
+#: keeps it out of the daemon name grammar.
+STATUS_HOST = "_circus"
+#: Path of the router's status endpoint.
+STATUS_PATH = "/status"
+#: Version of the status JSON payload. Bump on incompatible changes.
+STATUS_API = 1
+#: Seconds to wait for a reachability probe connect.
+PROBE_TIMEOUT_S = 0.5
+#: Seconds to wait for the daemon status script.
+STATUS_SCRIPT_TIMEOUT_S = 3.0
+
+#: Router process start time (epoch seconds), read by the status endpoint.
+STARTED_AT = time.time()
 
 _LABEL = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 
@@ -192,20 +215,157 @@ class Routes:
             self._load()
         return self._routes.get(name)
 
+    def snapshot(self) -> dict[str, int]:
+        """Return a copy of the current route mapping, reloading if stale.
+
+        :returns: Mapping of daemon name to guest TCP port.
+        """
+        try:
+            mtime = os.stat(self.path).st_mtime_ns
+        except OSError:
+            mtime = None
+        if mtime != self._mtime_ns:
+            self._mtime_ns = mtime
+            self._load()
+        return dict(self._routes)
+
+
+def request_target(head: bytes) -> tuple[str, str] | None:
+    """Return ``(method, path)`` from the request line, or None.
+
+    :param head: Raw request head bytes.
+    :returns: Method and path (query string kept), or ``None`` when
+        the request line has not exactly three space-separated parts.
+    """
+    request_line = head.split(b"\r\n", 1)[0]
+    parts = request_line.split(b" ")
+    if len(parts) != 3:
+        return None
+    try:
+        return parts[0].decode("ascii"), parts[1].decode("latin-1")
+    except UnicodeDecodeError:
+        return None
+
+
+async def probe_port(port: int) -> bool:
+    """Check whether a TCP port on 127.0.0.1 accepts a connection.
+
+    :param port: Guest TCP port to probe.
+    :returns: ``True`` when the connect succeeded (the connection is
+        closed again at once), ``False`` on timeout or connection error.
+    """
+    try:
+        _reader, writer = await asyncio.wait_for(
+            asyncio.open_connection("127.0.0.1", port), PROBE_TIMEOUT_S
+        )
+    except (TimeoutError, OSError):
+        return False
+    writer.close()
+    with contextlib.suppress(Exception):
+        await writer.wait_closed()
+    return True
+
+
+async def run_status_script(path: str) -> str | None:
+    """Run the daemon status script and return its stdout.
+
+    :param path: Guest path of the status script.
+    :returns: The script's stdout decoded with errors replaced, or
+        ``None`` when the script is missing, cannot run or times out.
+    """
+    if not await asyncio.to_thread(os.path.isfile, path):
+        return None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "sh",
+            path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    except OSError:
+        return None
+    try:
+        stdout, _ = await asyncio.wait_for(proc.communicate(), STATUS_SCRIPT_TIMEOUT_S)
+    except TimeoutError:
+        proc.kill()
+        with contextlib.suppress(Exception):
+            await proc.wait()
+        return None
+    return stdout.decode("utf-8", errors="replace")
+
+
+async def status_payload(routes: Routes, status_script: str) -> dict:
+    """Build the JSON payload of the status endpoint.
+
+    :param routes: Route table.
+    :param status_script: Guest path of the daemon status script.
+    :returns: The payload with the API version, the router start time,
+        the routes, per-route reachability and the daemon status output.
+    """
+    snapshot = routes.snapshot()
+    reachable = dict(
+        zip(snapshot, await asyncio.gather(*(probe_port(p) for p in snapshot.values())))
+    )
+    return {
+        "api": STATUS_API,
+        "started_at": STARTED_AT,
+        "routes": snapshot,
+        "reachable": reachable,
+        "daemon_status": await run_status_script(status_script),
+    }
+
+
+async def handle_status(
+    head: bytes,
+    writer: asyncio.StreamWriter,
+    routes: Routes,
+    status_script: str,
+) -> None:
+    """Answer one connection to the status endpoint and close it.
+
+    :param head: Raw request head bytes.
+    :param writer: Client-side stream writer.
+    :param routes: Route table.
+    :param status_script: Guest path of the daemon status script.
+    """
+    target = request_target(head)
+    if target == ("GET", STATUS_PATH):
+        payload = await status_payload(routes, status_script)
+        body = json.dumps(payload).encode()
+        writer.write(
+            (
+                f"HTTP/1.1 200 OK\r\n"
+                "Content-Type: application/json\r\n"
+                f"Content-Length: {len(body)}\r\n"
+                "Connection: close\r\n\r\n"
+            ).encode()
+            + body
+        )
+    else:
+        writer.write(error_response(404, "Not Found", "Unknown status path"))
+    await writer.drain()
+    writer.close()
+    with contextlib.suppress(Exception):
+        await writer.wait_closed()
+
 
 async def handle(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
     routes: Routes,
+    status_script: str = "/run/circus-router/status.sh",
 ) -> None:
     """Route one connection to its daemon, or answer with an error.
 
     Reads the request head, resolves the daemon from the Host header and
-    splices the client connection to ``127.0.0.1:<port>``.
+    splices the client connection to ``127.0.0.1:<port>``. Connections
+    addressed to the router itself (host ``_circus``) are answered by
+    the status endpoint.
 
     :param reader: Client-side stream reader.
     :param writer: Client-side stream writer.
     :param routes: Route table.
+    :param status_script: Guest path of the daemon status script.
     """
     peer = writer.get_extra_info("peername")
     head = await read_head(reader)
@@ -217,6 +377,9 @@ async def handle(
         writer.close()
         return
     host = extract_host(head)
+    if host is not None and host.lower().split(":", 1)[0] == STATUS_HOST:
+        await handle_status(head, writer, routes, status_script)
+        return
     name = daemon_label(host) if host is not None else None
     if name is None:
         writer.write(
@@ -257,14 +420,15 @@ async def handle(
     await splice(reader, writer, ur, uw)
 
 
-async def serve(port: int, routes: Routes) -> None:
+async def serve(port: int, routes: Routes, status_script: str) -> None:
     """Run the router server forever.
 
     :param port: TCP port to listen on (all interfaces).
     :param routes: Route table shared by all connections.
+    :param status_script: Guest path of the daemon status script.
     """
     server = await asyncio.start_server(
-        lambda r, w: _guarded(r, w, routes),
+        lambda r, w: _guarded(r, w, routes, status_script),
         host="0.0.0.0",
         port=port,
         limit=MAX_HEAD_BYTES,
@@ -278,11 +442,12 @@ async def _guarded(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
     routes: Routes,
+    status_script: str,
 ) -> None:
     """Run one handler and log instead of raising, so one bad
     connection never kills the server."""
     try:
-        await handle(reader, writer, routes)
+        await handle(reader, writer, routes, status_script)
     except Exception:
         logger.exception("Connection handler failed")
 
@@ -297,9 +462,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="circus-router HTTP router")
     parser.add_argument("--port", type=int, default=7780)
     parser.add_argument("--routes", default="/run/circus-router/routes.json")
+    parser.add_argument("--status-script", default="/run/circus-router/status.sh")
     args = parser.parse_args()
     try:
-        asyncio.run(serve(args.port, Routes(args.routes)))
+        asyncio.run(serve(args.port, Routes(args.routes), args.status_script))
     except KeyboardInterrupt:
         pass
 

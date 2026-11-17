@@ -21,7 +21,7 @@ from importlib import resources
 from typing import TYPE_CHECKING
 
 from .config import ROUTER_GUEST_PORT
-from .daemons import svscan_wait_lines
+from .daemons import build_status_script, svscan_wait_lines
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -122,6 +122,8 @@ def build_router_install_script(routes: Mapping[str, int]) -> str:
         'else mv "$d/router.py.tmp" "$d/router.py"; changed=1; fi',
         f"printf '%s' {routes_json} > \"$d/routes.json.tmp\"",
         'mv "$d/routes.json.tmp" "$d/routes.json"',
+        f"printf '%s' {shlex.quote(build_status_script())} > \"$d/status.sh.tmp\"",
+        'mv "$d/status.sh.tmp" "$d/status.sh"',
         f"s={s}",
         'if [ ! -d "$s" ]; then',
         f"    t={t}",

@@ -1732,7 +1732,8 @@ def test_up_without_daemons_does_not_touch_s6_services(tmp_path, fake_msb):
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
     assert not [
-        c for c in fake_msb["calls"] if c[0] == "exec" and "circus-daemon" in c[-1]
+        c for c in fake_msb["calls"]
+        if c[0] == "exec" and "CIRCUS_DAEMON_ENV_" in c[-1]
     ]
 
 
@@ -1947,7 +1948,9 @@ def test_up_installs_router_before_daemons(tmp_path, fake_msb):
     assert result.exit_code == 0
     execs = [c for c in fake_msb["calls"] if c[0] == "exec" and len(c) >= 4]
     router_indexes = [i for i, c in enumerate(execs) if "circus-router" in c[-1]]
-    daemon_indexes = [i for i, c in enumerate(execs) if "circus-daemon" in c[-1]]
+    daemon_indexes = [
+        i for i, c in enumerate(execs) if "CIRCUS_DAEMON_ENV_" in c[-1]
+    ]
     assert router_indexes and daemon_indexes
     assert router_indexes[0] < daemon_indexes[0]
 
@@ -1973,4 +1976,5 @@ def test_router_install_failure_does_not_abort_up(tmp_path, fake_msb):
         FakeInvoker.run = real_run
     assert result.exit_code == 0
     assert "Router" in result.output or "router" in result.output
-    assert [c for c in fake_msb["calls"] if c[0] == "exec" and "circus-daemon" in c[-1]]
+    assert [c for c in fake_msb["calls"]
+        if c[0] == "exec" and "CIRCUS_DAEMON_ENV_" in c[-1]]

@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib.util
+import json
 import os
 import socket
 from pathlib import Path
@@ -239,3 +240,127 @@ def test_router_streams_after_head(tmp_path, router):
     first, second = _run(scenario())
     assert first == b"chunk-one\n"
     assert second == b"chunk-two\n"
+
+
+def test_request_target_parses_method_and_path(router):
+    head = b"GET /status?x=1 HTTP/1.1\r\nHost: _circus\r\n\r\n"
+    assert router.request_target(head) == ("GET", "/status?x=1")
+
+
+def test_request_target_none_for_garbage(router):
+    assert router.request_target(b"NOT-A-REQUEST-LINE\r\n\r\n") is None
+    assert router.request_target(b"GET / HTTP/1.1 extra\r\n\r\n") is None
+
+
+def test_status_endpoint_returns_routes_and_reachability(tmp_path, router):
+    async def scenario():
+        async def backend(reader, writer):
+            await reader.readuntil(b"\r\n\r\n")
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+            await writer.drain()
+            writer.close()
+
+        server = await _start_backend(backend)
+        live_port = server.sockets[0].getsockname()[1]
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("127.0.0.1", 0))
+        dead_port = sock.getsockname()[1]
+        sock.close()
+
+        routes_file = tmp_path / "routes.json"
+        routes_file.write_text(json.dumps({"web": live_port, "down": dead_port}))
+        status_script = tmp_path / "status.sh"
+        status_script.write_text('echo "web 0 true true 42 10"\n')
+        rserver = await asyncio.start_server(
+            lambda r, w: router.handle(
+                r, w, router.Routes(str(routes_file)), str(status_script)
+            ),
+            "127.0.0.1",
+            0,
+        )
+        rport = rserver.sockets[0].getsockname()[1]
+        try:
+            cr, cw = await asyncio.open_connection("127.0.0.1", rport)
+            cw.write(b"GET /status HTTP/1.1\r\nHost: _circus\r\n\r\n")
+            await cw.drain()
+            data = await reader_all(cr)
+            cw.close()
+            return data
+        finally:
+            server.close()
+            await server.wait_closed()
+            rserver.close()
+            await rserver.wait_closed()
+
+    data = _run(scenario())
+    assert data.startswith(b"HTTP/1.1 200 OK")
+    payload = json.loads(data.split(b"\r\n\r\n", 1)[1])
+    assert payload["api"] == 1
+    assert set(payload["routes"]) == {"web", "down"}
+    assert payload["reachable"]["web"] is True
+    assert payload["reachable"]["down"] is False
+    assert "web 0 true" in payload["daemon_status"]
+    assert isinstance(payload["started_at"], float)
+
+
+def test_status_endpoint_without_script_gives_null_daemon_status(tmp_path, router):
+    async def scenario():
+        routes_file = tmp_path / "routes.json"
+        routes_file.write_text("{}")
+        rserver = await asyncio.start_server(
+            lambda r, w: router.handle(r, w, router.Routes(str(routes_file))),
+            "127.0.0.1",
+            0,
+        )
+        rport = rserver.sockets[0].getsockname()[1]
+        try:
+            cr, cw = await asyncio.open_connection("127.0.0.1", rport)
+            cw.write(b"GET /status HTTP/1.1\r\nHost: _circus\r\n\r\n")
+            await cw.drain()
+            data = await reader_all(cr)
+            cw.close()
+            return data
+        finally:
+            rserver.close()
+            await rserver.wait_closed()
+
+    data = _run(scenario())
+    payload = json.loads(data.split(b"\r\n\r\n", 1)[1])
+    assert payload["daemon_status"] is None
+
+
+def test_status_endpoint_unknown_path_returns_404(tmp_path, router):
+    async def scenario():
+        routes_file = tmp_path / "routes.json"
+        routes_file.write_text("{}")
+        rserver = await asyncio.start_server(
+            lambda r, w: router.handle(r, w, router.Routes(str(routes_file))),
+            "127.0.0.1",
+            0,
+        )
+        rport = rserver.sockets[0].getsockname()[1]
+        try:
+            cr, cw = await asyncio.open_connection("127.0.0.1", rport)
+            cw.write(b"GET /nope HTTP/1.1\r\nHost: _circus\r\n\r\n")
+            await cw.drain()
+            data = await reader_all(cr)
+            cw.close()
+            return data
+        finally:
+            rserver.close()
+            await rserver.wait_closed()
+
+    data = _run(scenario())
+    assert data.startswith(b"HTTP/1.1 404 Not Found")
+
+
+def test_router_constants_match_config(router):
+    from msb_circus.config import (
+        ROUTER_STATUS_API,
+        ROUTER_STATUS_HOST,
+        ROUTER_STATUS_PATH,
+    )
+
+    assert router.STATUS_HOST == ROUTER_STATUS_HOST
+    assert router.STATUS_PATH == ROUTER_STATUS_PATH
+    assert router.STATUS_API == ROUTER_STATUS_API

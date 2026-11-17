@@ -106,6 +106,14 @@ PROXY_PORT_ENV_VAR = "MSB_CIRCUS_PROXY_PORT"
 #: Domain suffix of proxy URLs (browsers resolve *.localhost to loopback).
 PROXY_DOMAIN = "localhost"
 
+#: Host header value of the guest router's own status endpoint. The
+#: underscore keeps it out of the daemon name grammar.
+ROUTER_STATUS_HOST = "_circus"
+#: Path of the guest router's status endpoint.
+ROUTER_STATUS_PATH = "/status"
+#: Version of the router status JSON. Bump on incompatible changes.
+ROUTER_STATUS_API = 1
+
 #: Read-write bind mounts of host agent harness config directories into the
 #: guest, mirroring agent-circus's ``DEFAULT_AGENT_CONFIG_MOUNTS``. Values
 #: are ``(directory below $HOME, guest path)``; the guest runs as root, so

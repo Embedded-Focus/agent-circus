@@ -2,10 +2,12 @@
 
 import base64
 import json
+import shlex
 import subprocess
 from pathlib import Path
 
 from msb_circus.config import ROUTER_GUEST_PORT
+from msb_circus.daemons import build_status_script
 from msb_circus.router import (
     EXIT_NO_PYTHON,
     ROUTER_SCRIPT_ENV_VAR,
@@ -15,7 +17,9 @@ from msb_circus.router import (
     router_script_source,
 )
 
-TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "src" / "msb_circus" / "templates"
+TEMPLATE_DIR = (
+    Path(__file__).resolve().parent.parent / "src" / "msb_circus" / "templates"
+)
 
 
 def test_install_script_writes_routes_json():
@@ -86,3 +90,10 @@ def test_image_puts_python3_on_the_default_path():
     assert "ln -sf /opt/uv-python/bin/" not in dockerfile
     # The image ENV must not promise a PATH entry that does not exist.
     assert "PATH=/opt/uv-python/bin" not in dockerfile
+
+
+def test_install_script_writes_status_script():
+    script = build_router_install_script({"web": 4096})
+    assert "status.sh" in script
+    expected = build_status_script()
+    assert shlex.quote(expected) in script
