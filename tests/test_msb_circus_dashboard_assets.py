@@ -46,7 +46,6 @@ REQUIRED_IDS = [
     "detail-conn-tabs",
     "detail-connections",
     "detail-ports",
-    "detail-commands",
     "layout-switch",
 ]
 

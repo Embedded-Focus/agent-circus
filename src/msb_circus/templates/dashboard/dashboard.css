@@ -651,12 +651,6 @@ tr.open-row .pulse {
   font-size: 12px;
 }
 
-.cmd-rows .cmd-label {
-  min-width: 150px;
-  color: var(--text-secondary);
-  font-size: 13px;
-}
-
 /* Footer */
 
 .footer {

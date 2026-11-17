@@ -1107,9 +1107,8 @@ layouts.
 The **detail view** (`#/sandbox/<name>`) shows everything about one
 sandbox: state, age, workspace, router state, fix hints, a full daemon
 table with proxy links and log buttons, this sandbox's own traffic and
-connections, the published ports and copyable `msb-circus` commands.
-The address can be bookmarked; the browser back button returns to the
-list.
+connections, and the published ports. The address can be bookmarked;
+the browser back button returns to the list.
 
 The page shows, refreshed every few seconds:
 

@@ -958,12 +958,6 @@
     outdated: "outdated",
   };
 
-  /** Quote a string for POSIX sh (only when needed). */
-  function shQuote(s) {
-    if (/^[A-Za-z0-9_./-]+$/.test(s)) return s;
-    return "'" + s.replaceAll("'", "'\\''") + "'";
-  }
-
   function renderDetail(data, now) {
     var name = state.route.sandbox;
     var sandbox = (data.sandboxes || []).find(function (s) {
@@ -1001,7 +995,6 @@
     renderDetailDaemons(sandbox, data.traffic || {});
     renderDetailTraffic(data, sandbox, now);
     renderDetailPorts(sandbox);
-    renderDetailCommands(sandbox);
   }
 
   function metaPair(label, ddNode) {
@@ -1220,38 +1213,6 @@
         "The router port is not listed; the proxy uses it internally."
       )
     );
-  }
-
-  function renderDetailCommands(sandbox) {
-    var target = el("detail-commands");
-    if (!sandbox.managed) {
-      target.replaceChildren();
-      return;
-    }
-    var commands = [
-      ["Open a shell", "msb-circus exec"],
-      ["Status", "msb-circus ps"],
-      ["VM and guest logs", "msb-circus logs"],
-      ["Daemon URLs", "msb-circus urls"],
-      ["Daemon status", "msb-circus daemons"],
-      ["Stop", "msb-circus stop"],
-    ];
-    var rows = make("div", "cmd-rows");
-    var prefix = sandbox.workspace ? "cd " + shQuote(sandbox.workspace) + " && " : "";
-    commands.forEach(function (def) {
-      var row = make("div", "daemon-row");
-      row.append(
-        make("span", "cmd-label", def[0]),
-        hintCopy(prefix + def[1])
-      );
-      rows.append(row);
-    });
-    if (!sandbox.workspace) {
-      rows.append(
-        make("div", "muted-note", "Run these in the workspace directory.")
-      );
-    }
-    target.replaceChildren(rows);
   }
 
   // ---- theme --------------------------------------------------------------
