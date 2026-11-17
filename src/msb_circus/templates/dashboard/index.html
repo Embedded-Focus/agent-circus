@@ -20,35 +20,72 @@
 
     <div id="banner" class="banner" hidden></div>
 
-    <section class="kpis" aria-label="Overview">
-      <div class="kpi" id="kpi-sandboxes"></div>
-      <div class="kpi" id="kpi-daemons"></div>
-      <div class="kpi" id="kpi-active"></div>
-      <div class="kpi kpi-traffic" id="kpi-traffic"></div>
-    </section>
+    <main id="view-overview">
+      <section class="kpis" aria-label="Overview">
+        <div class="kpi" id="kpi-sandboxes"></div>
+        <div class="kpi" id="kpi-daemons"></div>
+        <div class="kpi" id="kpi-active"></div>
+        <div class="kpi kpi-traffic" id="kpi-traffic"></div>
+      </section>
 
-    <section class="controls">
-      <input id="filter" type="search" placeholder="filter…" aria-label="Filter" />
-      <label class="check">
-        <input id="show-stopped" type="checkbox" checked />
-        show stopped
-      </label>
-      <label class="check">
-        <input id="show-other" type="checkbox" />
-        show other msb sandboxes
-      </label>
-    </section>
+      <section class="controls">
+        <input id="filter" type="search" placeholder="filter…" aria-label="Filter" />
+        <label class="check">
+          <input id="show-stopped" type="checkbox" checked />
+          show stopped
+        </label>
+        <label class="check">
+          <input id="show-other" type="checkbox" />
+          show other msb sandboxes
+        </label>
+      </section>
 
-    <section aria-label="Sandboxes">
-      <h2 class="section-title">Sandboxes</h2>
-      <div id="sandboxes" class="cards"></div>
-    </section>
+      <section aria-label="Sandboxes">
+        <h2 class="section-title">Sandboxes</h2>
+        <div id="sandboxes" class="cards"></div>
+      </section>
 
-    <section aria-label="Connections">
-      <h2 class="section-title">Connections</h2>
-      <div id="conn-tabs" class="tabs" role="tablist"></div>
-      <div id="connections"></div>
-    </section>
+      <section aria-label="Connections">
+        <h2 class="section-title">Connections</h2>
+        <div id="conn-tabs" class="tabs" role="tablist"></div>
+        <div id="connections"></div>
+      </section>
+    </main>
+
+    <main id="view-detail" hidden>
+      <nav class="crumbs">
+        <a id="detail-back" href="#/">Sandboxes</a>
+        /
+        <span id="detail-name" class="mono"></span>
+      </nav>
+      <div id="detail-missing" class="empty" hidden></div>
+      <div id="detail-body">
+        <header class="detail-head">
+          <h2 id="detail-title" class="mono"></h2>
+          <span id="detail-pill"></span>
+        </header>
+        <dl id="detail-meta" class="meta"></dl>
+        <section id="detail-hints"></section>
+        <section aria-label="Daemons">
+          <h3 class="section-title">Daemons</h3>
+          <div id="detail-daemons"></div>
+        </section>
+        <section aria-label="Traffic">
+          <h3 class="section-title">Traffic (last 10 min)</h3>
+          <div id="detail-kpis" class="kpis"></div>
+          <div id="detail-conn-tabs" class="tabs" role="tablist"></div>
+          <div id="detail-connections"></div>
+        </section>
+        <section aria-label="Ports">
+          <h3 class="section-title">Published ports</h3>
+          <div id="detail-ports"></div>
+        </section>
+        <section aria-label="Commands">
+          <h3 class="section-title">Commands</h3>
+          <div id="detail-commands"></div>
+        </section>
+      </div>
+    </main>
 
     <footer id="footer" class="footer"></footer>
 

@@ -62,7 +62,46 @@
     tab: "active", // active | recent | routes
     theme: "auto", // auto | light | dark
     openCards: new Set(), // sandbox names with an open details section
+    route: { view: "overview" }, // or { view: "detail", sandbox: name }
   };
+
+  // ---- routing --------------------------------------------------------------
+
+  /** Parse the location hash into a route object. */
+  function parseRoute(hash) {
+    var match = /^#\/sandbox\/(.+)$/.exec(hash || "");
+    if (!match) return { view: "overview" };
+    try {
+      return { view: "detail", sandbox: decodeURIComponent(match[1]) };
+    } catch (e) {
+      return { view: "overview" };
+    }
+  }
+
+  /** URL of a sandbox's detail view. */
+  function detailHref(name) {
+    return "#/sandbox/" + encodeURIComponent(name);
+  }
+
+  /** Apply state.route to the DOM and restart polling for its scope. */
+  function applyRoute() {
+    var route = parseRoute(window.location.hash);
+    var scopeChanged =
+      route.view !== state.route.view ||
+      (route.view === "detail" && route.sandbox !== state.route.sandbox);
+    state.route = route;
+    el("view-overview").hidden = route.view !== "overview";
+    el("view-detail").hidden = route.view !== "detail";
+    document.title =
+      route.view === "detail"
+        ? route.sandbox + " · msb-circus dashboard"
+        : "msb-circus dashboard";
+    window.scrollTo(0, 0);
+    if (scopeChanged) state.data = null;
+    scheduleFetch(0);
+  }
+
+  window.addEventListener("hashchange", applyRoute);
 
   function loadStored() {
     try {
@@ -139,6 +178,17 @@
     var code = make("code", null, command);
     wrap.append(code, copyButton(command));
     return wrap;
+  }
+
+  /** Hint rows of a sandbox (same look in cards and detail view). */
+  function hintRows(sandbox) {
+    var rows = make("div", "hint-rows");
+    (sandbox.hints || []).forEach(function (hint) {
+      var row = make("div", "hint-row " + hint.level);
+      row.append(make("span", "text", hint.text), hintCopy(hint.command));
+      rows.append(row);
+    });
+    return rows;
   }
 
   // ---- rendering ----------------------------------------------------------
@@ -361,8 +411,10 @@
   function renderSandboxCard(sandbox, now, filter, activeByRoute) {
     var card = make("article", "card");
     var head = make("div", "card-head");
+    var nameLink = make("a", "card-name", sandbox.name, "Open the detail view");
+    nameLink.href = detailHref(sandbox.name);
     head.append(
-      make("span", "card-name", sandbox.name),
+      nameLink,
       sandboxPill(sandbox),
       make("span", "spacer"),
       make(
@@ -414,6 +466,7 @@
       row.append(make("span", "text", hint.text), hintCopy(hint.command));
       card.append(row);
     });
+    // (hint rows are built inline here to keep the card flat; see hintRows)
 
     if (sandbox.ports && sandbox.ports.length > 0) {
       var fwd = make(
@@ -493,15 +546,23 @@
     return chip;
   }
 
-  function connRow(record, now) {
+  function connRow(record, now, opts) {
     var tr = document.createElement("tr");
     if (record.outcome === "open") tr.className = "open-row";
     var time = make("td", null, fmtClock(record.started_at));
-    var target = make(
-      "td",
-      "mono",
-      record.daemon ? record.daemon + "." + record.sandbox : record.host || "-"
-    );
+    var target = make("td", "mono");
+    if (record.daemon && record.sandbox) {
+      target.append(make("span", null, record.daemon + "."));
+      if (opts.showSandbox) {
+        var link = make("a", null, record.sandbox, "Open the detail view");
+        link.href = detailHref(record.sandbox);
+        target.append(link);
+      } else {
+        target.append(make("span", null, record.sandbox));
+      }
+    } else {
+      target.append(make("span", null, record.host || "-"));
+    }
     var request = make(
       "td",
       "request",
@@ -529,7 +590,7 @@
 
   var CONN_HEADERS = ["Time", "Target", "Request", "Status", "↑", "↓", "Duration"];
 
-  function connTable(records, now) {
+  function connTable(records, now, opts) {
     var wrap = make("div", "table-wrap");
     var table = document.createElement("table");
     var thead = document.createElement("thead");
@@ -540,14 +601,14 @@
     thead.append(headRow);
     var tbody = document.createElement("tbody");
     records.forEach(function (r) {
-      tbody.append(connRow(r, now));
+      tbody.append(connRow(r, now, opts));
     });
     table.append(thead, tbody);
     wrap.append(table);
     return wrap;
   }
 
-  function routeTable(routes, now) {
+  function routeTable(routes, now, opts) {
     var wrap = make("div", "table-wrap");
     var table = document.createElement("table");
     var thead = document.createElement("thead");
@@ -561,8 +622,17 @@
     var tbody = document.createElement("tbody");
     routes.forEach(function (r) {
       var tr = document.createElement("tr");
+      var route = make("td", "mono");
+      route.append(make("span", null, r.daemon + "."));
+      if (opts.showSandbox) {
+        var link = make("a", null, r.sandbox, "Open the detail view");
+        link.href = detailHref(r.sandbox);
+        route.append(link);
+      } else {
+        route.append(make("span", null, r.sandbox));
+      }
       tr.append(
-        make("td", "mono", r.daemon + "." + r.sandbox),
+        route,
         make("td", "num", String(r.active)),
         make("td", "num", String(r.total)),
         make("td", "num", String(r.errors)),
@@ -577,15 +647,14 @@
     return wrap;
   }
 
-  function renderConnections(data, now) {
-    var traffic = data.traffic || {};
-    var tabs = el("conn-tabs");
+  /** Render the connection tabs and table into the given elements. */
+  function renderConnections(traffic, tabsEl, targetEl, opts) {
     var tabDefs = [
       ["active", "Active (" + (traffic.active || []).length + ")"],
       ["recent", "Recent (" + (traffic.recent || []).length + ")"],
       ["routes", "By route"],
     ];
-    tabs.replaceChildren(
+    tabsEl.replaceChildren(
       ...tabDefs.map(function (def) {
         var btn = make("button", "tab", def[1]);
         btn.type = "button";
@@ -594,34 +663,31 @@
         btn.addEventListener("click", function () {
           state.tab = def[0];
           store("tab", def[0]);
-          renderConnections(state.data, Date.now() / 1000);
+          renderConnections(traffic, tabsEl, targetEl, opts);
         });
         return btn;
       })
     );
-    var target = el("connections");
     var now = Date.now() / 1000;
     if (state.tab === "routes") {
       var routes = traffic.routes || [];
       if (routes.length === 0) {
-        target.replaceChildren(
-          make("div", "empty", "No connections yet. Open a daemon URL from a sandbox card.")
+        targetEl.replaceChildren(
+          make("div", "empty", opts.recentEmptyText)
         );
       } else {
-        target.replaceChildren(routeTable(routes, now));
+        targetEl.replaceChildren(routeTable(routes, now, opts));
       }
       return;
     }
     var records = traffic[state.tab] || [];
     if (records.length === 0) {
       var emptyText =
-        state.tab === "active"
-          ? "No open connections."
-          : "No connections yet. Open a daemon URL from a sandbox card.";
-      target.replaceChildren(make("div", "empty", emptyText));
+        state.tab === "active" ? "No open connections." : opts.recentEmptyText;
+      targetEl.replaceChildren(make("div", "empty", emptyText));
       return;
     }
-    target.replaceChildren(connTable(records, now));
+    targetEl.replaceChildren(connTable(records, now, opts));
   }
 
   function renderFooter(data) {
@@ -679,10 +745,326 @@
     var now = Date.now() / 1000;
     renderBanner(data);
     renderLive();
+    renderFooter(data);
+    if (state.route.view === "detail") {
+      renderDetail(data, now);
+      return;
+    }
     renderKpis(data);
     renderSandboxes(data, now);
-    renderConnections(data, now);
-    renderFooter(data);
+    renderConnections(
+      data.traffic || {},
+      el("conn-tabs"),
+      el("connections"),
+      { showSandbox: true, recentEmptyText:
+        "No connections yet. Open a daemon URL from a sandbox card." }
+    );
+  }
+
+  // ---- detail view ----------------------------------------------------------
+
+  var ROUTER_STATE_WORDS = {
+    ok: "ok",
+    stopped: "stopped",
+    "no-router": "no router port",
+    unreachable: "not answering",
+    outdated: "outdated",
+  };
+
+  /** Quote a string for POSIX sh (only when needed). */
+  function shQuote(s) {
+    if (/^[A-Za-z0-9_./-]+$/.test(s)) return s;
+    return "'" + s.replaceAll("'", "'\\''") + "'";
+  }
+
+  function renderDetail(data, now) {
+    var name = state.route.sandbox;
+    var sandbox = (data.sandboxes || []).find(function (s) {
+      return s.name === name;
+    });
+    var missing = el("detail-missing");
+    var body = el("detail-body");
+    if (!sandbox) {
+      body.hidden = true;
+      missing.hidden = false;
+      var back = make("a", null, "Back to all sandboxes");
+      back.href = "#/";
+      missing.replaceChildren(
+        make(
+          "div",
+          null,
+          "Sandbox " + name + " does not exist (any more). It may have " +
+            "been removed."
+        ),
+        back
+      );
+      return;
+    }
+    missing.hidden = true;
+    body.hidden = false;
+
+    el("detail-name").textContent = name;
+    el("detail-title").textContent = name;
+    el("detail-pill").replaceChildren(sandboxPill(sandbox));
+    renderDetailMeta(sandbox, now);
+
+    var hintsEl = el("detail-hints");
+    hintsEl.replaceChildren(hintRows(sandbox));
+
+    renderDetailDaemons(sandbox, data.traffic || {});
+    renderDetailTraffic(data, sandbox, now);
+    renderDetailPorts(sandbox);
+    renderDetailCommands(sandbox);
+  }
+
+  function metaPair(label, ddNode) {
+    var dt = make("dt", null, label);
+    var dd = make("dd");
+    dd.append(ddNode);
+    return [dt, dd];
+  }
+
+  function renderDetailMeta(sandbox, now) {
+    var dl = el("detail-meta");
+    var pairs = [];
+    pairs.push(...metaPair("Status", make("span", null, sandbox.status || "-")));
+    if (sandbox.created_at) {
+      var created = make(
+        "span",
+        null,
+        fmtAgo(now - sandbox.created_at),
+        new Date(sandbox.created_at * 1000).toLocaleString()
+      );
+      pairs.push(...metaPair("Created", created));
+    }
+    if (sandbox.workspace) {
+      var ws = make("span");
+      ws.append(make("span", "mono", sandbox.workspace), copyButton(sandbox.workspace));
+      pairs.push(...metaPair("Workspace", ws));
+    } else {
+      pairs.push(...metaPair("Workspace", make("span", null, "unknown")));
+    }
+    var router = sandbox.router || {};
+    var routerCell = make("span");
+    routerCell.append(
+      make("span", null, ROUTER_STATE_WORDS[router.state] || router.state || "-")
+    );
+    if (router.address) {
+      routerCell.append(make("span", "mono", " " + router.address));
+    }
+    if (router.started_at) {
+      routerCell.append(
+        make("span", null, " · up " + fmtDuration(now - router.started_at))
+      );
+    }
+    pairs.push(...metaPair("Router", routerCell));
+    pairs.push(
+      ...metaPair(
+        "Kind",
+        make("span", null, sandbox.managed ? "msb-circus sandbox" : "other msb sandbox")
+      )
+    );
+    dl.replaceChildren(...pairs);
+  }
+
+  function renderDetailDaemons(sandbox, traffic) {
+    var target = el("detail-daemons");
+    if (!sandbox.running) {
+      target.replaceChildren(
+        make("div", "empty", "Daemon details need a running sandbox.")
+      );
+      return;
+    }
+    var daemons = sandbox.daemons || [];
+    if (daemons.length === 0) {
+      target.replaceChildren(
+        make(
+          "div",
+          "empty",
+          "No daemons registered. Add [[msb.daemons]] to the workspace " +
+            "config and run msb-circus up."
+        )
+      );
+      return;
+    }
+    var activeByRoute = {};
+    (traffic.routes || []).forEach(function (r) {
+      activeByRoute[r.sandbox + "/" + r.daemon] = r.active;
+    });
+    var wrap = make("div", "table-wrap");
+    var table = document.createElement("table");
+    var thead = document.createElement("thead");
+    var headRow = document.createElement("tr");
+    ["State", "Name", "Port", "URL", "PID", "Uptime", "Port answers", "Active"].forEach(
+      function (h, i) {
+        headRow.append(make("th", h === "Active" ? "num" : null, h));
+      }
+    );
+    headRow.append(make("th"));
+    thead.append(headRow);
+    var tbody = document.createElement("tbody");
+    daemons.forEach(function (d) {
+      var tr = document.createElement("tr");
+      var stateCell = make("td");
+      stateCell.append(daemonPill(d));
+      var port = make("td", "mono", d.exposed && d.port !== null ? ":" + d.port : "-");
+      var urlCell = make("td");
+      if (d.exposed && d.url) {
+        var link = make("a", null, "open ↗", d.url);
+        link.href = d.url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        urlCell.append(link);
+      } else {
+        urlCell.append(make("span", null, "not exposed"));
+      }
+      var answers = make(
+        "td",
+        null,
+        d.exposed ? (d.reachable === true ? "yes" : d.reachable === false ? "no" : "-") : "-"
+      );
+      var active = make(
+        "td",
+        "num",
+        String(activeByRoute[sandbox.name + "/" + d.name] || 0)
+      );
+      var logsCell = make("td");
+      logsCell.append(logsButton(sandbox.name, d.name));
+      tr.append(
+        stateCell,
+        make("td", "mono", d.name),
+        port,
+        urlCell,
+        make("td", "num", d.pid === null || d.pid === undefined ? "-" : String(d.pid)),
+        make("td", null, d.uptime_s === null || d.uptime_s === undefined
+          ? "-"
+          : fmtDuration(d.uptime_s)),
+        answers,
+        active,
+        logsCell
+      );
+      tbody.append(tr);
+    });
+    table.append(thead, tbody);
+    wrap.append(table);
+    var under = make("div", "daemon-under");
+    under.append(logsButton(sandbox.name, "_router", "Router log"));
+    target.replaceChildren(wrap, under);
+  }
+
+  function renderDetailTraffic(data, sandbox, now) {
+    var traffic = data.traffic || { active: [], series: { buckets: [] } };
+    var buckets = (traffic.series && traffic.series.buckets) || [];
+    var inTenMin = buckets.reduce(function (sum, b) {
+      return sum + b.connections;
+    }, 0);
+    var errors = buckets.reduce(function (sum, b) {
+      return sum + b.errors;
+    }, 0);
+    var totalBytes = buckets.reduce(function (sum, b) {
+      return sum + b.bytes;
+    }, 0);
+    el("detail-kpis").replaceChildren(
+      kpiTile(
+        "Active connections",
+        String((traffic.active || []).length),
+        null
+      ),
+      kpiTile("Connections", String(inTenMin), errors + " errors"),
+      kpiTile("Traffic", sparkline(buckets), fmtBytes(totalBytes) + " in 10 min")
+    );
+    renderConnections(
+      traffic,
+      el("detail-conn-tabs"),
+      el("detail-connections"),
+      {
+        showSandbox: false,
+        recentEmptyText: "No connections yet. Open a daemon URL from the table above.",
+      }
+    );
+  }
+
+  /** One KPI tile: label, value node, optional sub-line text. */
+  function kpiTile(label, value, subText) {
+    var tile = make("div", "kpi");
+    tile.append(make("div", "kpi-label", label));
+    if (typeof value === "string") {
+      tile.append(make("div", "kpi-value", value));
+    } else {
+      tile.append(value);
+    }
+    if (subText) tile.append(make("div", "kpi-sub", subText));
+    return tile;
+  }
+
+  function renderDetailPorts(sandbox) {
+    var target = el("detail-ports");
+    var ports = sandbox.ports || [];
+    if (ports.length === 0) {
+      target.replaceChildren(make("div", "empty", "No published ports."));
+      return;
+    }
+    var wrap = make("div", "table-wrap");
+    var table = document.createElement("table");
+    var thead = document.createElement("thead");
+    var headRow = document.createElement("tr");
+    ["Host", "Host port", "Guest port", "Protocol"].forEach(function (h, i) {
+      headRow.append(make("th", i >= 1 && i <= 2 ? "num" : null, h));
+    });
+    thead.append(headRow);
+    var tbody = document.createElement("tbody");
+    ports.forEach(function (p) {
+      var tr = document.createElement("tr");
+      tr.append(
+        make("td", "mono", p.host),
+        make("td", "num", String(p.host_port)),
+        make("td", "num", String(p.guest_port)),
+        make("td", null, p.protocol)
+      );
+      tbody.append(tr);
+    });
+    table.append(thead, tbody);
+    wrap.append(table);
+    target.replaceChildren(
+      wrap,
+      make(
+        "div",
+        "muted-note",
+        "The router port is not listed; the proxy uses it internally."
+      )
+    );
+  }
+
+  function renderDetailCommands(sandbox) {
+    var target = el("detail-commands");
+    if (!sandbox.managed) {
+      target.replaceChildren();
+      return;
+    }
+    var commands = [
+      ["Open a shell", "msb-circus exec"],
+      ["Status", "msb-circus ps"],
+      ["VM and guest logs", "msb-circus logs"],
+      ["Daemon URLs", "msb-circus urls"],
+      ["Daemon status", "msb-circus daemons"],
+      ["Stop", "msb-circus stop"],
+    ];
+    var rows = make("div", "cmd-rows");
+    var prefix = sandbox.workspace ? "cd " + shQuote(sandbox.workspace) + " && " : "";
+    commands.forEach(function (def) {
+      var row = make("div", "daemon-row");
+      row.append(
+        make("span", "cmd-label", def[0]),
+        hintCopy(prefix + def[1])
+      );
+      rows.append(row);
+    });
+    if (!sandbox.workspace) {
+      rows.append(
+        make("div", "muted-note", "Run these in the workspace directory.")
+      );
+    }
+    target.replaceChildren(rows);
   }
 
   // ---- theme --------------------------------------------------------------
@@ -800,12 +1182,24 @@
 
   function poll() {
     if (state.paused || document.hidden) return;
-    fetch("/api/state", { cache: "no-store" })
+    var scope =
+      state.route.view === "detail"
+        ? encodeURIComponent(state.route.sandbox)
+        : null;
+    var url = scope === null ? "/api/state" : "/api/state?sandbox=" + scope;
+    fetch(url, { cache: "no-store" })
       .then(function (response) {
         if (!response.ok) throw new Error("HTTP " + response.status);
         return response.json();
       })
       .then(function (data) {
+        // Drop the answer when the user navigated meanwhile.
+        var currentScope =
+          state.route.view === "detail" ? state.route.sandbox : null;
+        if ((data.scope || null) !== currentScope) {
+          scheduleFetch();
+          return;
+        }
         state.data = data;
         state.lastFetchAt = Date.now();
         state.failed = false;
@@ -831,5 +1225,5 @@
   loadStored();
   applyTheme();
   renderPause();
-  poll();
+  applyRoute();
 })();

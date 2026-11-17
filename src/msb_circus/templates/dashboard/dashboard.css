@@ -522,6 +522,85 @@ tr.open-row .pulse {
   padding: 14px 10px;
 }
 
+/* Detail view */
+
+.crumbs {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 12px 0 8px;
+}
+
+.crumbs a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.crumbs a:hover {
+  text-decoration: underline;
+}
+
+.detail-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.detail-head h2 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 16px;
+  row-gap: 6px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin: 0 0 16px;
+}
+
+.meta dt {
+  color: var(--text-secondary);
+}
+
+.meta dd {
+  margin: 0;
+}
+
+#view-detail section,
+#detail-hints {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+#view-detail .section-title {
+  margin-top: 0;
+}
+
+.daemon-under {
+  margin-top: 10px;
+}
+
+.muted-note {
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.cmd-rows .cmd-label {
+  min-width: 150px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
 /* Footer */
 
 .footer {

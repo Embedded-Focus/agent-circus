@@ -31,6 +31,22 @@ REQUIRED_IDS = [
     "connections",
     "footer",
     "banner",
+    "view-overview",
+    "view-detail",
+    "detail-back",
+    "detail-name",
+    "detail-missing",
+    "detail-body",
+    "detail-title",
+    "detail-pill",
+    "detail-meta",
+    "detail-hints",
+    "detail-daemons",
+    "detail-kpis",
+    "detail-conn-tabs",
+    "detail-connections",
+    "detail-ports",
+    "detail-commands",
 ]
 
 
@@ -73,9 +89,23 @@ def test_index_contains_required_ids():
         assert f'id="{required}"' in index, f"missing #{required}"
 
 
+def test_dashboard_js_routes_by_hash():
+    js = _js()
+    for needle in ("hashchange", "#/sandbox/", "encodeURIComponent", "decodeURIComponent"):
+        assert needle in js, f"dashboard.js does not handle routing: {needle}"
+
+
 def test_dashboard_js_reads_contract_keys():
     js = _js()
-    for key in ("sandboxes", "traffic", "series", "buckets", "hints", "refresh_error"):
+    for key in (
+        "sandboxes",
+        "traffic",
+        "series",
+        "buckets",
+        "hints",
+        "refresh_error",
+        "scope",
+    ):
         assert key in js, f"dashboard.js does not read {key}"
 
 
