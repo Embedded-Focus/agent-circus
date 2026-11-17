@@ -4290,7 +4290,6 @@ def proxy(
     typer.echo(
         f"URL pattern: http://<daemon>.<sandbox>.{PROXY_DOMAIN}:{resolved_port}/"
     )
-    typer.echo(f"Dashboard: http://localhost:{resolved_port}/")
     if shell:
         try:
             token_path = shell_token_path()
@@ -4318,7 +4317,9 @@ def proxy(
     shells = ShellManager(
         token=token,
         argv_factory=shell_argv,
-        notify=lambda line: typer.echo(line, err=True),
+        # Audit lines go through the logger so they carry a level, like
+        # every other proxy log line.
+        notify=logger.info,
     )
     if shell:
         typer.echo(f"Dashboard: http://localhost:{resolved_port}/#token={token}")

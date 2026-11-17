@@ -139,3 +139,16 @@ def test_proxy_with_shell_flag_fails_when_token_file_cannot_be_written(
     result = runner.invoke(app, ["proxy", "--shell", "-w", str(tmp_path)])
     assert result.exit_code == 1
     assert "cannot create the shell token file" in result.output
+
+
+def test_proxy_audit_lines_use_the_logger(tmp_path, fake_proxy, monkeypatch):
+    """Shell open/close lines go through the logger (with a level)."""
+
+    captured, _tmp = fake_proxy
+    monkeypatch.setattr(cli_module.asyncio, "run", lambda coro: _drain(coro, captured))
+    runner.invoke(app, ["proxy", "--shell", "-w", str(tmp_path)])
+    dashboard = captured.get("dashboard")
+    assert dashboard is not None
+    # The CLI routes the audit lines through its module logger, so they
+    # carry a level like every other proxy log line.
+    assert dashboard.shells._notify == cli_module.logger.info
