@@ -142,6 +142,10 @@ def _shell_html() -> str:
     return (SHELL_DIR / "shell.html").read_text()
 
 
+def _favicon_bytes() -> bytes:
+    return (DASHBOARD_DIR / "favicon.png").read_bytes()
+
+
 def test_shell_js_never_uses_html_injection():
     js = _shell_js()
     for needle in (
@@ -198,6 +202,21 @@ def test_shell_js_parses():
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_pages_link_the_favicon():
+    for html in (_index(), _shell_html()):
+        assert 'rel="icon"' in html, "page does not link a favicon"
+        assert 'href="favicon.png"' in html, "page does not link favicon.png"
+
+
+def test_favicon_is_a_valid_32x32_png():
+    import struct
+
+    data = _favicon_bytes()
+    assert data[:8] == b"\x89PNG\r\n\x1a\n", "not a PNG file"
+    width, height = struct.unpack(">II", data[16:24])
+    assert (width, height) == (32, 32), f"favicon is {width}x{height}, not 32x32"
 
 
 def test_shell_html_loads_themes_before_shell_js():

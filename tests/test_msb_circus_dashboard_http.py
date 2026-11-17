@@ -778,6 +778,14 @@ def test_dashboard_page_keeps_strict_csp():
     assert b"unsafe-inline" not in head
 
 
+def test_favicon_is_served_as_png():
+    response = _respond(b"GET /favicon.png HTTP/1.1\r\nHost: localhost\r\n\r\n")
+    head, body = response.split(b"\r\n\r\n", 1)
+    assert response.startswith(b"HTTP/1.1 200 OK")
+    assert b"Content-Type: image/png" in head
+    assert body[:8] == b"\x89PNG\r\n\x1a\n"
+
+
 def test_shell_assets_are_packaged():
     for path in ("/shell", "/shell.css", "/shell.js", "/shell-themes.js"):
         file_name, _ = STATIC_FILES[path]
