@@ -1063,6 +1063,7 @@ per login session):
 ``` shell
 msb-circus proxy
 msb-circus proxy --port 7701        # or: MSB_CIRCUS_PROXY_PORT=7701
+msb-circus proxy --shell            # also allow browser shells (see below)
 ```
 
 The proxy port is not a config file key. The order is: `--port`, then
@@ -1161,6 +1162,62 @@ resources only). Every local process that can open the page can read
 it — the same exposure as `msb list`. The log viewer shows the same
 data as `msb-circus daemon logs`, including any secrets a daemon
 prints (for example a generated password).
+
+### Browser Shell
+
+The dashboard can open an interactive shell in a running sandbox, in a
+browser tab. It is **off by default**. Turn it on for one proxy run:
+
+``` shell
+msb-circus proxy --shell
+```
+
+There is no config key and no environment variable for it: one
+explicit flag is easy to audit, and a forgotten config line cannot
+turn the shell on.
+
+What runs: the same as `msb-circus exec -- bash` in the sandbox's
+workspace (`sh` when the guest has no bash). The workspace config is
+read again for every new shell, so `[env]`, `env_passthrough` and
+`SSH_AUTH_SOCK` apply as in `exec`, and config edits apply to the
+next shell. One difference to a terminal: `env_passthrough` values
+come from the environment of the terminal where `msb-circus proxy
+--shell` was started, so start it where your API keys are set. A
+missing required variable gives a clear error in the page.
+
+The token: the shell is guarded by a secret token in
+`$XDG_RUNTIME_DIR/msb-circus/shell-token` (else
+`~/.local/state/msb-circus/shell-token`), a file only your user can
+read. `msb-circus proxy --shell` prints the dashboard URL with the
+token in the address fragment, and `msb-circus dashboard` adds it the
+same way; the browser stores it and strips it from the address at
+once (a fragment is never sent to a server). Each browser needs the
+token once. To rotate it: delete the file and restart the proxy.
+
+**Anyone with the token can open a shell in every running sandbox of
+your user.** The page is a terminal into a VM with a read-write
+workspace and possibly SSH agent forwarding. The proxy also checks
+the Origin header, accepts loopback host names only, allows at most 8
+shells at the same time, and prints one audit line per shell in its
+terminal (`shell opened: …` / `shell closed: …`). The page itself is
+read-only otherwise; the shell is the only feature that executes
+something.
+
+Handling: Ctrl+Shift+C / Ctrl+Shift+V copy and paste (on macOS
+Cmd+C/Cmd+V work as usual), A+ / A− change the font size, and
+Reconnect starts a new shell. Closing the tab ends the shell; there
+is no detach. Run long jobs in `tmux` inside the guest.
+
+Known limits of the shell: a sandbox whose workspace directory is gone
+or unknown cannot get a browser shell (use `msb-circus exec` in a
+terminal); `bash` starts as a non-login interactive shell, so profile
+scripts that only run for login shells do not run; window resizing
+depends on msb reading the new size after `SIGWINCH` (if it does not,
+"Reconnect" picks up the current size); passthrough values are
+visible in the host process list while a shell runs, as with
+`msb-circus exec` today; the shell page needs
+`style-src 'unsafe-inline'` for xterm.js, but scripts stay restricted
+to the same origin.
 
 ### Known limits
 

@@ -195,6 +195,7 @@ flowchart TB
         ]
         stats["proxy_stats.py<br/>ConnectionTracker: per-connection<br/>records, route totals, traffic buckets"]
         dash["dashboard.py / dashboard_http.py<br/>collector, view builders, hints,<br/>HTTP app for localhost hosts"]
+        webshell["webshell.py / websocket.py<br/>browser shells: token, Origin check,<br/>PTY + msb exec --tty, RFC 6455 server"]
         routerb["router.py<br/>router install script, base64 transport"]
         tracing["tracing.py<br/>TraceSession: resource samples,<br/>ACP transport events, payloads"]
     end
@@ -207,6 +208,7 @@ flowchart TB
     cli --> ssh & hosts & hostports & tracing & gitc
     cli --> proxyb & routerb
     proxyb --> stats & dash
+    dash --> webshell
     cli --> msb
     images --> tpl
     sandbox --> config
@@ -440,6 +442,7 @@ KVM, docker socket, or msb runtime.
 | Daemons (`[[msb.daemons]]`, runtime s6 services) | implemented, pending live verification |
 | Central proxy (`msb-circus proxy`, guest `circus-router`, `msb-circus urls`) | implemented, pending live verification |
 | Dashboard (`http://localhost:7700/`, `msb-circus dashboard`, `_circus` status endpoint) | implemented, pending live verification |
+| Browser shell (`msb-circus proxy --shell`, `/api/shell`, vendored xterm.js) | implemented, pending live verification |
 
 ## 9. Work in progress
 
