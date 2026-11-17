@@ -359,3 +359,118 @@ def test_api_logs_router_daemon_allowed():
     response = _get("/api/logs?sandbox=agents-foo&daemon=_router", app)
     assert response.startswith(b"HTTP/1.1 200 OK")
     assert collector.calls == [("agents-foo", "_router", 200)]
+
+
+SCOPED_FIXTURE_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "tests"
+    / "fixtures"
+    / "dashboard_state_scoped.json"
+)
+
+
+def _tracker_app():
+    tracker = ConnectionTracker(clock=lambda: 1763380000.0)
+    record = tracker.open(
+        client="c",
+        head=b"GET / HTTP/1.1\r\nHost: web.agents-foo.localhost:7700\r\n\r\n",
+        host="web.agents-foo.localhost:7700",
+        sandbox="agents-foo",
+        daemon="web",
+    )
+    tracker.close(record)
+    app = DashboardApp(
+        cast("DashboardCollector", FakeCollector({"name": "agents-foo"})),
+        tracker,
+        7700,
+    )
+    return app
+
+
+def test_api_state_without_scope_has_by_sandbox():
+    app = _tracker_app()
+    response = _respond(b"GET /api/state HTTP/1.1\r\nHost: localhost\r\n\r\n", app)
+    body = json.loads(response.split(b"\r\n\r\n", 1)[1])
+    assert body["scope"] is None
+    by_sandbox = body["traffic"]["by_sandbox"]
+    assert "agents-foo" in by_sandbox
+    entry = by_sandbox["agents-foo"]
+    assert entry["active"] == 0
+    assert entry["connections"] == 1
+    assert len(entry["spark"]) == 60
+    assert sum(entry["spark"]) == entry["connections"]
+
+
+def test_api_state_with_scope_filters_traffic():
+    tracker = ConnectionTracker(clock=lambda: 1763380000.0)
+    foo = tracker.open(
+        client="c", head=None, host=None, sandbox="agents-foo", daemon="web"
+    )
+    tracker.close(foo)
+    bar = tracker.open(
+        client="c", head=None, host=None, sandbox="agents-bar", daemon="web"
+    )
+    app = DashboardApp(
+        cast("DashboardCollector", FakeCollector({"name": "agents-foo"})),
+        tracker,
+        7700,
+    )
+    response = _respond(
+        b"GET /api/state?sandbox=agents-foo HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        app,
+    )
+    body = json.loads(response.split(b"\r\n\r\n", 1)[1])
+    assert body["scope"] == "agents-foo"
+    assert [r["sandbox"] for r in body["traffic"]["active"]] == []
+    assert [r["sandbox"] for r in body["traffic"]["recent"]] == ["agents-foo"]
+    assert [r["sandbox"] for r in body["traffic"]["routes"]] == ["agents-foo"]
+    assert "by_sandbox" not in body["traffic"]
+    assert len(body["traffic"]["series"]["buckets"]) == 60
+    # bar is still open and must not leak into the scoped answer
+    assert all(r["id"] != bar.id for r in body["traffic"]["active"])
+    assert len(body["sandboxes"]) == 1  # fake collector returns one view
+
+
+def test_api_state_rejects_invalid_scope_with_400():
+    app = _tracker_app()
+    for scope in ("../x", "A%20B", "", "a" * 200):
+        query = f"sandbox={scope}" if scope else "sandbox="
+        response = _respond(
+            f"GET /api/state?{query} HTTP/1.1\r\nHost: localhost\r\n\r\n".encode(),
+            app,
+        )
+        assert response.startswith(b"HTTP/1.1 400 Bad Request"), scope
+        body = json.loads(response.split(b"\r\n\r\n", 1)[1])
+        assert body["error"] == "invalid sandbox name"
+
+
+def test_api_state_unknown_scope_is_empty_not_error():
+    app = _tracker_app()
+    response = _respond(
+        b"GET /api/state?sandbox=agents-ghost HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        app,
+    )
+    assert response.startswith(b"HTTP/1.1 200 OK")
+    body = json.loads(response.split(b"\r\n\r\n", 1)[1])
+    assert body["scope"] == "agents-ghost"
+    assert body["traffic"]["active"] == []
+    assert body["traffic"]["recent"] == []
+    assert body["traffic"]["routes"] == []
+    buckets = body["traffic"]["series"]["buckets"]
+    assert len(buckets) == 60
+    assert all(b["connections"] == 0 for b in buckets)
+
+
+def test_fixture_state_has_scope_and_by_sandbox():
+    state = json.loads(FIXTURE_PATH.read_text())
+    assert state["scope"] is None
+    by_sandbox = state["traffic"]["by_sandbox"]
+    running = {s["name"] for s in state["sandboxes"] if s["running"]}
+    assert set(by_sandbox) == running
+    for entry in by_sandbox.values():
+        assert len(entry["spark"]) == 60
+        assert sum(entry["spark"]) == entry["connections"]
+    scoped = json.loads(SCOPED_FIXTURE_PATH.read_text())
+    assert scoped["scope"] == state["sandboxes"][0]["name"]
+    assert "by_sandbox" not in scoped["traffic"]
+    assert len(scoped["traffic"]["series"]["buckets"]) == 60

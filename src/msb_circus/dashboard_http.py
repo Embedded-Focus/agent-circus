@@ -3,10 +3,12 @@
 The proxy answers connections whose Host is ``localhost``,
 ``127.0.0.1`` or ``[::1]`` (each optionally with a port) with the
 dashboard: three static files, a JSON state API and a health check.
-Any other Host keeps the existing proxy routing (or the 421 rejection).
-The host check doubles as the DNS rebinding guard: a foreign domain
-that resolves to 127.0.0.1 still sends its own name in Host and never
-reaches the dashboard.
+The query string is read by ``/api/state`` (an optional sandbox scope)
+and ``/api/logs``; it is never logged or stored. Any other Host keeps
+the existing proxy routing (or the 421 rejection). The host check
+doubles as the DNS rebinding guard: a foreign domain that resolves to
+127.0.0.1 still sends its own name in Host and never reaches the
+dashboard.
 """
 
 from __future__ import annotations
@@ -53,6 +55,26 @@ _LOOPBACK_NAMES = {"localhost", "127.0.0.1", "[::1]", "::1"}
 
 #: Valid daemon names for the log endpoint (config.DAEMON_NAME_PATTERN).
 _DAEMON_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+
+#: Valid sandbox names for the ?sandbox= scope (msb-circus names are
+#: lower-case DNS-like labels; other msb sandboxes are rare and only
+#: get the overview).
+_SANDBOX_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,127}$")
+
+
+def query_params(head: bytes) -> dict[str, list[str]]:
+    """Return the parsed query string of a request head.
+
+    The query string is read only by the dashboard API (/api/state and
+    /api/logs) and is never logged or stored.
+
+    :param head: Raw request head bytes.
+    :returns: ``urllib.parse.parse_qs`` result (empty when no query).
+    """
+    request_line = head.split(b"\r\n", 1)[0]
+    target = request_line.decode("latin-1", errors="replace")
+    target = target.partition(" ")[2].rpartition(" ")[0]
+    return parse_qs(target.partition("?")[2], keep_blank_values=True)
 
 #: Default and bounds of the lines parameter of /api/logs.
 LOG_LINES_DEFAULT = 200
@@ -161,7 +183,7 @@ class DashboardApp:
         if path in STATIC_FILES:
             return self._static_response(path)
         if path == "/api/state":
-            return await self._api_state()
+            return await self._api_state(head)
         if path == "/api/logs":
             return await self._api_logs(head)
         if path == "/healthz":
@@ -189,17 +211,26 @@ class DashboardApp:
             self._static[path] = http_response(200, "OK", content, content_type)
         return self._static[path]
 
-    async def _api_state(self) -> bytes:
+    async def _api_state(self, head: bytes) -> bytes:
         """Render the ``/api/state`` JSON document.
 
+        An optional ``?sandbox=<name>`` query scopes the ``traffic``
+        object to that sandbox; ``sandboxes`` always holds all of them.
+
+        :param head: Raw request head bytes.
         :returns: The full response bytes with application/json.
         """
         from msb_circus import __version__
 
+        scope = (query_params(head).get("sandbox") or [None])[0]
+        if scope is not None and not _SANDBOX_NAME.fullmatch(scope):
+            body = json.dumps({"error": "invalid sandbox name"}).encode()
+            return http_response(400, "Bad Request", body, "application/json")
         views, generated_at, refresh_error = await self.collector.sandboxes()
         payload = {
             "generated_at": generated_at,
             "refresh_error": refresh_error,
+            "scope": scope,
             "proxy": {
                 "port": self.proxy_port,
                 "started_at": self.started_at,
@@ -209,7 +240,7 @@ class DashboardApp:
                 ),
             },
             "sandboxes": views,
-            "traffic": self.tracker.snapshot(),
+            "traffic": self.tracker.snapshot(scope),
         }
         body = json.dumps(payload).encode()
         return http_response(200, "OK", body, "application/json")
@@ -225,9 +256,7 @@ class DashboardApp:
         :param head: Raw request head bytes.
         :returns: The full response bytes (text/plain log or JSON 404).
         """
-        request_line = head.split(b"\r\n", 1)[0]
-        target = request_line.decode("latin-1").partition(" ")[2].partition(" ")[0]
-        query = parse_qs(target.partition("?")[2])
+        query = query_params(head)
         sandbox = (query.get("sandbox") or [None])[0]
         daemon = (query.get("daemon") or [None])[0]
         try:
