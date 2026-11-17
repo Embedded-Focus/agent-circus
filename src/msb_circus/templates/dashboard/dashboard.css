@@ -227,6 +227,62 @@ button {
   margin-bottom: 10px;
 }
 
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.segmented button {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px 10px;
+}
+
+.segmented button[aria-pressed="true"] {
+  background: var(--surface-1);
+  color: var(--text-primary);
+}
+
+/* Sandbox list */
+
+.sandbox-list td {
+  vertical-align: middle;
+}
+
+.sandbox-list .col-wide {
+  max-width: 28ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sandbox-list td.col-wide svg {
+  display: block;
+}
+
+.sandbox-list tr.clickable {
+  cursor: pointer;
+}
+
+.sandbox-list tr.clickable:hover {
+  background: var(--surface-0);
+}
+
+.sandbox-list .ic {
+  font-style: normal;
+  margin-left: 6px;
+}
+
+@media (max-width: 720px) {
+  .col-wide {
+    display: none;
+  }
+}
+
 #filter {
   background: var(--surface-1);
   border: 1px solid var(--border);

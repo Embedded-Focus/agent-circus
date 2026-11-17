@@ -63,6 +63,7 @@
     theme: "auto", // auto | light | dark
     openCards: new Set(), // sandbox names with an open details section
     route: { view: "overview" }, // or { view: "detail", sandbox: name }
+    layout: "list", // list | cards (overview only)
   };
 
   // ---- routing --------------------------------------------------------------
@@ -111,10 +112,12 @@
       var other = localStorage.getItem(STORAGE_PREFIX + "show-other");
       var filter = localStorage.getItem(STORAGE_PREFIX + "filter");
       var paused = localStorage.getItem(STORAGE_PREFIX + "paused");
+      var layout = localStorage.getItem(STORAGE_PREFIX + "layout");
       if (stopped !== null) el("show-stopped").checked = stopped === "1";
       if (other !== null) el("show-other").checked = other === "1";
       if (filter !== null) el("filter").value = filter;
       if (paused !== null) state.paused = paused === "1";
+      if (layout === "cards" || layout === "list") state.layout = layout;
     } catch (e) {
       /* localStorage may be unavailable; defaults are fine. */
     }
@@ -340,9 +343,7 @@
         daemons.push(d);
       });
     });
-    var healthy = daemons.filter(function (d) {
-      return d.state === "running" && (!d.exposed || d.reachable !== false);
-    }).length;
+    var healthy = daemons.filter(isHealthy).length;
     var failed = daemons.filter(function (d) {
       return d.state === "failed";
     }).length;
@@ -394,8 +395,13 @@
     return pill("st-good", "✓", "Running");
   }
 
+  /** Healthy daemon: running and (not exposed or port answers). */
+  function isHealthy(d) {
+    return d.state === "running" && (!d.exposed || d.reachable !== false);
+  }
+
   function daemonPill(d) {
-    if (d.state === "running" && (!d.exposed || d.reachable !== false)) {
+    if (isHealthy(d)) {
       return pill("st-good", "✓", d.exposed ? "running" : "running (hidden)");
     }
     if (d.state === "starting") return pill("st-warning", "◐", "starting");
@@ -502,6 +508,180 @@
     });
   }
 
+  // ---- list view ------------------------------------------------------------
+
+  /** Small 80x20 sparkline of connections per bucket. */
+  function miniSparkline(counts, label) {
+    var W = 80;
+    var H = 20;
+    var svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    svg.setAttribute("width", "80");
+    svg.setAttribute("height", "20");
+    svg.setAttribute("preserveAspectRatio", "none");
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", label);
+    var max = 1;
+    counts.forEach(function (c) {
+      if (c > max) max = c;
+    });
+    var allZero = counts.every(function (c) {
+      return c === 0;
+    });
+    var line = document.createElementNS(SVG_NS, "polyline");
+    var points = "";
+    counts.forEach(function (c, i) {
+      var x = (i / (counts.length - 1)) * W;
+      var y = allZero ? H - 1 : H - (c / max) * (H - 2) - 1;
+      points += x.toFixed(2) + "," + y.toFixed(2) + " ";
+    });
+    line.setAttribute("points", points.trim());
+    line.setAttribute("fill", "none");
+    line.setAttribute("stroke", allZero ? "var(--border)" : "var(--accent)");
+    line.setAttribute("stroke-width", "1.5");
+    line.setAttribute("stroke-linejoin", "round");
+    svg.append(line);
+    return svg;
+  }
+
+  /** Worst daemon state of a sandbox, as a list icon (or null). */
+  function worstDaemonIcon(daemons) {
+    var states = daemons.map(function (d) {
+      return d.state === "running" && d.exposed && d.reachable === false
+        ? "no-port"
+        : d.state;
+    });
+    if (states.indexOf("failed") >= 0) return ["✕", "st-critical", "a daemon failed"];
+    if (states.indexOf("no-port") >= 0) return ["!", "st-serious", "a daemon port is closed"];
+    if (states.indexOf("starting") >= 0 || states.indexOf("stopping") >= 0) {
+      return ["◐", "st-warning", "a daemon is starting or stopping"];
+    }
+    return null;
+  }
+
+  /** Worst hint level of a sandbox, as an icon + count (or null). */
+  function worstHint(hints) {
+    if (!hints || hints.length === 0) return null;
+    var errors = hints.filter(function (h) {
+      return h.level === "error";
+    }).length;
+    if (errors > 0) return ["✕", "st-critical", errors, hints[0].text];
+    var warnings = hints.filter(function (h) {
+      return h.level === "warning";
+    }).length;
+    if (warnings > 0) return ["!", "st-serious", warnings, hints[0].text];
+    return ["i", "st-good", hints.length, hints[0].text];
+  }
+
+  function renderSandboxList(visible, data, now) {
+    var bySandbox = (data.traffic || {}).by_sandbox || {};
+    var wrap = make("div", "table-wrap");
+    var table = document.createElement("table");
+    table.className = "sandbox-list";
+    var thead = document.createElement("thead");
+    var headRow = document.createElement("tr");
+    [
+      "Status",
+      "Name",
+      "Workspace",
+      "Daemons",
+      "Problems",
+      "Active",
+      "Traffic",
+      "Age",
+      "",
+    ].forEach(function (h, i) {
+      var cls = null;
+      if (i === 5) cls = "num";
+      if (i === 2 || i === 6) cls = "col-wide";
+      headRow.append(make("th", cls, h));
+    });
+    thead.append(headRow);
+    var tbody = document.createElement("tbody");
+    visible.forEach(function (s) {
+      var tr = document.createElement("tr");
+      tr.className = "clickable";
+      tr.addEventListener("click", function (event) {
+        if (event.target.closest("a, button")) return;
+        window.location.hash = detailHref(s.name);
+      });
+
+      var statusCell = make("td");
+      statusCell.append(sandboxPill(s));
+
+      var nameCell = make("td");
+      var nameLink = make("a", "mono", s.name, "Open the detail view");
+      nameLink.href = detailHref(s.name);
+      nameCell.append(nameLink);
+
+      var wsCell = make("td", "mono col-wide", s.workspace || "-");
+      if (s.workspace) wsCell.title = s.workspace;
+
+      var daemonCell = make("td");
+      if (!s.running) {
+        daemonCell.append(make("span", null, "-"));
+      } else {
+        var daemons = s.daemons || [];
+        var healthy = daemons.filter(isHealthy).length;
+        daemonCell.append(
+          make("span", null, healthy + " / " + daemons.length)
+        );
+        var worst = worstDaemonIcon(daemons);
+        if (worst) {
+          daemonCell.append(make("span", "ic " + worst[1], worst[0], worst[2]));
+        }
+      }
+
+      var problems = make("td");
+      var hint = worstHint(s.hints);
+      if (hint) {
+        problems.append(
+          make("span", "ic " + hint[1], hint[0] + " " + hint[2], hint[3])
+        );
+      }
+
+      var summary = bySandbox[s.name];
+      var activeCell = make("td", "num", String(summary ? summary.active : 0));
+
+      var trafficCell = make("td", "col-wide");
+      var spark = summary ? summary.spark : null;
+      var counts = spark && spark.length === 60 ? spark : new Array(60).fill(0);
+      trafficCell.append(
+        miniSparkline(
+          counts,
+          (summary ? summary.connections : 0) + " connections in 10 minutes"
+        )
+      );
+
+      var ageCell = make(
+        "td",
+        null,
+        s.created_at ? fmtAgo(now - s.created_at) : "-"
+      );
+
+      var moreCell = make("td");
+      var moreLink = make("a", null, "Details →", "Open the detail view");
+      moreLink.href = detailHref(s.name);
+      moreCell.append(moreLink);
+
+      tr.append(
+        statusCell,
+        nameCell,
+        wsCell,
+        daemonCell,
+        problems,
+        activeCell,
+        trafficCell,
+        ageCell,
+        moreCell
+      );
+      tbody.append(tr);
+    });
+    table.append(thead, tbody);
+    wrap.append(table);
+    return wrap;
+  }
+
   function renderSandboxes(data, now) {
     var filter = el("filter").value.trim();
     var showStopped = el("show-stopped").checked;
@@ -517,16 +697,23 @@
     });
     var wrap = el("sandboxes");
     if (visible.length === 0) {
+      wrap.className = "cards";
       wrap.replaceChildren(
         make("div", "empty", "No sandboxes match. Start one with: msb-circus up")
       );
       return;
     }
-    wrap.replaceChildren(
-      ...visible.map(function (s) {
-        return renderSandboxCard(s, now, filter, activeByRoute);
-      })
-    );
+    if (state.layout === "cards") {
+      wrap.className = "cards";
+      wrap.replaceChildren(
+        ...visible.map(function (s) {
+          return renderSandboxCard(s, now, filter, activeByRoute);
+        })
+      );
+    } else {
+      wrap.className = "list";
+      wrap.replaceChildren(renderSandboxList(visible, data, now));
+    }
   }
 
   /** HTTP status chip class from the state mapping. */
@@ -757,7 +944,7 @@
       el("conn-tabs"),
       el("connections"),
       { showSandbox: true, recentEmptyText:
-        "No connections yet. Open a daemon URL from a sandbox card." }
+        "No connections yet. Open a daemon URL from a sandbox's details." }
     );
   }
 
@@ -1117,6 +1304,30 @@
     if (state.data) renderSandboxes(state.data, Date.now() / 1000);
   });
 
+  // ---- layout switch --------------------------------------------------------
+
+  function renderLayoutSwitch() {
+    el("layout-switch")
+      .querySelectorAll("button[data-layout]")
+      .forEach(function (btn) {
+        btn.setAttribute(
+          "aria-pressed",
+          btn.dataset.layout === state.layout ? "true" : "false"
+        );
+      });
+  }
+
+  el("layout-switch")
+    .querySelectorAll("button[data-layout]")
+    .forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        state.layout = btn.dataset.layout;
+        store("layout", state.layout);
+        renderLayoutSwitch();
+        if (state.data) renderSandboxes(state.data, Date.now() / 1000);
+      });
+    });
+
   // ---- log viewer ---------------------------------------------------------
 
   var logTarget = null; // { sandbox, daemon }
@@ -1225,5 +1436,6 @@
   loadStored();
   applyTheme();
   renderPause();
+  renderLayoutSwitch();
   applyRoute();
 })();

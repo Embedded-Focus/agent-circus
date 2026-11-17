@@ -47,6 +47,7 @@ REQUIRED_IDS = [
     "detail-connections",
     "detail-ports",
     "detail-commands",
+    "layout-switch",
 ]
 
 
@@ -93,6 +94,12 @@ def test_dashboard_js_routes_by_hash():
     js = _js()
     for needle in ("hashchange", "#/sandbox/", "encodeURIComponent", "decodeURIComponent"):
         assert needle in js, f"dashboard.js does not handle routing: {needle}"
+
+
+def test_dashboard_js_has_list_and_cards_layouts():
+    js = _js()
+    for needle in ('data-layout', '"list"', '"cards"', "miniSparkline", "by_sandbox"):
+        assert needle in js, f"dashboard.js lacks list/cards support: {needle}"
 
 
 def test_dashboard_js_reads_contract_keys():
