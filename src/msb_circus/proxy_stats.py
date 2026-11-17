@@ -419,14 +419,14 @@ class ConnectionTracker:
         now = self._clock()
         if sandbox is not None:
             active = [
-                r.to_json(now)
-                for r in self._active.values()
-                if r.sandbox == sandbox
+                r.to_json(now) for r in self._active.values() if r.sandbox == sandbox
             ]
             entry = self._sandboxes.get(sandbox)
-            recent = [
-                r.to_json(now) for r in list(entry.recent)[:100]
-            ] if entry is not None else []
+            recent = (
+                [r.to_json(now) for r in list(entry.recent)[:100]]
+                if entry is not None
+                else []
+            )
             routes = [
                 {
                     "sandbox": name,
@@ -442,9 +442,7 @@ class ConnectionTracker:
                 if name == sandbox
             ]
             buckets = (
-                entry.series.render(now)
-                if entry is not None
-                else _Series().render(now)
+                entry.series.render(now) if entry is not None else _Series().render(now)
             )
             return {
                 "active": active,

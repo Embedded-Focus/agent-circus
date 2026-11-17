@@ -423,7 +423,9 @@ def test_snapshot_scope_unknown_sandbox_is_empty():
     assert scoped["routes"] == []
     buckets = scoped["series"]["buckets"]
     assert len(buckets) == 60
-    assert all(b["connections"] == 0 and b["errors"] == 0 and b["bytes"] == 0 for b in buckets)
+    assert all(
+        b["connections"] == 0 and b["errors"] == 0 and b["bytes"] == 0 for b in buckets
+    )
 
 
 def test_rejected_connection_counts_for_its_sandbox():
