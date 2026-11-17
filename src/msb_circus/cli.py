@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 import webbrowser
 from collections.abc import Callable, Mapping
 from dataclasses import replace
@@ -3917,14 +3918,39 @@ def dashboard(
         bool,
         typer.Option("--no-browser", help="Only print the URL."),
     ] = False,
+    here: Annotated[
+        bool,
+        typer.Option(
+            "--here",
+            help="Open the detail view of this workspace's sandbox.",
+        ),
+    ] = False,
+    workspace: Annotated[
+        Path,
+        typer.Option(
+            "--workspace",
+            "-w",
+            help="Workspace directory path.",
+            exists=True,
+            file_okay=False,
+            resolve_path=True,
+        ),
+    ] = Path("."),
 ) -> None:
     """Open the dashboard of the running msb-circus proxy."""
     try:
         port = resolve_proxy_port(proxy_port)
+        if here:
+            name = sandbox_name_for_workspace(workspace)
+            url = (
+                f"http://localhost:{port}/#/sandbox/"
+                f"{urllib.parse.quote(name, safe='')}"
+            )
+        else:
+            url = f"http://localhost:{port}/"
     except ConfigurationError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
-    url = f"http://localhost:{port}/"
     typer.echo(url)
     if not _proxy_probe_running(port):
         typer.echo(
