@@ -767,6 +767,17 @@ regex with the `re:` prefix (`re:^LG_`, matched case-insensitively) expands
 to every matching variable that is set. Log output never contains secret
 values.
 
+The variables are not stored in the sandbox. Each command gets them from
+the shell that starts it, for example the shell of `msb-circus proxy
+--shell` for browser shells. To make a variable optional, use a regex
+that matches only its name: msb-circus then skips it when it is unset.
+
+``` toml
+env_passthrough = ["re:^LG_", "re:^ARTIFACTS_DIR$", "re:^DEBUG_BUILD$"]
+```
+
+For values that are not secret and do not change, use `[env]` instead.
+
 Daemons are different: s6 starts them in the guest, not `msb-circus exec`,
 so their variables must be stored in the guest. See
 [Daemon Secrets](#daemon-secrets).
