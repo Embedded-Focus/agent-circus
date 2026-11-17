@@ -195,6 +195,14 @@ from .ssh_agent import (
 )
 from .tracing import TraceSession
 from .utils import setup_logging
+from .webshell import (
+    ShellManager,
+    build_shell_argv,
+    load_or_create_shell_token,
+    read_shell_token,
+    shell_launch_for_workspace,
+    shell_token_path,
+)
 
 app = typer.Typer(
     name="msb-circus",
@@ -3894,14 +3902,18 @@ def dashboard(
     """Open the dashboard of the running msb-circus proxy."""
     try:
         port = resolve_proxy_port(proxy_port)
+        token = read_shell_token(shell_token_path())
+        fragment = f"token={token}" if token else ""
         if here:
             name = sandbox_name_for_workspace(workspace)
-            url = (
-                f"http://localhost:{port}/#/sandbox/"
-                f"{urllib.parse.quote(name, safe='')}"
-            )
+            route = f"#/sandbox/{urllib.parse.quote(name, safe='')}"
+            url = f"http://localhost:{port}/{route}"
+            if fragment:
+                url += f"&{fragment}"
         else:
             url = f"http://localhost:{port}/"
+            if fragment:
+                url += f"#{fragment}"
     except ConfigurationError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
@@ -4253,6 +4265,16 @@ def proxy(
             resolve_path=True,
         ),
     ] = Path("."),
+    shell: Annotated[
+        bool,
+        typer.Option(
+            "--shell",
+            help=(
+                "Allow opening shells into running sandboxes from the "
+                "dashboard (off by default; needs the shell token)."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Serve all exposed daemons of all sandboxes on one local port."""
     _config, invoker = _resolve_invoker(workspace)
@@ -4269,10 +4291,48 @@ def proxy(
         f"URL pattern: http://<daemon>.<sandbox>.{PROXY_DOMAIN}:{resolved_port}/"
     )
     typer.echo(f"Dashboard: http://localhost:{resolved_port}/")
+    if shell:
+        try:
+            token_path = shell_token_path()
+            token = load_or_create_shell_token(token_path)
+        except OSError as e:
+            typer.echo(
+                f"Error: cannot create the shell token file {shell_token_path()}: {e}",
+                err=True,
+            )
+            raise typer.Exit(code=1) from e
+    else:
+        token = None
+
+    def shell_argv(sandbox: str, workspace: str | None) -> list[str]:
+        """Build the shell exec argv for one sandbox.
+
+        Uses the proxy's own msb binary (resolved at start), never the
+        workspace config's ``binary``: the workspace is writable from
+        the guest.
+        """
+        return build_shell_argv(
+            invoker.binary, sandbox, shell_launch_for_workspace(workspace)
+        )
+
+    shells = ShellManager(
+        token=token,
+        argv_factory=shell_argv,
+        notify=lambda line: typer.echo(line, err=True),
+    )
+    if shell:
+        typer.echo(f"Dashboard: http://localhost:{resolved_port}/#token={token}")
+        typer.echo(
+            f"Shell: on (token in {token_path}). Anyone with the token "
+            "can open a shell in every running sandbox."
+        )
+    else:
+        typer.echo(f"Dashboard: http://localhost:{resolved_port}/")
+        typer.echo("Shell: off (start with --shell to enable)")
     try:
         tracker = ConnectionTracker()
         collector = DashboardCollector(invoker, resolved_port)
-        dashboard = DashboardApp(collector, tracker, resolved_port)
+        dashboard = DashboardApp(collector, tracker, resolved_port, shells=shells)
         asyncio.run(
             serve(
                 resolved_port,

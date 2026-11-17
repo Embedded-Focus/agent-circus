@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import sys
 from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -13,6 +14,8 @@ from msb_circus.proxy import RouterLookup
 from msb_circus.proxy_stats import ConnectionTracker
 
 if TYPE_CHECKING:
+    from websockets.typing import Origin
+
     from msb_circus.dashboard import DashboardCollector
 
 TEMPLATE_PATH = (
@@ -61,6 +64,14 @@ class FakeCollector:
         return [self.view], 1763380000.0, None
 
 
+def _manager():
+    from msb_circus.webshell import ShellManager
+
+    return ShellManager(
+        token=None, argv_factory=lambda s, w: [], notify=lambda line: None
+    )
+
+
 def _app(collector=None):
     tracker = ConnectionTracker(clock=lambda: 1763380000.0)
     if collector is None:
@@ -86,6 +97,7 @@ def _app(collector=None):
         cast("DashboardCollector", collector),
         tracker,
         7700,
+        shells=_manager(),
         clock=lambda: 1763379000.0,
     )
 
@@ -158,7 +170,12 @@ def test_proxy_serves_dashboard_for_localhost_host(tmp_path):
         async def sandboxes(self):
             return [], 0.0, None
 
-    app = App(cast("DashboardCollector", StubCollector()), ConnectionTracker(), 7700)
+    app = App(
+        cast("DashboardCollector", StubCollector()),
+        ConnectionTracker(),
+        7700,
+        shells=_manager(),
+    )
 
     class StubResolver:
         async def resolve(self, sandbox: str):
@@ -200,7 +217,9 @@ def test_proxy_does_not_track_dashboard_requests(tmp_path):
             return [], 0.0, None
 
     tracker = ConnectionTracker()
-    app = App(cast("DashboardCollector", StubCollector()), tracker, 7700)
+    app = App(
+        cast("DashboardCollector", StubCollector()), tracker, 7700, shells=_manager()
+    )
 
     class StubResolver:
         async def resolve(self, sandbox: str):
@@ -306,7 +325,12 @@ class LogCollector:
 
 def _logs_app():
     collector = LogCollector()
-    app = DashboardApp(cast("DashboardCollector", collector), ConnectionTracker(), 7700)
+    app = DashboardApp(
+        cast("DashboardCollector", collector),
+        ConnectionTracker(),
+        7700,
+        shells=_manager(),
+    )
     return app, collector
 
 
@@ -383,6 +407,7 @@ def _tracker_app():
         cast("DashboardCollector", FakeCollector({"name": "agents-foo"})),
         tracker,
         7700,
+        shells=_manager(),
     )
     return app
 
@@ -414,6 +439,7 @@ def test_api_state_with_scope_filters_traffic():
         cast("DashboardCollector", FakeCollector({"name": "agents-foo"})),
         tracker,
         7700,
+        shells=_manager(),
     )
     response = _respond(
         b"GET /api/state?sandbox=agents-foo HTTP/1.1\r\nHost: localhost\r\n\r\n",
@@ -474,3 +500,288 @@ def test_fixture_state_has_scope_and_by_sandbox():
     assert scoped["scope"] == state["sandboxes"][0]["name"]
     assert "by_sandbox" not in scoped["traffic"]
     assert len(scoped["traffic"]["series"]["buckets"]) == 60
+
+
+# ---- /api/shell ------------------------------------------------------------
+
+import websockets.asyncio.client as ws_client
+import websockets.exceptions
+
+from msb_circus.proxy import handle as proxy_handle
+from msb_circus.webshell import ShellManager
+
+
+def _upgrade_head(port: int, origin: str | None = "http://localhost:7700") -> bytes:
+    lines = [
+        "GET /api/shell?sandbox=agents-foo HTTP/1.1",
+        f"Host: localhost:{port}",
+        "Upgrade: websocket",
+        "Connection: Upgrade",
+        "Sec-WebSocket-Version: 13",
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+    ]
+    if origin is not None:
+        lines.append(f"Origin: {origin}")
+    return ("\r\n".join(lines) + "\r\n\r\n").encode()
+
+
+def _shell_app(manager: ShellManager) -> DashboardApp:
+    return DashboardApp(
+        cast("DashboardCollector", FakeShellCollector()),
+        ConnectionTracker(),
+        7700,
+        shells=manager,
+    )
+
+
+class FakeShellCollector(FakeCollector):
+    """FakeCollector with the running_managed_view the shell needs."""
+
+    def __init__(self):
+        super().__init__({"name": "agents-foo"})
+
+    async def running_managed_view(self, name):
+        if name == "agents-foo":
+            return {
+                "name": name,
+                "managed": True,
+                "running": True,
+                "workspace": "/w",
+                "daemons": [],
+            }
+        return None
+
+
+def _raw_exchange(head: bytes, app: DashboardApp) -> bytes:
+    """Run handle() against a raw socket pair and return the response bytes."""
+
+    async def scenario():
+        server = await asyncio.start_server(
+            lambda r, w: proxy_handle(r, w, _StubResolver(), None, app),
+            "127.0.0.1",
+            0,
+        )
+        port = server.sockets[0].getsockname()[1]
+        try:
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            writer.write(head)
+            await writer.drain()
+            writer.write_eof()
+            data = b""
+            while True:
+                chunk = await asyncio.wait_for(reader.read(4096), 2)
+                if not chunk:
+                    break
+                data += chunk
+            writer.close()
+            return data
+        finally:
+            server.close()
+            await server.wait_closed()
+
+    return asyncio.run(scenario())
+
+
+class _StubResolver:
+    async def resolve(self, sandbox: str):
+        return RouterLookup("unknown")
+
+
+def test_shell_rejects_foreign_origin_with_403():
+    app = _shell_app(
+        ShellManager(token="t", argv_factory=lambda s, w: [], notify=lambda l: None)
+    )
+    data = _raw_exchange(_upgrade_head(7700, "http://evil.com"), app)
+    assert data.startswith(b"HTTP/1.1 403 Forbidden")
+
+
+def test_shell_rejects_missing_origin_with_403():
+    app = _shell_app(
+        ShellManager(token="t", argv_factory=lambda s, w: [], notify=lambda l: None)
+    )
+    data = _raw_exchange(_upgrade_head(7700, None), app)
+    assert data.startswith(b"HTTP/1.1 403 Forbidden")
+
+
+def test_shell_rejects_bad_upgrade_with_400():
+    app = _shell_app(
+        ShellManager(token="t", argv_factory=lambda s, w: [], notify=lambda l: None)
+    )
+    head = _upgrade_head(7700).replace(
+        b"Sec-WebSocket-Version: 13", b"Sec-WebSocket-Version: 8"
+    )
+    data = _raw_exchange(head, app)
+    assert data.startswith(b"HTTP/1.1 400 Bad Request")
+
+
+def test_shell_rejects_invalid_sandbox_name_with_400():
+    app = _shell_app(
+        ShellManager(token="t", argv_factory=lambda s, w: [], notify=lambda l: None)
+    )
+    head = _upgrade_head(7700).replace(b"sandbox=agents-foo", b"sandbox=../x")
+    data = _raw_exchange(head, app)
+    assert data.startswith(b"HTTP/1.1 400 Bad Request")
+
+
+def test_shell_disabled_by_default_closes_with_4503():
+    app = _shell_app(
+        ShellManager(token=None, argv_factory=lambda s, w: [], notify=lambda l: None)
+    )
+
+    async def scenario():
+        server = await asyncio.start_server(
+            lambda r, w: proxy_handle(r, w, _StubResolver(), None, app),
+            "127.0.0.1",
+            0,
+        )
+        port = server.sockets[0].getsockname()[1]
+        try:
+            async with await ws_client.connect(
+                f"ws://127.0.0.1:{port}/api/shell?sandbox=agents-foo",
+                origin=cast("Origin", "http://localhost:7700"),
+                open_timeout=5,
+            ) as ws:
+                try:
+                    await ws.send(
+                        json.dumps(
+                            {"type": "hello", "token": "x", "cols": 80, "rows": 24}
+                        )
+                    )
+                    while True:
+                        await asyncio.wait_for(ws.recv(), 5)
+                except websockets.exceptions.ConnectionClosed as e:
+                    return e.rcvd.code if e.rcvd else None
+                except websockets.exceptions.ConnectionClosedError as e:
+                    return e.rcvd.code if e.rcvd else None
+        finally:
+            server.close()
+            await server.wait_closed()
+
+    assert asyncio.run(scenario()) == 4503
+
+
+def test_shell_end_to_end_through_proxy_handle(tmp_path):
+    """Full flow: upgrade, hello, ready, PTY I/O, exit through handle()."""
+    child = tmp_path / "child.py"
+    child.write_text("print('SHELL-UP', flush=True)\n")
+
+    async def scenario():
+        calls = []
+
+        class Collector:
+            async def sandboxes(self):
+                return [], 0.0, None
+
+            async def running_managed_view(self, name):
+                return {
+                    "name": name,
+                    "managed": True,
+                    "running": True,
+                    "workspace": "/w",
+                    "daemons": [],
+                }
+
+        manager = ShellManager(
+            token="secret",
+            argv_factory=lambda s, w: (
+                calls.append((s, w)) or [sys.executable, str(child)]
+            ),
+            notify=lambda line: None,
+        )
+        app = DashboardApp(
+            cast("DashboardCollector", Collector()),
+            ConnectionTracker(),
+            7700,
+            shells=manager,
+        )
+        server = await asyncio.start_server(
+            lambda r, w: proxy_handle(r, w, _StubResolver(), None, app),
+            "127.0.0.1",
+            0,
+        )
+        port = server.sockets[0].getsockname()[1]
+        try:
+            async with await ws_client.connect(
+                f"ws://127.0.0.1:{port}/api/shell?sandbox=agents-foo",
+                origin=cast("Origin", "http://localhost:7700"),
+                open_timeout=5,
+            ) as ws:
+                await ws.send(
+                    json.dumps(
+                        {"type": "hello", "token": "secret", "cols": 80, "rows": 24}
+                    )
+                )
+                while True:
+                    message = await asyncio.wait_for(ws.recv(), 5)
+                    if isinstance(message, bytes) and b"SHELL-UP" in message:
+                        break
+                exit_message = None
+                try:
+                    while True:
+                        message = await asyncio.wait_for(ws.recv(), 5)
+                        if isinstance(message, str):
+                            data = json.loads(message)
+                            if data.get("type") == "exit":
+                                exit_message = data
+                                break
+                except websockets.exceptions.ConnectionClosed as e:
+                    assert e.rcvd is None or e.rcvd.code == 1000
+                return calls, exit_message
+        finally:
+            await manager.close_all()
+            server.close()
+            await server.wait_closed()
+
+    calls, exit_message = asyncio.run(scenario())
+    assert calls == [("agents-foo", "/w")]
+    assert exit_message is not None and exit_message["code"] == 0
+
+
+def test_state_reports_shell_enabled_and_sessions():
+    class SessionManager(ShellManager):
+        def sessions(self):
+            return [
+                {"id": 1, "sandbox": "agents-foo", "client": "c", "started_at": 0.0}
+            ]
+
+    app = DashboardApp(
+        cast("DashboardCollector", FakeCollector({"name": "agents-foo"})),
+        ConnectionTracker(),
+        7700,
+        shells=SessionManager(
+            token="t", argv_factory=lambda s, w: [], notify=lambda l: None
+        ),
+    )
+    response = _respond(b"GET /api/state HTTP/1.1\r\nHost: localhost\r\n\r\n", app)
+    body = json.loads(response.split(b"\r\n\r\n", 1)[1])
+    assert body["proxy"]["shell"]["enabled"] is True
+    assert body["proxy"]["shell"]["sessions"][0]["sandbox"] == "agents-foo"
+
+
+def test_shell_page_has_relaxed_style_csp_and_ws_connect_src():
+    app = _shell_app(
+        ShellManager(token="t", argv_factory=lambda s, w: [], notify=lambda l: None)
+    )
+    response = _respond(b"GET /shell HTTP/1.1\r\nHost: localhost\r\n\r\n", app)
+    head = response.split(b"\r\n\r\n", 1)[0]
+    assert b"style-src 'self' 'unsafe-inline'" in head
+    assert b"connect-src 'self' ws://localhost:7700" in head
+
+
+def test_dashboard_page_keeps_strict_csp():
+    app = _shell_app(
+        ShellManager(token="t", argv_factory=lambda s, w: [], notify=lambda l: None)
+    )
+    response = _respond(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n", app)
+    head = response.split(b"\r\n\r\n", 1)[0]
+    assert b"style-src 'self';" in head
+    assert b"unsafe-inline" not in head
+
+
+def test_shell_assets_are_packaged():
+    for path in ("/shell", "/shell.css", "/shell.js"):
+        file_name, _ = STATIC_FILES[path]
+        resource = resources.files("msb_circus").joinpath(
+            f"templates/dashboard/{file_name}"
+        )
+        assert resource.is_file(), f"missing packaged asset for {path}"

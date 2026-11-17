@@ -17,7 +17,7 @@ import shlex
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from .config import (
     DEFAULT_SANDBOX_NAME_PREFIX,
@@ -517,6 +517,23 @@ class DashboardCollector:
                     await self._refresh()
         return self._views, self._generated_at, self._refresh_error
 
+    async def running_managed_view(self, name: str) -> dict[str, Any] | None:
+        """Return the view of a running managed sandbox, refreshing first.
+
+        :param name: Sandbox name.
+        :returns: The sandbox view (with ``workspace``), or ``None``
+            when the sandbox is unknown, not managed or not running.
+        """
+        await self.sandboxes()  # make sure the views are fresh
+        return next(
+            (
+                v
+                for v in self._views
+                if v["name"] == name and v["managed"] and v["running"]
+            ),
+            None,
+        )
+
     async def daemon_log(self, sandbox: str, daemon: str, lines: int) -> str:
         """Return the last lines of a daemon log or the router log.
 
@@ -531,15 +548,7 @@ class DashboardCollector:
         from .daemons import build_logs_command
         from .exec_ import build_exec_args
 
-        await self.sandboxes()  # make sure the views are fresh
-        view = next(
-            (
-                v
-                for v in self._views
-                if v["name"] == sandbox and v["managed"] and v["running"]
-            ),
-            None,
-        )
+        view = await self.running_managed_view(sandbox)
         if view is None:
             raise KeyError(f"no running managed sandbox named {sandbox!r}")
         if daemon == "_router":

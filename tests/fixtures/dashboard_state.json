@@ -5,7 +5,11 @@
     "port": 7700,
     "started_at": 1763379000.0,
     "version": "0.1.0",
-    "url_pattern": "http://<daemon>.<sandbox>.localhost:7700/"
+    "url_pattern": "http://<daemon>.<sandbox>.localhost:7700/",
+    "shell": {
+      "enabled": true,
+      "sessions": []
+    }
   },
   "sandboxes": [
     {

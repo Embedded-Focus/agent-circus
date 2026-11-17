@@ -548,3 +548,46 @@ def test_collector_daemon_log_rejects_bad_daemon_name():
     prepare()
     with pytest.raises(KeyError):
         asyncio.run(collector.daemon_log("agents-foo", "../etc", 10))
+
+
+def test_running_managed_view_returns_view_with_workspace():
+    FakeInvoker.behavior = {
+        "list_output": json.dumps(
+            [{"name": "agents-foo", "status": "Running", "created_at": 1.0}]
+        ),
+        "inspect_json": INSPECT_JSON,
+    }
+    collector, _clock, _invoker = _collector()
+
+    async def scenario():
+        view = await collector.running_managed_view("agents-foo")
+        return view
+
+    view = asyncio.run(scenario())
+    assert view is not None
+    assert view["managed"] is True and view["running"] is True
+    assert view["workspace"] == "/home/u/src/foo"
+
+
+def test_running_managed_view_none_for_stopped_or_unmanaged():
+    FakeInvoker.behavior = {
+        "list_output": json.dumps(
+            [
+                {"name": "agents-stop", "status": "Stopped", "created_at": 1.0},
+                {"name": "other-x", "status": "Running", "created_at": 2.0},
+            ]
+        ),
+        "inspect_json": json.dumps({"config": {}}),
+    }
+    collector, _clock, _invoker = _collector()
+
+    async def scenario():
+        stopped = await collector.running_managed_view("agents-stop")
+        unmanaged = await collector.running_managed_view("other-x")
+        missing = await collector.running_managed_view("agents-nope")
+        return stopped, unmanaged, missing
+
+    stopped, unmanaged, missing = asyncio.run(scenario())
+    assert stopped is None
+    assert unmanaged is None
+    assert missing is None

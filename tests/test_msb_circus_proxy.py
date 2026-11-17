@@ -6,7 +6,10 @@ import json
 import socket
 from pathlib import Path
 from types import SimpleNamespace
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
+
+if TYPE_CHECKING:
+    from msb_circus.dashboard_http import DashboardApp
 
 import pytest
 from typer.testing import CliRunner
@@ -272,3 +275,77 @@ def test_proxy_command_reports_port_in_use(tmp_path, monkeypatch):
         assert "MSB_CIRCUS_PROXY_PORT" in result.output
     finally:
         blocker.close()
+
+
+def test_serve_closes_shells_on_shutdown():
+    """serve() terminates every open shell when it stops."""
+
+    class FakeShells:
+        def __init__(self):
+            self.closed = False
+
+        async def close_all(self):
+            self.closed = True
+
+        @property
+        def enabled(self):
+            return True
+
+        def sessions(self):
+            return []
+
+    async def scenario():
+        import msb_circus.proxy as pm
+
+        class FakeDashboard:
+            pass
+
+        # serve() only touches dashboard.shells in its finally branch; a
+        # cancelled gather makes it reach that branch.
+        task = asyncio.create_task(
+            pm.serve(0, RouterResolver(_FakeInvoker(Path("/fake"))), dashboard=None)
+        )
+        task.cancel()
+
+    # serve() with a dashboard is covered through the CLI wiring test;
+    # here we verify the finally branch calls close_all by cancelling a
+    # serve that owns a dashboard-like object.
+
+    async def scenario2():
+        import msb_circus.proxy as pm
+
+        calls = {"close_all": 0}
+
+        class Shells:
+            async def close_all(self):
+                calls["close_all"] += 1
+
+        class Dashboard:
+            shells = Shells()
+
+        task = asyncio.create_task(
+            pm.serve(
+                0,
+                RouterResolver(_FakeInvoker(Path("/fake"))),
+                dashboard=cast("DashboardApp", Dashboard()),
+            )
+        )
+        await asyncio.sleep(0.05)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return calls["close_all"]
+
+    assert asyncio.run(scenario2()) == 1
+
+
+class _FakeInvoker:
+    def __init__(self, binary: Path) -> None:
+        self.binary = binary
+
+    def run(self, args, **kwargs):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(returncode=0, stdout="[]", stderr="")

@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Literal, Protocol
 from .config import ConfigurationError
 from .dashboard_http import is_dashboard_host
 from .exceptions import MsbCommandError
+from .proxy_stats import parse_request_line
 from .sandbox import build_inspect_args, parse_inspect_ports_ordered, router_forward
 
 if TYPE_CHECKING:
@@ -289,15 +290,16 @@ async def handle(
     :param dashboard: Optional dashboard app for loopback hosts.
     """
     head = await read_head(reader)
-    if (
-        head is not None
-        and dashboard is not None
-        and is_dashboard_host(extract_host(head))
-    ):
-        writer.write(await dashboard.respond(head))
-        await writer.drain()
-        writer.close()
-        return
+    if head is not None and dashboard is not None:
+        _method, path = parse_request_line(head)
+        if path == "/api/shell":
+            await dashboard.handle_shell(head, reader, writer)
+            return
+        if is_dashboard_host(extract_host(head)):
+            writer.write(await dashboard.respond(head))
+            await writer.drain()
+            writer.close()
+            return
     peername = writer.get_extra_info("peername")
     if isinstance(peername, tuple) and len(peername) >= 2:
         client = f"{peername[0]}:{peername[1]}"
@@ -429,6 +431,8 @@ async def serve(
     try:
         await asyncio.gather(*(server.serve_forever() for server in servers))
     finally:
+        if dashboard is not None:
+            await dashboard.shells.close_all()
         for server in servers:
             server.close()
             await server.wait_closed()
