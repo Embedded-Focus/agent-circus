@@ -219,6 +219,16 @@ ENV NODE_OPTIONS=--max-old-space-size=4096
 #
 # The npm download cache (/root/.npm) lives in a build cache mount, so it
 # never ends up in the image (it held more than 1.2 GB of tarballs).
+#
+# @opencode/cli pulls every Linux build for the architecture as optional
+# dependencies (x64: glibc, musl, and their non-AVX2 "baseline" variants,
+# about 240 MB each). Its postinstall picks the build that runs on this CPU,
+# checks it with --version, and hardlinks (or copies) it to
+# @opencode/cli/bin/opencode.exe, the target of the opencode command. The
+# platform packages are not used after that, so they are deleted in the same
+# layer; the hardlinked binary keeps its data. The AVX2 choice is made on the
+# build host, as before. The final --version call fails the build if a future
+# opencode release starts to resolve the platform package at runtime.
 RUN --mount=type=cache,target=/root/.npm \
     npm install --global \
         --allow-scripts=@opencode/cli,@anthropic-ai/claude-code \
@@ -228,7 +238,9 @@ RUN --mount=type=cache,target=/root/.npm \
         @openai/codex@0.170.0 \
         @agentclientprotocol/codex-acp@2.7.0 \
         @earendil-works/pi-coding-agent@1.5.2 pi-acp@0.0.34 \
-        skills@1.9.0
+        skills@1.9.0 \
+    && rm -rf /usr/local/lib/node_modules/@opencode/cli/node_modules/@opencode/cli-* \
+    && opencode --version >/dev/null
 
 # No main program: s6-overlay only supervises the services. With a CMD,
 # s6-overlay shuts the sandbox down when that program exits (a detached
