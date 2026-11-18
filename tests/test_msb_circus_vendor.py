@@ -59,8 +59,14 @@ def test_vendored_license_present():
 
 
 def test_vendor_files_are_served():
-    for path in ("/vendor/xterm/xterm.js", "/vendor/xterm/xterm.css", "/vendor/xterm/addon-fit.js"):
+    for path in (
+        "/vendor/xterm/xterm.js",
+        "/vendor/xterm/xterm.css",
+        "/vendor/xterm/addon-fit.js",
+    ):
         assert path in STATIC_FILES
         file_name, _content_type = STATIC_FILES[path]
-        resource = resources.files("msb_circus").joinpath(f"templates/dashboard/{file_name}")
+        resource = resources.files("msb_circus").joinpath(
+            f"templates/dashboard/{file_name}"
+        )
         assert resource.is_file(), f"missing packaged asset for {path}"
