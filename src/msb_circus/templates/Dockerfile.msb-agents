@@ -216,7 +216,11 @@ ENV NODE_OPTIONS=--max-old-space-size=4096
 # claude-code and @opencode/cli run install scripts and are allow-listed
 # explicitly (npm blocks lifecycle scripts otherwise). Versions are kept in
 # sync with the agent-circus template via agent-circus-update-templates.
-RUN npm install --global \
+#
+# The npm download cache (/root/.npm) lives in a build cache mount, so it
+# never ends up in the image (it held more than 1.2 GB of tarballs).
+RUN --mount=type=cache,target=/root/.npm \
+    npm install --global \
         --allow-scripts=@opencode/cli,@anthropic-ai/claude-code \
         @opencode/cli@2.3.2 \
         @anthropic-ai/claude-code@2.1.327 \
