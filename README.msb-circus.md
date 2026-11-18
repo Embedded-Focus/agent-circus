@@ -302,7 +302,15 @@ up in a running sandbox; restart the agent session to load it.
 Sandboxes created before this feature need one
 `msb-circus rm -f && msb-circus up`.
 
-Codex, Pi and OpenCode read these skills. Claude Code does not yet.
+Codex, Pi and OpenCode read the skills at `/root/.agents/skills`. Claude
+Code (also through `claude-agent-acp`) reads them as managed skills at
+`/etc/claude-code/.claude/skills`, the same store folder mounted a
+second time. If a new skill does not show up in a running Claude Code
+session, restart the session. A system skill wins over a skill with the
+same name in `~/.claude/skills`. Claude Code ignores this folder when
+your account gets managed settings from a Claude organization, or when
+`CLAUDE_CODE_DISABLE_POLICY_SKILLS` is set. Sandboxes created before
+Claude Code support also need one `msb-circus rm -f && msb-circus up`.
 
 Your host `~/.agents/skills` directory is **not** used. msb-circus is
 independent of it; with `--log-level DEBUG`, `up` notes when that

@@ -4,6 +4,7 @@ import pytest
 
 from msb_circus.exceptions import ConfigurationError
 from msb_circus.system_skills import (
+    CLAUDE_MANAGED_SKILLS_GUEST_DIR,
     INSTALLER_GUEST_AGENTS_DIR,
     SYSTEM_SKILLS_GUEST_DIR,
     build_skills_command,
@@ -73,11 +74,15 @@ def test_installer_mounts_store_agents_read_write(tmp_path) -> None:
 
 
 def test_system_skill_mounts_target_skills_dir_read_only(tmp_path) -> None:
-    """Agent sandboxes mount the store's skills dir read-only."""
+    """Agent sandboxes mount the store's skills dir read-only, twice."""
     store = tmp_path / "store"
     mounts = system_skill_mounts(store)
-    assert mounts == [(str(store_skills_dir(store)), f"{SYSTEM_SKILLS_GUEST_DIR}:ro")]
-    assert mounts[0][1].endswith(":ro")
+    skills_dir = str(store_skills_dir(store))
+    assert mounts == [
+        (skills_dir, f"{SYSTEM_SKILLS_GUEST_DIR}:ro"),
+        (skills_dir, f"{CLAUDE_MANAGED_SKILLS_GUEST_DIR}:ro"),
+    ]
+    assert all(guest.endswith(":ro") for _, guest in mounts)
 
 
 def test_build_skills_command_adds_g_after_subcommand() -> None:

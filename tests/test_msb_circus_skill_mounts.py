@@ -12,6 +12,7 @@ from msb_circus.cli import _warn_on_agent_skill_mount_drift
 from msb_circus.config import MsbConfig, resolve_agent_skill_mounts
 from msb_circus.exceptions import MsbCommandError
 from msb_circus.msb import MsbInvoker
+from msb_circus.system_skills import CLAUDE_MANAGED_SKILLS_GUEST_DIR
 
 
 def test_resolve_agent_skill_mounts_returns_empty_without_dirs(
@@ -106,22 +107,49 @@ def test_warn_on_agent_skill_mount_drift_warns_when_store_mount_missing(
         _warn_on_agent_skill_mount_drift(
             cast(MsbInvoker, InspectInvoker()), MsbConfig(), "agents-demo"
         )
-    assert "User or system skill directory mounts (/root/.agents/skills)" in caplog.text
+    assert (
+        "User or system skill directory mounts (/root/.agents/skills, "
+        f"{CLAUDE_MANAGED_SKILLS_GUEST_DIR})" in caplog.text
+    )
 
 
 @pytest.mark.parametrize("guest", ["/root/.agents/skills", "/root/.agents/skills:ro"])
 def test_warn_on_agent_skill_mount_drift_passes_when_store_mounted(
     skills_store, caplog, guest
 ) -> None:
-    """A mounted system store passes, with or without the ``:ro`` suffix."""
+    """Both mounted system store paths pass, with or without ``:ro``."""
     binds = [
-        {"type": "Bind", "host": str(skills_store / ".agents/skills"), "guest": guest}
+        {"type": "Bind", "host": str(skills_store / ".agents/skills"), "guest": guest},
+        {
+            "type": "Bind",
+            "host": str(skills_store / ".agents/skills"),
+            "guest": CLAUDE_MANAGED_SKILLS_GUEST_DIR,
+        },
     ]
     with caplog.at_level(logging.WARNING):
         _warn_on_agent_skill_mount_drift(
             cast(MsbInvoker, InspectInvoker(binds)), MsbConfig(), "agents-demo"
         )
     assert "skill directory mounts" not in caplog.text
+
+
+def test_warn_on_agent_skill_mount_drift_names_claude_mount_when_missing(
+    skills_store, caplog
+) -> None:
+    """An old sandbox without the Claude mount gets a warning naming it."""
+    binds = [
+        {
+            "type": "Bind",
+            "host": str(skills_store / ".agents/skills"),
+            "guest": "/root/.agents/skills",
+        }
+    ]
+    with caplog.at_level(logging.WARNING):
+        _warn_on_agent_skill_mount_drift(
+            cast(MsbInvoker, InspectInvoker(binds)), MsbConfig(), "agents-demo"
+        )
+    assert "User or system skill directory mounts" in caplog.text
+    assert CLAUDE_MANAGED_SKILLS_GUEST_DIR in caplog.text
 
 
 def test_warn_on_agent_skill_mount_drift_skips_inspect_without_mounts(
@@ -175,7 +203,10 @@ def test_system_skill_mounts_created_on_demand_and_expected_in_drift(
     mounts = _system_skill_mounts(config, create=True)
     store = tmp_path / "xdg-data" / "msb-circus" / "system-skills"
     assert (store / ".agents" / "skills").is_dir()
-    assert mounts == [(str(store / ".agents/skills"), "/root/.agents/skills:ro")]
+    assert mounts == [
+        (str(store / ".agents/skills"), "/root/.agents/skills:ro"),
+        (str(store / ".agents/skills"), CLAUDE_MANAGED_SKILLS_GUEST_DIR + ":ro"),
+    ]
     assert _system_skill_mounts(config, create=False) == mounts
 
 

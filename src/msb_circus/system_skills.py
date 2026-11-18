@@ -4,7 +4,8 @@ System skills are skills that every msb-circus sandbox sees. They live in
 a host-side store (a "fake home" that the ``skills`` CLI writes) and are
 installed by the ``skills`` CLI inside a short-lived installer sandbox,
 so the host needs no Node.js. Agent sandboxes mount the store's skill
-directory read-only; the installer sandbox is the only sandbox with
+directory read-only; Claude Code reads the same store through its
+managed skills folder. The installer sandbox is the only sandbox with
 write access to the store.
 """
 
@@ -24,6 +25,9 @@ INSTALLER_SANDBOX_NAME = "circus-skills"
 INSTALLER_GUEST_AGENTS_DIR = "/root/.agents"
 #: Guest path of the read-only system skill mount in agent sandboxes.
 SYSTEM_SKILLS_GUEST_DIR = "/root/.agents/skills"
+#: Guest path where Claude Code reads managed ("enterprise") skills on
+#: Linux. The store's skill directory is mounted here too, read-only.
+CLAUDE_MANAGED_SKILLS_GUEST_DIR = "/etc/claude-code/.claude/skills"
 #: Environment for the installer: no telemetry.
 INSTALLER_ENV = {"DISABLE_TELEMETRY": "1", "DO_NOT_TRACK": "1"}
 #: Subcommands that get ``-g`` added.
@@ -147,11 +151,20 @@ def installer_mounts(store: Path) -> list[tuple[str, str]]:
 def system_skill_mounts(store: Path) -> list[tuple[str, str]]:
     """Return the read-only system skill mounts for agent sandboxes.
 
+    The store's skill directory is mounted twice at guest paths: Codex,
+    Pi and OpenCode read the first (``/root/.agents/skills``); Claude
+    Code loads managed skills from the second
+    (``/etc/claude-code/.claude/skills``). Both are read-only.
+
     :param store: Store root.
-    :returns: ``(host path, guest spec)`` pairs; the guest path carries
+    :returns: ``(host path, guest spec)`` pairs; each guest path carries
         the ``:ro`` option. msb enforces read-only on the host side.
     """
-    return [(str(store_skills_dir(store)), f"{SYSTEM_SKILLS_GUEST_DIR}:ro")]
+    skills_dir = str(store_skills_dir(store))
+    return [
+        (skills_dir, f"{SYSTEM_SKILLS_GUEST_DIR}:ro"),
+        (skills_dir, f"{CLAUDE_MANAGED_SKILLS_GUEST_DIR}:ro"),
+    ]
 
 
 def build_skills_command(args: Sequence[str]) -> list[str]:

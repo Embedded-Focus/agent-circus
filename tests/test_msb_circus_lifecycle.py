@@ -778,6 +778,10 @@ def test_up_boots_with_git_worktree_mirror_mount(tmp_path, fake_msb, monkeypatch
             f"{tmp_path / 'xdg-data/msb-circus/system-skills/.agents/skills'}:"
             "/root/.agents/skills:ro"
         ),
+        (
+            f"{tmp_path / 'xdg-data/msb-circus/system-skills/.agents/skills'}:"
+            "/etc/claude-code/.claude/skills:ro"
+        ),
     ]
     assert run_calls[0][run_calls[0].index("--name") + 1] == name
 

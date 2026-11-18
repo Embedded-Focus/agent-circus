@@ -2067,7 +2067,7 @@ def _warn_on_broken_skill_links(config: MsbConfig, workspace: Path) -> None:
     skill_dirs = (
         [workspace / d for d in PROJECT_SKILL_DIRS]
         + [Path(host) for host, _ in resolve_agent_skill_mounts()]
-        + [Path(host) for host, _ in system_mounts]
+        + list(dict.fromkeys(Path(host) for host, _ in system_mounts))
         + [home / d for d in CONFIG_MOUNT_SKILL_DIRS]
     )
     broken = find_broken_skill_links(skill_dirs, mounts)

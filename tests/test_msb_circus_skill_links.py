@@ -179,3 +179,19 @@ def test_warn_on_broken_skill_links_checks_system_store(
         _warn_on_broken_skill_links(MsbConfig(mounts=dict(DEFAULT_MOUNTS)), workspace)
     assert "These skill links do not work in the sandbox" in caplog.text
     assert str(skills_dir / "gone") in caplog.text
+
+
+def test_warn_on_broken_skill_links_lists_store_link_once(
+    layout, tmp_path, monkeypatch, caplog
+) -> None:
+    """The store is mounted twice, but a broken store link is listed once."""
+    workspace, home = layout
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
+    skills_dir = tmp_path / "xdg-data/msb-circus/system-skills/.agents/skills"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "gone").symlink_to("../../missing/gone")
+    with caplog.at_level(logging.WARNING):
+        _warn_on_broken_skill_links(MsbConfig(mounts=dict(DEFAULT_MOUNTS)), workspace)
+    assert "These skill links do not work in the sandbox" in caplog.text
+    assert caplog.text.count(str(skills_dir / "gone")) == 1
