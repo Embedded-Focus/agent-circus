@@ -230,15 +230,24 @@ ENV NODE_OPTIONS=--max-old-space-size=4096
 # build host, as before. The final --version call fails the build if a future
 # opencode release starts to resolve the platform package at runtime.
 #
-# claude-agent-acp brings its own copy of the claude binary: the
-# claude-agent-sdk platform packages each hold a 335 MB claude binary. Each
-# one becomes a symlink to the global claude-code binary. The adapter still
-# finds the CLI in the SDK package, so MCP server config keeps going over
-# stdin; CLAUDE_CODE_EXECUTABLE would put it on the command line, and plain
-# msb exec shells do not get the image ENV anyway. The SDK names the CLI
-# version it was built against (claudeCodeVersion); the build fails if the
-# global claude-code is older than that, or if the shared binary does not
-# start.
+# The ACP adapters bring their own copies of the agent binaries. They are
+# replaced with symlinks to the global ones (about 800 MB on x64):
+# - claude-agent-acp: the claude-agent-sdk platform packages each hold a
+#   335 MB claude binary. Each one becomes a symlink to the global
+#   claude-code binary. The adapter still finds the CLI in the SDK package,
+#   so MCP server config keeps going over stdin; CLAUDE_CODE_EXECUTABLE
+#   would put it on the command line, and plain msb exec shells do not get
+#   the image ENV anyway. The SDK names the CLI version it was built
+#   against (claudeCodeVersion); the build fails if the global claude-code
+#   is older than that.
+# - codex-acp: its nested @openai/codex package (with a 436 MB platform
+#   package) becomes a symlink to the global @openai/codex package.
+#   Shortcut: codex-acp pins an older codex minor version (a caret range
+#   on 0.x), so it now talks to the newer global codex app-server. Without
+#   credentials, ACP initialize and session/new gave the same answers as
+#   with the bundled copy (checked 2026-11-18); a full prompt turn was not
+#   tested. If codex-acp sessions fail, this symlink is the first suspect.
+# The --version calls at the end check that both shared binaries start.
 RUN --mount=type=cache,target=/root/.npm \
     npm install --global \
         --allow-scripts=@opencode/cli,@anthropic-ai/claude-code \
@@ -266,7 +275,11 @@ RUN --mount=type=cache,target=/root/.npm \
     && for d in "$claude_acp"/claude-agent-sdk-linux-*; do \
         ln -sf "$g/@anthropic-ai/claude-code/bin/claude.exe" "$d/claude" \
         && "$d/claude" --version >/dev/null || exit 1; \
-    done
+    done \
+    && codex_acp="$g/@agentclientprotocol/codex-acp/node_modules/@openai" \
+    && rm -rf "$codex_acp/codex" "$codex_acp"/codex-* \
+    && ln -s "$g/@openai/codex" "$codex_acp/codex" \
+    && node "$codex_acp/codex/bin/codex.js" --version >/dev/null
 
 # No main program: s6-overlay only supervises the services. With a CMD,
 # s6-overlay shuts the sandbox down when that program exits (a detached
