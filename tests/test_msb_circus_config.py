@@ -136,6 +136,25 @@ def test_parse_config_trust_host_cas_defaults_to_false():
     assert parse_config({}).network.trust_host_cas is False
 
 
+def test_parse_config_skills_store_defaults_to_none():
+    assert parse_config({}).skills.store is None
+
+
+def test_parse_config_reads_skills_store():
+    config = parse_config({"msb": {"skills": {"store": "/x"}}})
+    assert config.skills.store == "/x"
+
+
+def test_parse_config_rejects_non_table_skills():
+    with pytest.raises(ConfigurationError, match=r"msb\.skills must be a table"):
+        parse_config({"msb": {"skills": "/x"}})
+
+
+def test_parse_config_rejects_empty_skills_store():
+    with pytest.raises(ConfigurationError, match="non-empty string"):
+        parse_config({"msb": {"skills": {"store": ""}}})
+
+
 def test_parse_config_reads_trust_host_cas():
     config = parse_config({"msb": {"network": {"trust_host_cas": True}}})
     assert config.network.trust_host_cas is True

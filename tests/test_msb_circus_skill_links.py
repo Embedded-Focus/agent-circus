@@ -138,7 +138,28 @@ def test_warn_on_broken_skill_links_silent_for_relative_links(
     workspace, home = layout
     monkeypatch.setenv("HOME", str(home))
     (workspace / ".claude/skills/proj").symlink_to("../../.agents/skills/proj")
-    os.symlink("../../.agents/skills/user", home / ".claude/skills/user")
+    # Host ~/.agents/skills is no longer mounted: user skill links must
+    # target a still-mounted directory (here ~/.pi/agent/skills).
+    (home / ".pi" / "agent" / "skills").mkdir(parents=True)
+    (home / ".pi/agent/skills/user").mkdir()
+    os.symlink("../../.pi/agent/skills/user", home / ".claude/skills/user")
     with caplog.at_level(logging.WARNING):
         _warn_on_broken_skill_links(MsbConfig(mounts=dict(DEFAULT_MOUNTS)), workspace)
     assert caplog.text == ""
+
+
+def test_warn_on_broken_skill_links_reports_host_agents_skills_link(
+    layout, monkeypatch, caplog
+) -> None:
+    """A relative link into host ~/.agents/skills now targets the store.
+
+    The system store is empty (the skill was never installed there), so
+    the link does not resolve in the sandbox and is reported.
+    """
+    workspace, home = layout
+    monkeypatch.setenv("HOME", str(home))
+    os.symlink("../../.agents/skills/user", home / ".claude/skills/user")
+    with caplog.at_level(logging.WARNING):
+        _warn_on_broken_skill_links(MsbConfig(mounts=dict(DEFAULT_MOUNTS)), workspace)
+    assert "These skill links do not work in the sandbox" in caplog.text
+    assert "target not visible in the sandbox" in caplog.text

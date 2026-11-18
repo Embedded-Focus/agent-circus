@@ -193,6 +193,12 @@ from .ssh_agent import (
     ssh_file_copies,
     ssh_sandbox_env,
 )
+from .system_skills import (
+    ensure_store,
+    store_skills_dir,
+    system_skill_mounts,
+    system_skills_store,
+)
 from .tracing import TraceSession
 from .utils import setup_logging
 from .webshell import (
@@ -1547,6 +1553,38 @@ def _ensure_agent_config_copies(invoker: MsbInvoker, name: str) -> None:
             )
 
 
+def _system_skill_mounts(config: MsbConfig, *, create: bool) -> list[tuple[str, str]]:
+    """Return the read-only system skill mounts for a new sandbox.
+
+    Resolves the store from ``[msb.skills] store``. With ``create=True``
+    (sandbox creation) the store's skill directory is created when
+    missing, so a skill installed later is visible without a re-create;
+    a failure to create it only warns and the sandbox starts without
+    system skills. With ``create=False`` (drift/link checks) an absent
+    store means no mount to expect.
+
+    :param config: Resolved msb-circus configuration.
+    :param create: Create the store directory when missing.
+    :returns: ``(host path, guest spec)`` pairs; empty without a usable
+        store.
+    """
+    store = system_skills_store(config.skills.store)
+    if create:
+        try:
+            ensure_store(store)
+        except OSError as e:
+            logger.warning(
+                "cannot create the system skill store %s: %s; sandboxes "
+                "start without system skills",
+                store,
+                e,
+            )
+            return []
+    elif not store_skills_dir(store).is_dir():
+        return []
+    return system_skill_mounts(store)
+
+
 def _warn_on_agent_config_mount_drift(invoker: MsbInvoker, name: str) -> None:
     """Warn when an expected agent config-dir mount is missing.
 
@@ -1580,20 +1618,23 @@ def _warn_on_agent_config_mount_drift(invoker: MsbInvoker, name: str) -> None:
     )
 
 
-def _warn_on_agent_skill_mount_drift(invoker: MsbInvoker, name: str) -> None:
-    """Warn when an existing host user skill directory is not mounted.
+def _warn_on_agent_skill_mount_drift(
+    invoker: MsbInvoker, config: MsbConfig, name: str
+) -> None:
+    """Warn when an expected skill directory mount is missing.
 
-    msb fixes mounts at sandbox creation, so a skill directory created on
-    the host later (e.g. by the first ``npx skills add -g``) stays
-    invisible in the sandbox until it is re-created. The ``:ro`` option is
-    stripped before comparing, because ``msb inspect`` may report the
-    read-only flag separately from the guest path. Failures here are
-    non-fatal: an unreadable inspect output skips the check.
+    msb fixes mounts at sandbox creation, so a skill directory created
+    later (on the host or in the system skill store) stays invisible in
+    the sandbox until it is re-created. The ``:ro`` option is stripped
+    before comparing, because ``msb inspect`` may report the read-only
+    flag separately from the guest path. Failures here are non-fatal:
+    an unreadable inspect output skips the check.
 
     :param invoker: Invoker bound to the resolved msb binary.
+    :param config: Resolved msb-circus configuration.
     :param name: Sandbox name to inspect.
     """
-    expected = resolve_agent_skill_mounts()
+    expected = resolve_agent_skill_mounts() + _system_skill_mounts(config, create=False)
     if not expected:
         return
     try:
@@ -1608,10 +1649,10 @@ def _warn_on_agent_skill_mount_drift(invoker: MsbInvoker, name: str) -> None:
     if not missing:
         return
     logger.warning(
-        "User skill directory mounts (%s) are missing from sandbox %s, so "
-        "agents in it cannot see your user skills. Mounts are fixed at "
-        "sandbox creation. Remove and re-create it to apply: "
-        "msb-circus rm -f && msb-circus up.",
+        "User or system skill directory mounts (%s) are missing from "
+        "sandbox %s, so agents in it cannot see all of your skills. "
+        "Mounts are fixed at sandbox creation. Remove and re-create it "
+        "to apply: msb-circus rm -f && msb-circus up.",
         ", ".join(missing),
         name,
     )
@@ -1968,6 +2009,7 @@ def _warn_on_broken_skill_links(config: MsbConfig, workspace: Path) -> None:
             effective_mounts(config, workspace)
             + resolve_agent_config_mounts(warn_missing=False)
             + resolve_agent_skill_mounts()
+            + _system_skill_mounts(config, create=False)
         )
     except ConfigurationError as e:
         logger.debug("Skill link check skipped: %s", e)
@@ -1975,6 +2017,7 @@ def _warn_on_broken_skill_links(config: MsbConfig, workspace: Path) -> None:
     skill_dirs = (
         [workspace / d for d in PROJECT_SKILL_DIRS]
         + [Path(host) for host, _ in resolve_agent_skill_mounts()]
+        + [Path(host) for host, _ in _system_skill_mounts(config, create=False)]
         + [home / d for d in CONFIG_MOUNT_SKILL_DIRS]
     )
     broken = find_broken_skill_links(skill_dirs, mounts)
@@ -2764,7 +2807,7 @@ def _ensure_sandbox_running(
         _ensure_git_wrapper(invoker, config, name, workspace)
         _check_ssh_agent(invoker, config, name)
         _warn_on_agent_config_mount_drift(invoker, name)
-        _warn_on_agent_skill_mount_drift(invoker, name)
+        _warn_on_agent_skill_mount_drift(invoker, config, name)
         _warn_on_port_drift(invoker, config, name)
         _warn_on_disk_drift(invoker, config, name)
         _warn_on_mount_drift(invoker, config, name, workspace)
@@ -2794,7 +2837,7 @@ def _ensure_sandbox_running(
         _ensure_git_wrapper(invoker, config, name, workspace)
         _check_ssh_agent(invoker, config, name)
         _warn_on_agent_config_mount_drift(invoker, name)
-        _warn_on_agent_skill_mount_drift(invoker, name)
+        _warn_on_agent_skill_mount_drift(invoker, config, name)
         _warn_on_port_drift(invoker, config, name)
         _warn_on_disk_drift(invoker, config, name)
         _warn_on_mount_drift(invoker, config, name, workspace)
@@ -2820,6 +2863,7 @@ def _ensure_sandbox_running(
                         effective_mounts(config, workspace)
                         + resolve_agent_config_mounts()
                         + resolve_agent_skill_mounts()
+                        + _system_skill_mounts(config, create=True)
                     ),
                     net=config.network.mode,
                     port_forwards=boot_port_forwards(config),

@@ -155,8 +155,11 @@ AGENT_CONFIG_FILE_COPIES: tuple[tuple[str, str, str], ...] = (
 #: mounts at creation, so a directory created later needs a re-create.
 #: opencode 2.2.7 reads both ``skill`` and ``skills`` below its config
 #: directory; it also reads ``~/.agents/skills`` and ``~/.claude/skills``.
+#: Host ``~/.agents/skills`` is deliberately not mounted: that guest path
+#: belongs to the read-only system skill store (see
+#: :mod:`msb_circus.system_skills`), so user skills must live in one of
+#: the directories below.
 AGENT_SKILL_DIR_MOUNTS: tuple[tuple[str, str], ...] = (
-    (".agents/skills", "/root/.agents/skills"),
     (".pi/agent/skills", "/root/.pi/agent/skills"),
     (".config/opencode/skills", "/root/.config/opencode/skills"),
     (".config/opencode/skill", "/root/.config/opencode/skill"),
@@ -240,6 +243,18 @@ class NetworkConfig:
 
     mode: str = DEFAULT_NETWORK_MODE
     trust_host_cas: bool = False
+
+
+@dataclass(frozen=True)
+class SkillsConfig:
+    """System skill store settings (``[msb.skills]``).
+
+    :ivar store: Host path of the system skill store, or ``None`` for
+        the default location (see :func:`msb_circus.system_skills.system_skills_store`);
+        ``~`` is allowed and expanded there.
+    """
+
+    store: str | None = None
 
 
 @dataclass(frozen=True)
@@ -460,6 +475,7 @@ class MsbConfig:
     :ivar image: Image build/import settings.
     :ivar sandbox: Sandbox resource settings.
     :ivar network: Network profile settings.
+    :ivar skills: System skill store settings.
     :ivar agent: Default exec target.
     :ivar tracing: Trace settings for agent executions.
     :ivar mounts: Host path -> guest path mapping (options may be appended
@@ -496,6 +512,7 @@ class MsbConfig:
     image: ImageConfig = field(default_factory=ImageConfig)
     sandbox: SandboxConfig = field(default_factory=SandboxConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
+    skills: SkillsConfig = field(default_factory=SkillsConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     tracing: TracingConfig = field(default_factory=TracingConfig)
     mounts: dict[str, str] = field(default_factory=dict)
@@ -953,6 +970,26 @@ def _parse_network(raw: Any) -> NetworkConfig:
     if not isinstance(trust_host_cas, bool):
         raise ConfigurationError("msb.network.trust_host_cas must be a boolean")
     return NetworkConfig(mode=mode, trust_host_cas=trust_host_cas)
+
+
+def _parse_skills(raw: Any) -> SkillsConfig:
+    """Parse the ``[msb.skills]`` table.
+
+    The store path is not resolved here; ``system_skills_store()`` does
+    the expansion and validation.
+
+    :param raw: Raw table value or ``None``.
+    :returns: Parsed skills config.
+    :raises ConfigurationError: If the table is malformed.
+    """
+    if raw is None:
+        return SkillsConfig()
+    if not isinstance(raw, dict):
+        raise ConfigurationError("msb.skills must be a table")
+    store = raw.get("store")
+    if store is not None and (not isinstance(store, str) or not store):
+        raise ConfigurationError("msb.skills.store must be a non-empty string")
+    return SkillsConfig(store=store)
 
 
 def _parse_tracing(raw: Any) -> TracingConfig:
@@ -1667,6 +1704,7 @@ def parse_config(config: dict[str, Any]) -> MsbConfig:
         image=_parse_image(msb_raw.get("image")),
         sandbox=_parse_sandbox(msb_raw.get("sandbox")),
         network=_parse_network(msb_raw.get("network")),
+        skills=_parse_skills(msb_raw.get("skills")),
         agent=_parse_agent(msb_raw.get("agent")),
         tracing=_parse_tracing(msb_raw.get("tracing")),
         mounts=(

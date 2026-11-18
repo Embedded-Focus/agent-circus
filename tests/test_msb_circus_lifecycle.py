@@ -771,7 +771,14 @@ def test_up_boots_with_git_worktree_mirror_mount(tmp_path, fake_msb, monkeypatch
     volumes = [
         run_calls[0][i + 1] for i, arg in enumerate(run_calls[0]) if arg == "--volume"
     ]
-    assert volumes == [f"{tmp_path}:/workspace", f"{tmp_path}:{tmp_path}"]
+    assert volumes == [
+        f"{tmp_path}:/workspace",
+        f"{tmp_path}:{tmp_path}",
+        (
+            f"{tmp_path / 'xdg-data/msb-circus/system-skills/.agents/skills'}:"
+            "/root/.agents/skills:ro"
+        ),
+    ]
     assert run_calls[0][run_calls[0].index("--name") + 1] == name
 
 
