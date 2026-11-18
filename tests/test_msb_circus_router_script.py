@@ -308,7 +308,12 @@ def test_status_endpoint_without_script_gives_null_daemon_status(tmp_path, route
         routes_file = tmp_path / "routes.json"
         routes_file.write_text("{}")
         rserver = await asyncio.start_server(
-            lambda r, w: router.handle(r, w, router.Routes(str(routes_file))),
+            lambda r, w: router.handle(
+                r,
+                w,
+                router.Routes(str(routes_file)),
+                str(tmp_path / "missing-status.sh"),
+            ),
             "127.0.0.1",
             0,
         )
