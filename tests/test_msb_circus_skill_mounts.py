@@ -177,3 +177,20 @@ def test_system_skill_mounts_created_on_demand_and_expected_in_drift(
     assert (store / ".agents" / "skills").is_dir()
     assert mounts == [(str(store / ".agents/skills"), "/root/.agents/skills:ro")]
     assert _system_skill_mounts(config, create=False) == mounts
+
+
+def test_system_skill_mounts_warns_and_skips_when_store_cannot_be_created(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    """A store that cannot be created gives no mount and a warning."""
+    import msb_circus.cli as cli_module
+
+    def fail(_store: Path) -> Path:
+        raise PermissionError("denied")
+
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
+    monkeypatch.setattr(cli_module, "ensure_store", fail)
+    with caplog.at_level(logging.WARNING):
+        mounts = cli_module._system_skill_mounts(MsbConfig(), create=True)
+    assert mounts == []
+    assert "cannot create the system skill store" in caplog.text

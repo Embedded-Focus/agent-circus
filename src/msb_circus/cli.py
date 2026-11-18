@@ -897,7 +897,8 @@ def _run_skills_installer(
 
     Boot a minimal sandbox (``circus-skills``) with only the system
     skill store mounted read-write, run the command interactively in it,
-    and always remove the sandbox afterwards (also on Ctrl-C). The
+    and always remove the sandbox afterwards (also on Ctrl-C or a failed
+    boot). The
     interactive exec deliberately bypasses :meth:`MsbInvoker.run`, which
     captures output and closes stdin.
 
@@ -906,8 +907,8 @@ def _run_skills_installer(
     :param args: Forwarded user arguments (subcommand first).
     :returns: Exit code of the ``skills`` CLI.
     :raises typer.Exit: On a disallowed subcommand (code 2), a missing
-        image or msb failure (code 1), or when another installer sandbox
-        is running (code 1).
+        image, an msb failure (list, leftover removal, boot) (code 1), or
+        when another installer sandbox is running (code 1).
     """
     try:
         command = build_skills_command(args)
@@ -946,32 +947,54 @@ def _run_skills_installer(
                 err=True,
             )
             raise typer.Exit(code=1)
-        invoker.run(build_remove_args(INSTALLER_SANDBOX_NAME, force=True))
+        try:
+            invoker.run(build_remove_args(INSTALLER_SANDBOX_NAME, force=True))
+        except MsbCircusError as e:
+            typer.echo(
+                "Error: cannot remove the leftover installer sandbox "
+                f"{INSTALLER_SANDBOX_NAME}: {e}",
+                err=True,
+            )
+            raise typer.Exit(code=1) from e
     logger.info(
         "Running the skills CLI in sandbox %s (store: %s)...",
         INSTALLER_SANDBOX_NAME,
         store,
     )
-    invoker.run(
-        build_run_args(
-            name=INSTALLER_SANDBOX_NAME,
-            image=config.image.tag,
-            memory=config.sandbox.memory,
-            cpus=config.sandbox.cpus,
-            mounts=installer_mounts(store),
-            net=config.network.mode,
-            init=(None if config.sandbox.init == INIT_NONE else config.sandbox.init),
-            trust_host_cas=config.network.trust_host_cas,
-            env=INSTALLER_ENV,
-            workdir="/root",
-        )
-    )
-    tty = True if sys.stdin.isatty() and sys.stdout.isatty() else None
-    argv = [
-        str(invoker.binary),
-        *build_exec_args(INSTALLER_SANDBOX_NAME, command, workdir="/root", tty=tty),
-    ]
+    # The boot is inside the try: a failed or interrupted boot can leave
+    # the sandbox behind, and the finally block removes it.
     try:
+        try:
+            invoker.run(
+                build_run_args(
+                    name=INSTALLER_SANDBOX_NAME,
+                    image=config.image.tag,
+                    memory=config.sandbox.memory,
+                    cpus=config.sandbox.cpus,
+                    mounts=installer_mounts(store),
+                    net=config.network.mode,
+                    init=(
+                        None
+                        if config.sandbox.init == INIT_NONE
+                        else config.sandbox.init
+                    ),
+                    trust_host_cas=config.network.trust_host_cas,
+                    env=INSTALLER_ENV,
+                    workdir="/root",
+                )
+            )
+        except MsbCircusError as e:
+            typer.echo(
+                "Error: cannot boot the installer sandbox "
+                f"{INSTALLER_SANDBOX_NAME}: {e}",
+                err=True,
+            )
+            raise typer.Exit(code=1) from e
+        tty = True if sys.stdin.isatty() and sys.stdout.isatty() else None
+        argv = [
+            str(invoker.binary),
+            *build_exec_args(INSTALLER_SANDBOX_NAME, command, workdir="/root", tty=tty),
+        ]
         returncode = subprocess.run(argv, check=False).returncode
     finally:
         try:

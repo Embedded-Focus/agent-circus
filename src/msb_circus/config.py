@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from .exceptions import ConfigurationError
+from .system_skills import expand_store_path
 
 logger = logging.getLogger(__name__)
 
@@ -975,8 +976,9 @@ def _parse_network(raw: Any) -> NetworkConfig:
 def _parse_skills(raw: Any) -> SkillsConfig:
     """Parse the ``[msb.skills]`` table.
 
-    The store path is not resolved here; ``system_skills_store()`` does
-    the expansion and validation.
+    The store path is validated here (absolute after ``~`` expansion),
+    so a bad value fails at config load; it is kept unexpanded and
+    ``system_skills_store()`` expands it again on use.
 
     :param raw: Raw table value or ``None``.
     :returns: Parsed skills config.
@@ -987,8 +989,10 @@ def _parse_skills(raw: Any) -> SkillsConfig:
     if not isinstance(raw, dict):
         raise ConfigurationError("msb.skills must be a table")
     store = raw.get("store")
-    if store is not None and (not isinstance(store, str) or not store):
-        raise ConfigurationError("msb.skills.store must be a non-empty string")
+    if store is not None:
+        if not isinstance(store, str) or not store:
+            raise ConfigurationError("msb.skills.store must be a non-empty string")
+        expand_store_path(store)
     return SkillsConfig(store=store)
 
 

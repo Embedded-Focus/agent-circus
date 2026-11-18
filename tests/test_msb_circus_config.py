@@ -155,6 +155,17 @@ def test_parse_config_rejects_empty_skills_store():
         parse_config({"msb": {"skills": {"store": ""}}})
 
 
+@pytest.mark.parametrize("store", ["rel/path", "~no-such-user-msb-circus/x"])
+def test_parse_config_rejects_invalid_skills_store(store):
+    with pytest.raises(ConfigurationError, match=r"msb\.skills\.store"):
+        parse_config({"msb": {"skills": {"store": store}}})
+
+
+def test_parse_config_accepts_tilde_skills_store():
+    config = parse_config({"msb": {"skills": {"store": "~/skills"}}})
+    assert config.skills.store == "~/skills"
+
+
 def test_parse_config_reads_trust_host_cas():
     config = parse_config({"msb": {"network": {"trust_host_cas": True}}})
     assert config.network.trust_host_cas is True

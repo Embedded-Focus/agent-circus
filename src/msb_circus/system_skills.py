@@ -44,30 +44,49 @@ def system_skills_store(
 
     Precedence: the configured ``[msb.skills] store`` value (``~`` is
     expanded, must be absolute after expansion), then
-    ``$XDG_DATA_HOME/msb-circus/system-skills``, then
+    ``$XDG_DATA_HOME/msb-circus/system-skills`` (only when absolute; the
+    XDG spec says to ignore relative values), then
     ``$HOME/.local/share/msb-circus/system-skills``.
 
     :param configured: Configured store path, or ``None`` for the default.
     :param environ: Environment mapping read for ``XDG_DATA_HOME`` and
         ``HOME``; defaults to :data:`os.environ` so tests can pass a dict.
     :returns: Resolved store path (not created).
-    :raises ConfigurationError: If the configured path is relative after
-        ``~`` expansion.
+    :raises ConfigurationError: If the configured path is invalid (see
+        :func:`expand_store_path`).
     """
     if configured is not None:
-        path = Path(configured).expanduser()
-        if not path.is_absolute():
-            raise ConfigurationError(
-                f"msb.skills.store must be an absolute path (got {configured!r})"
-            )
-        return path
+        return expand_store_path(configured)
     env = os.environ if environ is None else environ
     data_home = env.get("XDG_DATA_HOME")
-    if data_home:
+    # The XDG Base Directory spec says to ignore relative values.
+    if data_home and Path(data_home).is_absolute():
         base = Path(data_home)
     else:
         base = Path(env.get("HOME", str(Path.home()))) / _DEFAULT_DATA_HOME
     return base / "msb-circus" / "system-skills"
+
+
+def expand_store_path(configured: str) -> Path:
+    """Expand and validate a configured ``[msb.skills] store`` path.
+
+    :param configured: Configured store path; ``~`` and ``~user`` are
+        expanded.
+    :returns: The expanded absolute path.
+    :raises ConfigurationError: If ``~user`` names an unknown user or
+        the path is relative after expansion.
+    """
+    try:
+        path = Path(configured).expanduser()
+    except RuntimeError as e:
+        raise ConfigurationError(
+            f"msb.skills.store cannot be expanded ({configured!r}): {e}"
+        ) from e
+    if not path.is_absolute():
+        raise ConfigurationError(
+            f"msb.skills.store must be an absolute path (got {configured!r})"
+        )
+    return path
 
 
 def store_skills_dir(store: Path) -> Path:

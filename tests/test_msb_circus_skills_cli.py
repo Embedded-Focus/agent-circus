@@ -1,5 +1,6 @@
 """Tests for the ``msb-circus skills`` command and its installer flow."""
 
+import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ import typer
 import msb_circus.cli as cli_module
 from msb_circus.cli import _run_skills_installer
 from msb_circus.config import ImageConfig, MsbConfig, SkillsConfig
+from msb_circus.exceptions import MsbCommandError
 from msb_circus.msb import MsbInvoker
 
 
@@ -32,6 +34,14 @@ class FakeInvoker:
             entry = script.get("installer_entry")
             payload = [entry] if entry else []
             return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+        if args[0] == "run" and "run_error" in script:
+            raise script["run_error"]
+        if (
+            args[0] == "remove"
+            and kwargs.get("check", True)
+            and script.get("remove_fails")
+        ):
+            raise MsbCommandError("remove failed", returncode=1, stderr="")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
 
@@ -226,3 +236,79 @@ def test_skills_command_without_args_prints_usage_and_exits_2(
     assert result.exit_code == 2
     assert "Usage: msb-circus skills" in result.output
     assert str(store) in result.output
+
+
+def test_installer_removes_sandbox_when_boot_fails(installer, capsys) -> None:
+    """A failed boot exits with 1, prints an error and still removes."""
+    behavior, config, _store = installer
+    behavior["run_error"] = MsbCommandError("boot failed", returncode=1, stderr="")
+    with pytest.raises(typer.Exit) as excinfo:
+        _run_skills_installer(
+            cast(MsbInvoker, FakeInvoker(Path("/fake"))), config, ["add", "owner/repo"]
+        )
+    assert excinfo.value.exit_code == 1
+    assert _kinds(behavior["calls"]) == ["image", "list", "run", "remove"]
+    assert "cannot boot the installer sandbox" in capsys.readouterr().err
+
+
+def test_installer_removes_sandbox_on_interrupt_during_boot(installer) -> None:
+    """Ctrl-C during the boot still removes the installer sandbox."""
+    behavior, config, _store = installer
+    behavior["run_error"] = KeyboardInterrupt()
+    with pytest.raises(KeyboardInterrupt):
+        _run_skills_installer(
+            cast(MsbInvoker, FakeInvoker(Path("/fake"))), config, ["add", "owner/repo"]
+        )
+    assert _kinds(behavior["calls"])[-1] == "remove"
+
+
+def test_installer_fails_cleanly_when_leftover_removal_fails(installer, capsys) -> None:
+    """A failing removal of a stopped leftover exits with 1, no boot."""
+    behavior, config, _store = installer
+    behavior["installer_entry"] = {"name": "circus-skills", "status": "Stopped"}
+    behavior["remove_fails"] = True
+    with pytest.raises(typer.Exit) as excinfo:
+        _run_skills_installer(
+            cast(MsbInvoker, FakeInvoker(Path("/fake"))), config, ["add", "owner/repo"]
+        )
+    assert excinfo.value.exit_code == 1
+    assert "run" not in _kinds(behavior["calls"])
+    assert "cannot remove the leftover installer sandbox" in capsys.readouterr().err
+
+
+class _TtyIO(io.StringIO):
+    """String stream that claims to be a terminal."""
+
+    def isatty(self) -> bool:
+        return True
+
+
+class _PipeIO(io.StringIO):
+    """String stream that claims not to be a terminal."""
+
+    def isatty(self) -> bool:
+        return False
+
+
+@pytest.mark.parametrize(
+    ("stdin", "stdout", "expected"),
+    [
+        (_TtyIO(), _TtyIO(), True),
+        (_PipeIO(), _TtyIO(), False),
+        (_TtyIO(), _PipeIO(), False),
+    ],
+)
+def test_installer_uses_tty_only_on_a_terminal(
+    installer, monkeypatch: pytest.MonkeyPatch, stdin, stdout, expected
+) -> None:
+    """``--tty`` is sent only when both stdin and stdout are terminals."""
+    behavior, config, _store = installer
+    monkeypatch.setattr(cli_module.sys, "stdin", stdin)
+    monkeypatch.setattr(cli_module.sys, "stdout", stdout)
+    _run_skills_installer(
+        cast(MsbInvoker, FakeInvoker(Path("/fake"))), config, ["list"]
+    )
+    exec_argv = behavior["calls"][3]
+    options = exec_argv[: exec_argv.index("--")]
+    assert ("--tty" in options) is expected
+    assert "--no-tty" not in options

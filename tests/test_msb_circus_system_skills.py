@@ -8,6 +8,7 @@ from msb_circus.system_skills import (
     SYSTEM_SKILLS_GUEST_DIR,
     build_skills_command,
     ensure_store,
+    expand_store_path,
     installer_mounts,
     store_skills_dir,
     system_skill_mounts,
@@ -130,3 +131,20 @@ def test_build_skills_command_rejects_project_subcommands() -> None:
         build_skills_command(["init"])
     with pytest.raises(ValueError, match="add"):
         build_skills_command(["use", "x"])
+
+
+@pytest.mark.parametrize("data_home", ["data", "./rel/share"])
+def test_system_skills_store_ignores_relative_xdg_data_home(
+    tmp_path, data_home: str
+) -> None:
+    """A relative XDG_DATA_HOME is ignored, as the XDG spec requires."""
+    store = system_skills_store(
+        None, environ={"XDG_DATA_HOME": data_home, "HOME": str(tmp_path)}
+    )
+    assert store == tmp_path / ".local/share/msb-circus/system-skills"
+
+
+def test_expand_store_path_rejects_unknown_user() -> None:
+    """``~user`` with an unknown user raises ConfigurationError."""
+    with pytest.raises(ConfigurationError, match="cannot be expanded"):
+        expand_store_path("~no-such-user-msb-circus/skills")
