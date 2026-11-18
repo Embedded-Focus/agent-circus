@@ -198,6 +198,8 @@ flowchart TB
         webshell["webshell.py / websocket.py<br/>browser shells: token, Origin check,<br/>PTY + msb exec --tty, RFC 6455 server"]
         routerb["router.py<br/>router install script, base64 transport"]
         tracing["tracing.py<br/>TraceSession: resource samples,<br/>ACP transport events, payloads"]
+        skills["system_skills.py / skills_installer.py<br/>system skill store,
+        mounts, installer sandbox"]
     end
 
     msb["msb.py<br/>resolve binary, version check,<br/>MsbInvoker, remediation hints"]
@@ -207,6 +209,7 @@ flowchart TB
     cli --> sandbox & execb & images & ps
     cli --> ssh & hosts & hostports & tracing & gitc
     cli --> proxyb & routerb
+    cli --> skills
     proxyb --> stats & dash
     dash --> webshell
     cli --> msb

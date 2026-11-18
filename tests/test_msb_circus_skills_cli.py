@@ -1,19 +1,18 @@
-"""Tests for the ``msb-circus skills`` command and its installer flow."""
+"""Tests for the ``msb-circus skills`` CLI command (typer layer)."""
 
-import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar, cast
 
 import pytest
-import typer
+from typer.testing import CliRunner
 
 import msb_circus.cli as cli_module
-from msb_circus.cli import _run_skills_installer
 from msb_circus.config import ImageConfig, MsbConfig, SkillsConfig
 from msb_circus.exceptions import MsbCommandError
 from msb_circus.msb import MsbInvoker
+from msb_circus.skills_installer import InstallerError
 
 
 class FakeInvoker:
@@ -47,7 +46,7 @@ class FakeInvoker:
 
 @pytest.fixture
 def installer(tmp_path, monkeypatch: pytest.MonkeyPatch):
-    """Set up a fake invoker, a store under XDG_DATA_HOME and fake exec.
+    """Set up a fake invoker, a store under XDG_DATA_HOME and a fake run.
 
     :param tmp_path: Per-test temporary directory.
     :param monkeypatch: Pytest environment patch helper.
@@ -56,259 +55,55 @@ def installer(tmp_path, monkeypatch: pytest.MonkeyPatch):
     FakeInvoker.behavior = {}
     store = tmp_path / "xdg-data" / "msb-circus" / "system-skills"
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
-    monkeypatch.setattr(cli_module, "MsbInvoker", FakeInvoker)
     config = MsbConfig(
         image=ImageConfig(tag="img:1"), skills=SkillsConfig(store=str(store))
     )
-    calls = FakeInvoker.behavior["calls"] = []
+    behavior = FakeInvoker.behavior
+    behavior["calls"] = []
 
-    def fake_subprocess_run(argv, **kwargs):
-        calls.append(list(argv))
-        return SimpleNamespace(returncode=FakeInvoker.behavior.get("exec_rc", 0))
+    def fake_resolve_invoker(_cwd: Path):
+        monkeypatch.setattr(cli_module, "MsbInvoker", FakeInvoker)
+        return config, cast(MsbInvoker, FakeInvoker(Path("/fake")))
 
-    monkeypatch.setattr(cli_module.subprocess, "run", fake_subprocess_run)
-    return FakeInvoker.behavior, config, store
+    def fake_run_skills_installer(invoker, config, args):
+        behavior["installer_args"] = list(args)
+        behavior["calls"].append(["run-skills-installer", *args])
+        return behavior.get("installer_rc", 0)
 
-
-def _kinds(calls: list[list]) -> list[str]:
-    """Return the subcommand of each recorded call (binary argv aware).
-
-    :param calls: Recorded argv lists (invoker calls and full exec argv).
-    :returns: Subcommand names ("exec" for the full exec argv).
-    """
-    return [c[1] if str(c[0]) == "/fake" else c[0] for c in calls]
+    monkeypatch.setattr(cli_module, "_resolve_invoker", fake_resolve_invoker)
+    monkeypatch.setattr(cli_module, "run_skills_installer", fake_run_skills_installer)
+    return behavior, config, store
 
 
-def test_installer_happy_path_boots_mounts_and_removes(installer) -> None:
-    """inspect, list, run, exec and remove run in that order."""
-    behavior, config, store = installer
-    rc = _run_skills_installer(
-        cast(MsbInvoker, FakeInvoker(Path("/fake"))), config, ["add", "owner/repo"]
-    )
-    assert rc == 0
-    kinds = _kinds(behavior["calls"])
-    assert kinds == ["image", "list", "run", "exec", "remove"]
-    run_call = behavior["calls"][2]
-    assert run_call[run_call.index("--name") + 1] == "circus-skills"
-    assert run_call[run_call.index("--volume") + 1] == (
-        f"{store / '.agents'}:/root/.agents"
-    )
-    envs = [run_call[i + 1] for i, arg in enumerate(run_call) if arg == "--env"]
-    assert sorted(envs) == [
-        "DISABLE_TELEMETRY=1",
-        "DO_NOT_TRACK=1",
-    ]
-    for flag in ("--mount-owned", "--mount-named", "--port", "--vsock"):
-        assert flag not in run_call
-
-
-def test_installer_exec_receives_built_command(installer) -> None:
-    """The forwarded exec argv ends with the built skills command."""
-    behavior, config, _store = installer
-    _run_skills_installer(
-        cast(MsbInvoker, FakeInvoker(Path("/fake"))), config, ["add", "owner/repo"]
-    )
-    exec_argv = behavior["calls"][3]
-    assert exec_argv[-5:] == ["--", "skills", "add", "-g", "owner/repo"]
-
-
-def test_installer_propagates_skills_exit_code(installer) -> None:
-    """A failing skills CLI exit code is returned; remove still runs."""
-    behavior, config, _store = installer
-    behavior["exec_rc"] = 3
-    rc = _run_skills_installer(
-        cast(MsbInvoker, FakeInvoker(Path("/fake"))), config, ["list"]
-    )
-    assert rc == 3
-    assert behavior["calls"][-1][0] == "remove"
-
-
-def test_installer_removes_sandbox_on_keyboard_interrupt(
-    installer, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Ctrl-C during the skills run still removes the installer sandbox."""
-
-    def raise_interrupt(argv, **kwargs):
-        raise KeyboardInterrupt
-
-    behavior, config, _store = installer
-    monkeypatch.setattr(cli_module.subprocess, "run", raise_interrupt)
-    with pytest.raises(KeyboardInterrupt):
-        _run_skills_installer(
-            cast(MsbInvoker, FakeInvoker(Path("/fake"))), config, ["add", "owner/repo"]
-        )
-    assert behavior["calls"][-1][0] == "remove"
-
-
-def test_installer_fails_while_another_installer_is_running(installer, capsys) -> None:
-    """A running circus-skills sandbox in the list blocks with exit 1."""
-    behavior, config, _store = installer
-    behavior["installer_entry"] = {"name": "circus-skills", "status": "Running"}
-    with pytest.raises(typer.Exit) as excinfo:
-        _run_skills_installer(
-            cast(MsbInvoker, FakeInvoker(Path("/fake"))), config, ["add", "owner/repo"]
-        )
-    assert excinfo.value.exit_code == 1
-    kinds = _kinds(behavior["calls"])
-    assert "run" not in kinds
-    assert "another skills command is running" in capsys.readouterr().err
-
-
-def test_installer_removes_stopped_installer_before_boot(installer) -> None:
-    """A stopped installer sandbox is removed, then the boot runs."""
-    behavior, config, _store = installer
-    behavior["installer_entry"] = {"name": "circus-skills", "status": "Stopped"}
-    rc = _run_skills_installer(
-        cast(MsbInvoker, FakeInvoker(Path("/fake"))), config, ["add", "owner/repo"]
-    )
-    assert rc == 0
-    kinds = _kinds(behavior["calls"])
-    assert kinds == ["image", "list", "remove", "run", "exec", "remove"]
-
-
-def test_installer_fails_without_cached_image(installer, capsys) -> None:
-    """A missing image fails with exit 1 and never boots a sandbox."""
-    behavior, config, _store = installer
-    behavior["image_rc"] = 1
-    with pytest.raises(typer.Exit) as excinfo:
-        _run_skills_installer(
-            cast(MsbInvoker, FakeInvoker(Path("/fake"))), config, ["add", "owner/repo"]
-        )
-    assert excinfo.value.exit_code == 1
-    kinds = _kinds(behavior["calls"])
-    assert "run" not in kinds
-    assert "msb-circus build first" in capsys.readouterr().err
-
-
-def test_installer_rejects_unknown_subcommand(installer, capsys) -> None:
-    """A project-scoped subcommand exits with code 2 and no msb call."""
-    _behavior, config, _store = installer
-    with pytest.raises(typer.Exit) as excinfo:
-        _run_skills_installer(
-            cast(MsbInvoker, FakeInvoker(Path("/fake"))), config, ["init"]
-        )
-    assert excinfo.value.exit_code == 2
-    assert "Error:" in capsys.readouterr().err
-
-
-def test_skills_command_forwards_args_verbatim(
-    installer, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_skills_command_forwards_args_verbatim(installer) -> None:
     """All extra CLI arguments arrive at the installer unchanged."""
-    from typer.testing import CliRunner
-
-    behavior, config, _store = installer
-    monkeypatch.setattr(
-        cli_module,
-        "_resolve_invoker",
-        lambda _cwd: (config, cast(MsbInvoker, FakeInvoker(Path("/fake")))),
-    )
+    behavior, _config, _store = installer
     result = CliRunner().invoke(
         cli_module.app, ["skills", "add", "owner/repo", "--skill", "x", "-y"]
     )
     assert result.exit_code == 0
-    exec_argv = behavior["calls"][3]
-    assert exec_argv[-8:] == [
-        "--",
-        "skills",
-        "add",
-        "-g",
-        "owner/repo",
-        "--skill",
-        "x",
-        "-y",
-    ]
+    assert behavior["installer_args"] == ["add", "owner/repo", "--skill", "x", "-y"]
 
 
-def test_skills_command_without_args_prints_usage_and_exits_2(
-    installer, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_skills_command_without_args_prints_usage_and_exits_2(installer) -> None:
     """Bare ``skills`` prints the store path and exits with code 2."""
-    from typer.testing import CliRunner
-
-    _behavior, config, store = installer
-    monkeypatch.setattr(
-        cli_module,
-        "_resolve_invoker",
-        lambda _cwd: (config, cast(MsbInvoker, FakeInvoker(Path("/fake")))),
-    )
+    _behavior, _config, store = installer
     result = CliRunner().invoke(cli_module.app, ["skills"])
     assert result.exit_code == 2
     assert "Usage: msb-circus skills" in result.output
     assert str(store) in result.output
 
 
-def test_installer_removes_sandbox_when_boot_fails(installer, capsys) -> None:
-    """A failed boot exits with 1, prints an error and still removes."""
-    behavior, config, _store = installer
-    behavior["run_error"] = MsbCommandError("boot failed", returncode=1, stderr="")
-    with pytest.raises(typer.Exit) as excinfo:
-        _run_skills_installer(
-            cast(MsbInvoker, FakeInvoker(Path("/fake"))), config, ["add", "owner/repo"]
-        )
-    assert excinfo.value.exit_code == 1
-    assert _kinds(behavior["calls"]) == ["image", "list", "run", "remove"]
-    assert "cannot boot the installer sandbox" in capsys.readouterr().err
-
-
-def test_installer_removes_sandbox_on_interrupt_during_boot(installer) -> None:
-    """Ctrl-C during the boot still removes the installer sandbox."""
-    behavior, config, _store = installer
-    behavior["run_error"] = KeyboardInterrupt()
-    with pytest.raises(KeyboardInterrupt):
-        _run_skills_installer(
-            cast(MsbInvoker, FakeInvoker(Path("/fake"))), config, ["add", "owner/repo"]
-        )
-    assert _kinds(behavior["calls"])[-1] == "remove"
-
-
-def test_installer_fails_cleanly_when_leftover_removal_fails(installer, capsys) -> None:
-    """A failing removal of a stopped leftover exits with 1, no boot."""
-    behavior, config, _store = installer
-    behavior["installer_entry"] = {"name": "circus-skills", "status": "Stopped"}
-    behavior["remove_fails"] = True
-    with pytest.raises(typer.Exit) as excinfo:
-        _run_skills_installer(
-            cast(MsbInvoker, FakeInvoker(Path("/fake"))), config, ["add", "owner/repo"]
-        )
-    assert excinfo.value.exit_code == 1
-    assert "run" not in _kinds(behavior["calls"])
-    assert "cannot remove the leftover installer sandbox" in capsys.readouterr().err
-
-
-class _TtyIO(io.StringIO):
-    """String stream that claims to be a terminal."""
-
-    def isatty(self) -> bool:
-        return True
-
-
-class _PipeIO(io.StringIO):
-    """String stream that claims not to be a terminal."""
-
-    def isatty(self) -> bool:
-        return False
-
-
-@pytest.mark.parametrize(
-    ("stdin", "stdout", "expected"),
-    [
-        (_TtyIO(), _TtyIO(), True),
-        (_PipeIO(), _TtyIO(), False),
-        (_TtyIO(), _PipeIO(), False),
-    ],
-)
-def test_installer_uses_tty_only_on_a_terminal(
-    installer, monkeypatch: pytest.MonkeyPatch, stdin, stdout, expected
+def test_skills_command_maps_installer_error_to_exit_code(
+    installer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``--tty`` is sent only when both stdin and stdout are terminals."""
-    behavior, config, _store = installer
-    monkeypatch.setattr(cli_module.sys, "stdin", stdin)
-    monkeypatch.setattr(cli_module.sys, "stdout", stdout)
-    _run_skills_installer(
-        cast(MsbInvoker, FakeInvoker(Path("/fake"))), config, ["list"]
-    )
-    exec_argv = behavior["calls"][3]
-    options = exec_argv[: exec_argv.index("--")]
-    assert ("--tty" in options) is expected
-    assert "--no-tty" not in options
+    """An InstallerError's exit code and text reach the CLI output."""
+
+    def raise_installer_error(invoker, config, args):
+        raise InstallerError("x", exit_code=2)
+
+    _behavior, _config, _store = installer
+    monkeypatch.setattr(cli_module, "run_skills_installer", raise_installer_error)
+    result = CliRunner().invoke(cli_module.app, ["skills", "add", "owner/repo"])
+    assert result.exit_code == 2
+    assert "Error: x" in result.output
