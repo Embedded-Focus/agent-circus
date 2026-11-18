@@ -229,6 +229,16 @@ ENV NODE_OPTIONS=--max-old-space-size=4096
 # layer; the hardlinked binary keeps its data. The AVX2 choice is made on the
 # build host, as before. The final --version call fails the build if a future
 # opencode release starts to resolve the platform package at runtime.
+#
+# claude-agent-acp brings its own copy of the claude binary: the
+# claude-agent-sdk platform packages each hold a 335 MB claude binary. Each
+# one becomes a symlink to the global claude-code binary. The adapter still
+# finds the CLI in the SDK package, so MCP server config keeps going over
+# stdin; CLAUDE_CODE_EXECUTABLE would put it on the command line, and plain
+# msb exec shells do not get the image ENV anyway. The SDK names the CLI
+# version it was built against (claudeCodeVersion); the build fails if the
+# global claude-code is older than that, or if the shared binary does not
+# start.
 RUN --mount=type=cache,target=/root/.npm \
     npm install --global \
         --allow-scripts=@opencode/cli,@anthropic-ai/claude-code \
@@ -239,8 +249,24 @@ RUN --mount=type=cache,target=/root/.npm \
         @agentclientprotocol/codex-acp@2.7.0 \
         @earendil-works/pi-coding-agent@1.5.2 pi-acp@0.0.34 \
         skills@1.9.0 \
-    && rm -rf /usr/local/lib/node_modules/@opencode/cli/node_modules/@opencode/cli-* \
-    && opencode --version >/dev/null
+    && g=/usr/local/lib/node_modules \
+    && rm -rf "$g"/@opencode/cli/node_modules/@opencode/cli-* \
+    && opencode --version >/dev/null \
+    && claude_acp="$g/@agentclientprotocol/claude-agent-acp/node_modules/@anthropic-ai" \
+    && node -e ' \
+        const [sdk, cli] = process.argv.slice(1).map((p) => require(p)); \
+        const parts = (v) => v.split(".").map(Number); \
+        const [h, w] = [parts(cli.version), parts(sdk.claudeCodeVersion)]; \
+        if ((h[0] - w[0] || h[1] - w[1] || h[2] - w[2]) < 0) { \
+            console.error(`claude-code ${cli.version} is older than ${sdk.claudeCodeVersion}, which claude-agent-sdk expects`); \
+            process.exit(1); \
+        }' \
+        "$claude_acp/claude-agent-sdk/package.json" \
+        "$g/@anthropic-ai/claude-code/package.json" \
+    && for d in "$claude_acp"/claude-agent-sdk-linux-*; do \
+        ln -sf "$g/@anthropic-ai/claude-code/bin/claude.exe" "$d/claude" \
+        && "$d/claude" --version >/dev/null || exit 1; \
+    done
 
 # No main program: s6-overlay only supervises the services. With a CMD,
 # s6-overlay shuts the sandbox down when that program exits (a detached
