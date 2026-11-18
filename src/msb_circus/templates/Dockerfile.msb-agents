@@ -220,7 +220,8 @@ RUN npm install --global \
         @agentclientprotocol/claude-agent-acp@0.107.0 \
         @openai/codex@0.169.0 \
         @agentclientprotocol/codex-acp@2.6.0 \
-        @earendil-works/pi-coding-agent@1.5.2 pi-acp@0.0.34
+        @earendil-works/pi-coding-agent@1.5.2 pi-acp@0.0.34 \
+        skills@1.9.0
 
 # No main program: s6-overlay only supervises the services. With a CMD,
 # s6-overlay shuts the sandbox down when that program exits (a detached

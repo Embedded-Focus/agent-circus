@@ -261,6 +261,13 @@ MSB_AGENTS_PINS: list[VersionPin] = [
         source="npm",
     ),
     VersionPin(
+        name="skills (msb-agents)",
+        repo="skills",
+        file=MSB_AGENTS_DOCKERFILE,
+        pattern=re.compile(r"\sskills@([0-9][0-9.]*)"),
+        source="npm",
+    ),
+    VersionPin(
         name="codex-acp (msb-agents)",
         repo="@agentclientprotocol/codex-acp",
         file=MSB_AGENTS_DOCKERFILE,
