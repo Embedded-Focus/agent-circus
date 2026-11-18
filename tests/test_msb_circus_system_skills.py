@@ -177,3 +177,19 @@ def test_installer_lock_path_ignores_relative_xdg_state_home(
         environ={"XDG_STATE_HOME": state_home, "HOME": str(tmp_path)}
     )
     assert path == tmp_path / ".local/state/msb-circus/skills-installer.lock"
+
+
+def test_build_skills_command_rejects_copy() -> None:
+    """``--copy`` writes copies into the throwaway installer and is rejected."""
+    with pytest.raises(ValueError, match="--copy"):
+        build_skills_command(["add", "owner/repo", "--copy"])
+
+
+def test_build_skills_command_accepts_add_without_copy() -> None:
+    """A plain add still builds its argv with ``-g``."""
+    assert build_skills_command(["add", "owner/repo"]) == [
+        "skills",
+        "add",
+        "-g",
+        "owner/repo",
+    ]

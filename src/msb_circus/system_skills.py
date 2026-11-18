@@ -160,18 +160,26 @@ def build_skills_command(args: Sequence[str]) -> list[str]:
     Subcommands that write the store get ``-g`` inserted after the
     subcommand (skipped when ``-g``/``--global`` is already present);
     read-only subcommands and help/version flags pass through unchanged.
-    Everything else is rejected: those commands work on a project
-    directory, which the installer sandbox throws away after the run.
+    ``--copy`` is rejected: the skills CLI then writes copies for
+    non-universal agents outside ``~/.agents`` (into the throwaway
+    installer), where they are lost. Everything else is rejected: those
+    commands work on a project directory, which the installer sandbox
+    throws away after the run.
 
     :param args: Forwarded user arguments (subcommand first).
     :returns: argv starting with ``skills``.
-    :raises ValueError: If *args* is empty or names a disallowed
-        subcommand.
+    :raises ValueError: If *args* is empty, contains ``--copy``, or
+        names a disallowed subcommand.
     """
     if not args:
         raise ValueError(
             "Usage: msb-circus skills add|remove|list|update|check|find "
             "[arguments]. Try 'msb-circus skills --help'."
+        )
+    if "--copy" in args[1:]:
+        raise ValueError(
+            "--copy is not supported: copies for other agents land outside "
+            "the system skill store and are lost"
         )
     subcommand = args[0]
     if subcommand in GLOBAL_SUBCOMMANDS:
