@@ -67,10 +67,14 @@ def installer_lock(path: Path) -> Generator[None, None, None]:
     lock file itself is kept (only its lock is released).
 
     :param path: Lock file path (see :func:`system_skills.installer_lock_path`).
-    :raises InstallerError: When another process holds the lock.
+    :raises InstallerError: When another process holds the lock, or the
+        lock file cannot be created or opened.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = open(path, "a")  # noqa: SIM115 - closed in the finally below
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = open(path, "a")  # noqa: SIM115 - closed in the finally below
+    except OSError as e:
+        raise InstallerError(f"cannot open the installer lock {path}: {e}") from e
     try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)

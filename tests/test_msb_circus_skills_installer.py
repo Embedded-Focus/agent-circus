@@ -153,6 +153,35 @@ def test_installer_removes_stopped_installer_before_boot(installer) -> None:
     assert kinds == ["image", "list", "remove", "run", "exec", "remove"]
 
 
+def test_installer_removes_running_leftover_before_boot(installer) -> None:
+    """With the lock held, even a running leftover is removed, then booted."""
+    behavior, config, _store = installer
+    behavior["installer_entry"] = {"name": "circus-skills", "status": "Running"}
+    rc = run_skills_installer(
+        cast(MsbInvoker, FakeInvoker(Path("/fake"))), config, ["add", "owner/repo"]
+    )
+    assert rc == 0
+    kinds = _kinds(behavior["calls"])
+    assert kinds == ["image", "list", "remove", "run", "exec", "remove"]
+
+
+def test_installer_fails_cleanly_when_lock_cannot_be_opened(
+    installer, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unusable state directory gives an InstallerError, no traceback."""
+    behavior, config, _store = installer
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("")
+    monkeypatch.setenv("XDG_STATE_HOME", str(blocker))
+    with pytest.raises(InstallerError) as excinfo:
+        run_skills_installer(
+            cast(MsbInvoker, FakeInvoker(Path("/fake"))), config, ["add", "owner/repo"]
+        )
+    assert excinfo.value.exit_code == 1
+    assert "cannot open the installer lock" in str(excinfo.value)
+    assert not [c for c in behavior["calls"] if c[0] in ("list", "run")]
+
+
 def test_installer_fails_without_cached_image(installer) -> None:
     """A missing image fails with exit 1 and never boots a sandbox."""
     behavior, config, _store = installer
