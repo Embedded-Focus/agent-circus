@@ -251,7 +251,7 @@ sandbox. Use relative symlinks; installers such as `npx skills` already
 do this. Absolute symlinks to host paths break inside the sandbox;
 `up` and `start` warn about skill links that do not resolve there.
 
-- User skills in `~/.agents/skills`, `~/.pi/agent/skills`,
+- User skills in `~/.pi/agent/skills`,
   `~/.config/opencode/skills` and `~/.config/opencode/skill` are mounted
   read-only at the same paths below `/root`. A skill changed in the
   sandbox would later run on your host, so the mount refuses writes.
@@ -265,6 +265,45 @@ do this. Absolute symlinks to host paths break inside the sandbox;
 - Skills that an agent writes in the sandbox land in the project.
   Review them, then move them to your user directory on the host if you
   want them everywhere.
+
+#### System skills
+
+System skills are skills that every sandbox sees. They live in a store
+on the host, by default `~/.local/share/msb-circus/system-skills/`
+(below `$XDG_DATA_HOME` when that is set). Set `[msb.skills] store` to
+use another absolute path (`~` is allowed).
+
+Manage the store with:
+
+``` shell
+msb-circus skills add <owner>/<repo> --skill <name> -y
+msb-circus skills list
+msb-circus skills remove <name> -y
+msb-circus skills update
+msb-circus skills check
+msb-circus skills find <query>
+```
+
+Each command runs the `skills` CLI inside a short-lived sandbox that
+mounts the store read-write, so the host needs no Node.js. You do not
+type `-g`; msb-circus adds it for you. Every command boots a small VM,
+which takes a few seconds. The installer uses the configured network
+profile and needs access to npm and the git host. Private repositories
+do not work: the installer has no SSH agent and no git credentials.
+dockerd inside the installer has no disk and fails; that is harmless.
+A running agent may briefly see a half-copied skill during an install.
+
+Agents see the skills at `/root/.agents/skills`, read-only. msb enforces
+this on the host side, so agents cannot change them. A new skill shows
+up in a running sandbox; restart the agent session to load it.
+Sandboxes created before this feature need one
+`msb-circus rm -f && msb-circus up`.
+
+Codex, Pi and OpenCode read these skills. Claude Code does not yet.
+
+Your host `~/.agents/skills` directory is **not** used. msb-circus is
+independent of it. To move skills from there, install them again with
+`msb-circus skills add`.
 
 ### ACP Sessions
 
@@ -608,6 +647,10 @@ memory = "4G"
 mode = "public,private"                # default; unrestricted network access
 # trust_host_cas = false              # trust the host's CAs; see
                                        # "CA Certificates"
+
+[msb.skills]
+# store = "~/.local/share/msb-circus/system-skills"  # system skill store;
+                                       # see "System skills"
 
 [[port_forwards]]                       # publish a guest port on the host
 guest_port = 8000                       # or container_port (agent-circus style)

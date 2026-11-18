@@ -14,7 +14,7 @@ import tempfile
 import time
 import urllib.parse
 import webbrowser
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Annotated
@@ -194,7 +194,11 @@ from .ssh_agent import (
     ssh_sandbox_env,
 )
 from .system_skills import (
+    INSTALLER_ENV,
+    INSTALLER_SANDBOX_NAME,
+    build_skills_command,
     ensure_store,
+    installer_mounts,
     store_skills_dir,
     system_skill_mounts,
     system_skills_store,
@@ -842,6 +846,145 @@ def import_(
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
     typer.echo(f"✓ Imported {tar}")
+
+
+@app.command(
+    name="skills",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+    add_help_option=False,
+)
+def skills(ctx: typer.Context) -> None:
+    """Install and manage system skills for all sandboxes (runs the skills CLI in a VM).
+
+    Forwards its arguments to the ``skills`` CLI (npm, vercel-labs/skills)
+    inside a short-lived installer sandbox that mounts the system skill
+    store read-write; ``-g`` is added where the CLI needs it. Every
+    command boots a VM (a few seconds). The installer uses the configured
+    network profile and needs access to npm and the git host; private
+    repositories do not work (no SSH agent, no git credentials). dockerd
+    in the installer has no disk and fails, which is harmless. A running
+    agent may briefly see a half-copied skill during an install.
+    """
+    args = list(ctx.args)
+    if not args:
+        try:
+            config, _invoker = _resolve_invoker(Path.cwd())
+        except MsbCircusError as e:
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(code=1) from e
+        store = system_skills_store(config.skills.store)
+        typer.echo(
+            "Usage: msb-circus skills add|remove|list|update|check|find "
+            "[arguments]\n"
+            f"System skill store: {store}",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    try:
+        config, invoker = _resolve_invoker(Path.cwd())
+    except MsbCircusError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    returncode = _run_skills_installer(invoker, config, args)
+    if returncode != 0:
+        raise typer.Exit(code=returncode)
+
+
+def _run_skills_installer(
+    invoker: MsbInvoker, config: MsbConfig, args: Sequence[str]
+) -> int:
+    """Run the ``skills`` CLI in the short-lived installer sandbox.
+
+    Boot a minimal sandbox (``circus-skills``) with only the system
+    skill store mounted read-write, run the command interactively in it,
+    and always remove the sandbox afterwards (also on Ctrl-C). The
+    interactive exec deliberately bypasses :meth:`MsbInvoker.run`, which
+    captures output and closes stdin.
+
+    :param invoker: Invoker bound to the resolved msb binary.
+    :param config: Resolved msb-circus configuration.
+    :param args: Forwarded user arguments (subcommand first).
+    :returns: Exit code of the ``skills`` CLI.
+    :raises typer.Exit: On a disallowed subcommand (code 2), a missing
+        image or msb failure (code 1), or when another installer sandbox
+        is running (code 1).
+    """
+    try:
+        command = build_skills_command(args)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=2) from e
+    store = system_skills_store(config.skills.store)
+    try:
+        ensure_store(store)
+    except OSError as e:
+        typer.echo(
+            f"Error: cannot create the system skill store {store}: {e}", err=True
+        )
+        raise typer.Exit(code=1) from e
+    probe = invoker.run(build_image_inspect_args(config.image.tag), check=False)
+    if probe.returncode != 0:
+        typer.echo(
+            f"Error: image {config.image.tag} is not in the msb cache. Run "
+            "msb-circus build first.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    try:
+        sandboxes = _list_sandboxes(invoker, running_only=False)
+    except MsbCircusError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    existing = next((s for s in sandboxes if s.name == INSTALLER_SANDBOX_NAME), None)
+    if existing is not None:
+        if (existing.status or "").lower() == "running":
+            typer.echo(
+                "Error: another skills command is running (sandbox "
+                f"{INSTALLER_SANDBOX_NAME}). If no other command runs, "
+                "remove it with: msb remove --force "
+                f"{INSTALLER_SANDBOX_NAME}",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        invoker.run(build_remove_args(INSTALLER_SANDBOX_NAME, force=True))
+    logger.info(
+        "Running the skills CLI in sandbox %s (store: %s)...",
+        INSTALLER_SANDBOX_NAME,
+        store,
+    )
+    invoker.run(
+        build_run_args(
+            name=INSTALLER_SANDBOX_NAME,
+            image=config.image.tag,
+            memory=config.sandbox.memory,
+            cpus=config.sandbox.cpus,
+            mounts=installer_mounts(store),
+            net=config.network.mode,
+            init=(None if config.sandbox.init == INIT_NONE else config.sandbox.init),
+            trust_host_cas=config.network.trust_host_cas,
+            env=INSTALLER_ENV,
+            workdir="/root",
+        )
+    )
+    tty = True if sys.stdin.isatty() and sys.stdout.isatty() else None
+    argv = [
+        str(invoker.binary),
+        *build_exec_args(INSTALLER_SANDBOX_NAME, command, workdir="/root", tty=tty),
+    ]
+    try:
+        returncode = subprocess.run(argv, check=False).returncode
+    finally:
+        try:
+            invoker.run(
+                build_remove_args(INSTALLER_SANDBOX_NAME, force=True), check=False
+            )
+        except MsbCircusError as e:
+            logger.debug(
+                "Removing the installer sandbox %s failed: %s",
+                INSTALLER_SANDBOX_NAME,
+                e,
+            )
+    return returncode
 
 
 def _probe_dockerd(
