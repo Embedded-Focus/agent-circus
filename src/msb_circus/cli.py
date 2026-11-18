@@ -863,12 +863,12 @@ def skills(ctx: typer.Context) -> None:
     agent may briefly see a half-copied skill during an install.
     """
     args = list(ctx.args)
+    try:
+        config = load_config(Path.cwd())
+    except MsbCircusError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
     if not args:
-        try:
-            config, _invoker = _resolve_invoker(Path.cwd())
-        except MsbCircusError as e:
-            typer.echo(f"Error: {e}", err=True)
-            raise typer.Exit(code=1) from e
         store = system_skills_store(config.skills.store)
         typer.echo(
             "Usage: msb-circus skills add|remove|list|update|check|find "
@@ -878,10 +878,12 @@ def skills(ctx: typer.Context) -> None:
         )
         raise typer.Exit(code=2)
     try:
-        config, invoker = _resolve_invoker(Path.cwd())
+        binary = resolve_msb_binary(config.binary)
+        check_version(binary)
     except MsbCircusError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
+    invoker = MsbInvoker(binary)
     try:
         returncode = run_skills_installer(invoker, config, args)
     except InstallerError as e:
@@ -2052,11 +2054,12 @@ def _warn_on_broken_skill_links(config: MsbConfig, workspace: Path) -> None:
     """
     home = Path(os.environ.get("HOME", str(Path.home())))
     try:
+        system_mounts = _system_skill_mounts(config, create=False)
         mounts = (
             effective_mounts(config, workspace)
             + resolve_agent_config_mounts(warn_missing=False)
             + resolve_agent_skill_mounts()
-            + _system_skill_mounts(config, create=False)
+            + system_mounts
         )
     except ConfigurationError as e:
         logger.debug("Skill link check skipped: %s", e)
@@ -2064,7 +2067,7 @@ def _warn_on_broken_skill_links(config: MsbConfig, workspace: Path) -> None:
     skill_dirs = (
         [workspace / d for d in PROJECT_SKILL_DIRS]
         + [Path(host) for host, _ in resolve_agent_skill_mounts()]
-        + [Path(host) for host, _ in _system_skill_mounts(config, create=False)]
+        + [Path(host) for host, _ in system_mounts]
         + [home / d for d in CONFIG_MOUNT_SKILL_DIRS]
     )
     broken = find_broken_skill_links(skill_dirs, mounts)

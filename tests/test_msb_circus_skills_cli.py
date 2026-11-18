@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import ClassVar, cast
+from typing import ClassVar
 
 import pytest
 from typer.testing import CliRunner
@@ -11,7 +11,6 @@ from typer.testing import CliRunner
 import msb_circus.cli as cli_module
 from msb_circus.config import ImageConfig, MsbConfig, SkillsConfig
 from msb_circus.exceptions import MsbCommandError
-from msb_circus.msb import MsbInvoker
 from msb_circus.skills_installer import InstallerError
 
 
@@ -61,16 +60,17 @@ def installer(tmp_path, monkeypatch: pytest.MonkeyPatch):
     behavior = FakeInvoker.behavior
     behavior["calls"] = []
 
-    def fake_resolve_invoker(_cwd: Path):
-        monkeypatch.setattr(cli_module, "MsbInvoker", FakeInvoker)
-        return config, cast(MsbInvoker, FakeInvoker(Path("/fake")))
-
     def fake_run_skills_installer(invoker, config, args):
         behavior["installer_args"] = list(args)
         behavior["calls"].append(["run-skills-installer", *args])
         return behavior.get("installer_rc", 0)
 
-    monkeypatch.setattr(cli_module, "_resolve_invoker", fake_resolve_invoker)
+    monkeypatch.setattr(cli_module, "load_config", lambda _cwd: config)
+    monkeypatch.setattr(
+        cli_module, "resolve_msb_binary", lambda _config_binary: Path("/fake")
+    )
+    monkeypatch.setattr(cli_module, "check_version", lambda _binary: "0.7.12")
+    monkeypatch.setattr(cli_module, "MsbInvoker", FakeInvoker)
     monkeypatch.setattr(cli_module, "run_skills_installer", fake_run_skills_installer)
     return behavior, config, store
 
@@ -85,9 +85,16 @@ def test_skills_command_forwards_args_verbatim(installer) -> None:
     assert behavior["installer_args"] == ["add", "owner/repo", "--skill", "x", "-y"]
 
 
-def test_skills_command_without_args_prints_usage_and_exits_2(installer) -> None:
-    """Bare ``skills`` prints the store path and exits with code 2."""
+def test_skills_command_without_args_prints_usage_and_exits_2(
+    installer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bare ``skills`` prints the store path, exits 2, and never resolves msb."""
     _behavior, _config, store = installer
+
+    def fail_resolve(_config_binary: str | None) -> Path:
+        raise AssertionError("resolve_msb_binary must not be called")
+
+    monkeypatch.setattr(cli_module, "resolve_msb_binary", fail_resolve)
     result = CliRunner().invoke(cli_module.app, ["skills"])
     assert result.exit_code == 2
     assert "Usage: msb-circus skills" in result.output
