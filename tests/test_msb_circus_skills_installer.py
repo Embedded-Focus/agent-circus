@@ -1,5 +1,6 @@
 """Tests for the skills installer module (sandbox boot, exec, cleanup)."""
 
+import fcntl
 import io
 import json
 from pathlib import Path
@@ -55,6 +56,7 @@ def installer(tmp_path, monkeypatch: pytest.MonkeyPatch):
     FakeInvoker.behavior = {}
     store = tmp_path / "xdg-data" / "msb-circus" / "system-skills"
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
     monkeypatch.setattr(skills_installer, "MsbInvoker", FakeInvoker)
     config = MsbConfig(
         image=ImageConfig(tag="img:1"), skills=SkillsConfig(store=str(store))
@@ -247,3 +249,50 @@ def test_installer_uses_tty_only_on_a_terminal(
     options = exec_argv[: exec_argv.index("--")]
     assert ("--tty" in options) is expected
     assert "--no-tty" not in options
+
+
+def test_installer_fails_when_lock_is_held_elsewhere(installer) -> None:
+    """A lock held by another process fails the run before any msb call."""
+    import os
+
+    behavior, config, _store = installer
+    lock_path = Path(os.environ["XDG_STATE_HOME"]) / "msb-circus/skills-installer.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(InstallerError) as excinfo:
+            run_skills_installer(
+                cast(MsbInvoker, FakeInvoker(Path("/fake"))),
+                config,
+                ["add", "owner/repo"],
+            )
+    assert excinfo.value.exit_code == 1
+    assert "another msb-circus skills command" in str(excinfo.value)
+    # The lock is taken after the image check: no list/boot/exec happens.
+    assert not [c for c in behavior["calls"] if c[0] in ("list", "run", "remove")]
+
+
+def test_installer_releases_the_lock_after_a_successful_run(installer) -> None:
+    """A second run succeeds right after a first one (lock is free)."""
+    _behavior, config, _store = installer
+    first = run_skills_installer(
+        cast(MsbInvoker, FakeInvoker(Path("/fake"))), config, ["list"]
+    )
+    second = run_skills_installer(
+        cast(MsbInvoker, FakeInvoker(Path("/fake"))), config, ["list"]
+    )
+    assert (first, second) == (0, 0)
+
+
+def test_installer_releases_the_lock_after_a_failing_run(installer) -> None:
+    """A failed skills CLI run still releases the lock."""
+    behavior, config, _store = installer
+    behavior["exec_rc"] = 3
+    first = run_skills_installer(
+        cast(MsbInvoker, FakeInvoker(Path("/fake"))), config, ["list"]
+    )
+    behavior["exec_rc"] = 0
+    second = run_skills_installer(
+        cast(MsbInvoker, FakeInvoker(Path("/fake"))), config, ["list"]
+    )
+    assert (first, second) == (3, 0)

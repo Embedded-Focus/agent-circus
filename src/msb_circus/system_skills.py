@@ -89,6 +89,26 @@ def expand_store_path(configured: str) -> Path:
     return path
 
 
+def installer_lock_path(environ: Mapping[str, str] | None = None) -> Path:
+    """Return the host path of the skills installer lock file.
+
+    ``$XDG_STATE_HOME/msb-circus/skills-installer.lock``; if
+    ``XDG_STATE_HOME`` is unset, empty or relative (the XDG spec says to
+    ignore relative values), ``$HOME/.local/state/msb-circus/skills-installer.lock``.
+
+    :param environ: Environment mapping read for ``XDG_STATE_HOME`` and
+        ``HOME``; defaults to :data:`os.environ` so tests can pass a dict.
+    :returns: Lock file path (not created).
+    """
+    env = os.environ if environ is None else environ
+    state_home = env.get("XDG_STATE_HOME")
+    if state_home and Path(state_home).is_absolute():
+        base = Path(state_home)
+    else:
+        base = Path(env.get("HOME", str(Path.home()))) / ".local/state"
+    return base / "msb-circus" / "skills-installer.lock"
+
+
 def store_skills_dir(store: Path) -> Path:
     """Return the skill directory inside the store that agents see.
 
