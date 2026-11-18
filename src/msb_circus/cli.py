@@ -2765,12 +2765,13 @@ def _exit_on_hook_failure() -> None:
     raise typer.Exit(code=1)
 
 
-def _warn_on_unused_host_agent_skills() -> None:
-    """Warn when host ``~/.agents/skills`` holds skills that sandboxes miss.
+def _log_unused_host_agent_skills() -> None:
+    """Log at debug level when host ``~/.agents/skills`` holds skills.
 
-    Host ``~/.agents/skills`` is no longer mounted; users who had skills
-    there lose them in new sandboxes without notice. Non-fatal; reads
-    only host files.
+    Host ``~/.agents/skills`` is no longer mounted, so its skills are
+    missing in new sandboxes. The note is debug level on purpose: host
+    tools (e.g. ``npx skills -g``) also write there, and msb-circus is
+    independent of that directory. Non-fatal; reads only host files.
     """
     skills_dir = Path(os.environ.get("HOME", str(Path.home()))) / ".agents" / "skills"
     try:
@@ -2782,7 +2783,7 @@ def _warn_on_unused_host_agent_skills() -> None:
         return
     if not has_entries:
         return
-    logger.warning(
+    logger.debug(
         "Your host skills in %s are not available in msb-circus sandboxes. "
         "Install them as system skills: msb-circus skills add <source>. "
         "See 'System skills' in README.msb-circus.md.",
@@ -2918,7 +2919,7 @@ def _ensure_sandbox_running(
         _warn_on_mount_drift(invoker, config, name, workspace)
         _warn_on_trust_host_cas_drift(invoker, config, name)
     else:
-        _warn_on_unused_host_agent_skills()
+        _log_unused_host_agent_skills()
         logger.info("Booting sandbox %s from %s...", name, image_tag)
         docker_volume = (
             docker_volume_name_for_workspace(workspace)

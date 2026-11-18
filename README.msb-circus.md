@@ -305,7 +305,8 @@ Sandboxes created before this feature need one
 Codex, Pi and OpenCode read these skills. Claude Code does not yet.
 
 Your host `~/.agents/skills` directory is **not** used. msb-circus is
-independent of it, and `up` warns when that directory holds skills. To
+independent of it; with `--log-level DEBUG`, `up` notes when that
+directory holds skills. To
 move skills from there, install them again with
 `msb-circus skills add`.
 
