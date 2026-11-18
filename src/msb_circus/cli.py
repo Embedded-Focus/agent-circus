@@ -2765,6 +2765,31 @@ def _exit_on_hook_failure() -> None:
     raise typer.Exit(code=1)
 
 
+def _warn_on_unused_host_agent_skills() -> None:
+    """Warn when host ``~/.agents/skills`` holds skills that sandboxes miss.
+
+    Host ``~/.agents/skills`` is no longer mounted; users who had skills
+    there lose them in new sandboxes without notice. Non-fatal; reads
+    only host files.
+    """
+    skills_dir = Path(os.environ.get("HOME", str(Path.home()))) / ".agents" / "skills"
+    try:
+        has_entries = (
+            skills_dir.is_dir() and next(skills_dir.iterdir(), None) is not None
+        )
+    except OSError as e:
+        logger.debug("Could not read host skill directory %s: %s", skills_dir, e)
+        return
+    if not has_entries:
+        return
+    logger.warning(
+        "Your host skills in %s are not available in msb-circus sandboxes. "
+        "Install them as system skills: msb-circus skills add <source>. "
+        "See 'System skills' in README.msb-circus.md.",
+        skills_dir,
+    )
+
+
 def _ensure_sandbox_running(
     invoker: MsbInvoker,
     config: MsbConfig,
@@ -2893,6 +2918,7 @@ def _ensure_sandbox_running(
         _warn_on_mount_drift(invoker, config, name, workspace)
         _warn_on_trust_host_cas_drift(invoker, config, name)
     else:
+        _warn_on_unused_host_agent_skills()
         logger.info("Booting sandbox %s from %s...", name, image_tag)
         docker_volume = (
             docker_volume_name_for_workspace(workspace)
