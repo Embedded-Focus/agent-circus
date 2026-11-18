@@ -1136,6 +1136,9 @@ msb-circus proxy --shell            # also allow browser shells (see below)
 The proxy port is not a config file key. The order is: `--port`, then
 `MSB_CIRCUS_PROXY_PORT`, then `7700`.
 
+To keep the proxy running in the background, see
+[Run as a systemd user service](#run-as-a-systemd-user-service).
+
 List the URLs of this workspace's exposed daemons:
 
 ``` shell
@@ -1151,6 +1154,92 @@ with a pointer to the dashboard. This is a DNS rebinding guard.
 To stop a daemon from being reachable through the proxy, set
 `expose = false` on its `[[msb.daemons]]` entry. A daemon without a
 `port` is never exposed.
+
+### Run as a systemd user service
+
+The proxy is a foreground process. A systemd **user service** keeps it
+running in the background, starts it at login, and restarts it when it
+crashes. No root rights are needed; the service runs as your user.
+
+Start without `--shell`. The dashboard works, browser shells stay off:
+
+``` ini
+# ~/.config/systemd/user/msb-circus-proxy.service
+[Unit]
+Description=msb-circus central proxy
+
+[Service]
+ExecStart=%h/.local/bin/msb-circus proxy --workspace %h/devel/myproject
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+```
+
+Notes on the unit file:
+
+- `ExecStart` needs the **absolute path** of the `msb-circus` program
+  (`command -v msb-circus`). A user service does not read your shell
+  profile, so `PATH` is minimal. msb-circus then finds the `msb`
+  binary in the bundled microsandbox install, through `binary` in your
+  config, or on `PATH`; set `binary` in the config when in doubt.
+- `--workspace` points at the workspace whose sandbox URLs you want
+  (any directory with an `agent-circus.toml`). The proxy serves **all**
+  sandboxes of your user, not only this workspace's one; the workspace
+  only picks the config.
+- `%h` is your home directory. Use it instead of `~`: systemd does not
+  expand `~` in `ExecStart`.
+- Set the port with `Environment=MSB_CIRCUS_PROXY_PORT=7701`, or add
+  `--port 7701` to the command line.
+
+Enable and start it:
+
+``` shell
+systemctl --user daemon-reload
+systemctl --user enable --now msb-circus-proxy.service
+journalctl --user -u msb-circus-proxy -f      # follow the logs
+```
+
+The service starts at your next login. To start it at **boot**, before
+you log in, run once:
+
+``` shell
+loginctl enable-linger
+```
+
+#### With shell support
+
+Add `--shell` to the `ExecStart` line. The token file then lives under
+`$XDG_RUNTIME_DIR/msb-circus/shell-token`. systemd sets
+`XDG_RUNTIME_DIR` to `/run/user/<uid>` for the service, so the token
+lands in the same file your terminal sessions use; it is removed at
+reboot, and the service creates a new one at the next start.
+
+Two things change when the proxy runs under systemd instead of your
+terminal:
+
+- The proxy process owns no terminal, so read the dashboard URL with
+  the token from the logs (`journalctl --user -u msb-circus-proxy`), or
+  run `msb-circus dashboard` in any terminal; it reads the same token
+  file and prints the full URL. Rotate the token by deleting the file
+  and running `systemctl --user restart msb-circus-proxy`.
+- Browser shells read `[env]`, `env_passthrough` and `SSH_AUTH_SOCK`
+  from the **environment of the proxy process**. A systemd service
+  does not have your login shell's environment. Pass every variable a
+  shell needs in the unit, for example:
+
+  ``` ini
+  EnvironmentFile=%h/.config/msb-circus/proxy.env
+  Environment=SSH_AUTH_SOCK=%t/ssh-agent.socket
+  ```
+
+  Keep `proxy.env` mode 0600; it holds secrets.
+
+The shell token lets anyone who holds it open a shell in every running
+sandbox of your user. A long-running service holds it for a long time;
+weigh this against the short-lived terminal run described in
+[Browser Shell](#browser-shell).
 
 ### Dashboard
 
@@ -1307,7 +1396,9 @@ Light) by design.
   the first backend; browsers do not do this over plain HTTP/1.1.
 - HTTP/1.x only. No TLS and no HTTP/2 on the proxy port. Non-HTTP
   protocols still need `[[port_forwards]]`.
-- The proxy is a foreground process. There is no auto-start.
+- The proxy is a foreground process. It does not auto-start; run it in a
+  terminal, or wrap it in a
+  [systemd user service](#run-as-a-systemd-user-service).
 - The dashboard only exists while the proxy runs. Traffic history is in
   memory only and covers 10 minutes; it resets when the proxy restarts.
 - Per-sandbox traffic is kept for at most 64 sandboxes; the least
