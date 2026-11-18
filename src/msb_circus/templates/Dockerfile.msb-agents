@@ -36,10 +36,13 @@ COPY --from=docker.io/library/docker:29.10.0-dind@sha256:4bbc7223f81db790097c6de
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         bubblewrap \
+        busybox-static \
         ca-certificates \
         git \
+        htop \
         iptables \
         jq \
+        make \
         openssh-client \
         pigz \
         procps \
