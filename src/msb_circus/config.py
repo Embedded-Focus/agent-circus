@@ -1769,14 +1769,72 @@ def apply_worktree_mirror_default(config: MsbConfig, workspace: Path) -> MsbConf
     return config
 
 
+def load_user_skills_config(
+    environ: dict[str, str] | None = None,
+) -> SkillsConfig:
+    """Read ``[msb.skills]`` from the user-global config only.
+
+    The system skill store is the same for all projects, so the project
+    config is deliberately not consulted. Config layers merge shallowly
+    (a project ``[msb]`` table replaces the whole user ``msb`` table),
+    so reading ``[msb.skills]`` from the merged layers would lose a
+    user-global store whenever a project sets any ``[msb.*]`` key.
+
+    :param environ: Environment mapping for the XDG lookup.
+    :returns: Parsed skills settings; the default when there is no user
+        config file.
+    """
+    path = get_user_config_path(environ)
+    if not path.is_file():
+        return SkillsConfig()
+    document = _load_toml(path)
+    msb = document.get("msb")
+    if not isinstance(msb, dict):
+        msb = {}
+    return _parse_skills(msb.get("skills"))
+
+
+def _warn_on_project_skills(workspace: Path) -> None:
+    """Warn when the project config tries to set ``[msb.skills]``.
+
+    Non-fatal: a malformed user config is reported by the normal load;
+    a malformed project config only skips the warning here.
+
+    :param workspace: Workspace directory holding the project config.
+    """
+    project_path = get_project_config_path(workspace)
+    if not project_path.is_file():
+        return
+    try:
+        document = _load_toml(project_path)
+    except ConfigurationError:
+        return
+    msb = document.get("msb")
+    if isinstance(msb, dict) and "skills" in msb:
+        logger.warning(
+            "[msb.skills] in %s is ignored. Set it in the user config %s; "
+            "the system skill store is the same for all projects.",
+            project_path,
+            get_user_config_path(),
+        )
+
+
 def load_config(workspace: Path, environ: dict[str, str] | None = None) -> MsbConfig:
     """Load, merge, and validate msb-circus configuration.
+
+    ``[msb.skills]`` is taken from the user-global config only (see
+    :func:`load_user_skills_config`); a ``[msb.skills]`` table in the
+    project config is ignored with a warning. Shortcoming: the project
+    file is read twice per ``load_config`` (here and in
+    :func:`read_config_layers`); the files are small.
 
     :param workspace: Workspace directory.
     :param environ: Environment mapping for the XDG lookup.
     :returns: Resolved configuration.
     :raises ConfigurationError: If a config file is invalid.
     """
-    return apply_worktree_mirror_default(
+    _warn_on_project_skills(workspace)
+    config = apply_worktree_mirror_default(
         parse_config(read_config_layers(workspace, environ)), workspace
     )
+    return replace(config, skills=load_user_skills_config(environ))

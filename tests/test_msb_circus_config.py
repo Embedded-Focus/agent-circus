@@ -449,3 +449,50 @@ def test_parse_config_agent_table_without_command_uses_default():
     config = parse_config({"msb": {"agent": {"workdir": "/w"}}})
     assert config.agent.command == ("pi",)
     assert config.agent.workdir == "/w"
+
+
+def test_load_config_reads_skills_store_from_user_config_only(tmp_path):
+    """A user-global store survives a project [msb] table that shadows [msb]."""
+    user_dir = tmp_path / "userconfig"
+    (user_dir / "agent-circus").mkdir(parents=True)
+    (user_dir / "agent-circus" / "config.toml").write_bytes(
+        b'[msb.skills]\nstore = "/user-store"\n'
+    )
+    project_dir = tmp_path / "project"
+    (project_dir / ".agent-circus").mkdir(parents=True)
+    (project_dir / ".agent-circus" / "config.toml").write_bytes(
+        b'[msb.sandbox]\nmemory = "2G"\n'
+    )
+    environ = {"XDG_CONFIG_HOME": str(user_dir)}
+    config = load_config(project_dir, environ)
+    assert config.sandbox.memory == "2G"
+    assert config.skills.store == "/user-store"
+
+
+def test_load_config_ignores_project_skills_store_and_warns(tmp_path, caplog):
+    """A project [msb.skills] store does not win; a warning is logged."""
+    user_dir = tmp_path / "userconfig"
+    (user_dir / "agent-circus").mkdir(parents=True)
+    (user_dir / "agent-circus" / "config.toml").write_bytes(
+        b'[msb.skills]\nstore = "/user-store"\n'
+    )
+    project_dir = tmp_path / "project"
+    (project_dir / ".agent-circus").mkdir(parents=True)
+    (project_dir / ".agent-circus" / "config.toml").write_bytes(
+        b'[msb.skills]\nstore = "/project-store"\n'
+    )
+    environ = {"XDG_CONFIG_HOME": str(user_dir)}
+    with caplog.at_level(logging.WARNING):
+        config = load_config(project_dir, environ)
+    assert config.skills.store == "/user-store"
+    assert "[msb.skills]" in caplog.text
+    assert "is ignored" in caplog.text
+
+
+def test_load_config_gives_no_skills_store_without_user_config(tmp_path):
+    """No user config file: the store setting is the default (None)."""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    environ = {"XDG_CONFIG_HOME": str(tmp_path / "no-user-config")}
+    config = load_config(project_dir, environ)
+    assert config.skills.store is None

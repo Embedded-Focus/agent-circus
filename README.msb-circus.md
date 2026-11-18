@@ -271,7 +271,10 @@ do this. Absolute symlinks to host paths break inside the sandbox;
 System skills are skills that every sandbox sees. They live in a store
 on the host, by default `~/.local/share/msb-circus/system-skills/`
 (below `$XDG_DATA_HOME` when that is set). Set `[msb.skills] store` to
-use another absolute path (`~` is allowed).
+use another absolute path (`~` is allowed). msb-circus reads this key
+only from the user config (`~/.config/agent-circus/config.toml`); it
+ignores it in a project config, with a warning, because the store is
+the same for all projects.
 
 Manage the store with:
 
@@ -302,7 +305,8 @@ Sandboxes created before this feature need one
 Codex, Pi and OpenCode read these skills. Claude Code does not yet.
 
 Your host `~/.agents/skills` directory is **not** used. msb-circus is
-independent of it. To move skills from there, install them again with
+independent of it, and `up` warns when that directory holds skills. To
+move skills from there, install them again with
 `msb-circus skills add`.
 
 ### ACP Sessions
@@ -648,7 +652,7 @@ mode = "public,private"                # default; unrestricted network access
 # trust_host_cas = false              # trust the host's CAs; see
                                        # "CA Certificates"
 
-[msb.skills]
+[msb.skills]                            # user config only
 # store = "~/.local/share/msb-circus/system-skills"  # system skill store;
                                        # see "System skills"
 
