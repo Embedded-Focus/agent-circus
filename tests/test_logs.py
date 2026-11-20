@@ -268,11 +268,14 @@ def test_build_plain_follow_script_tails_files_and_the_kernel():
     assert "LINES=7" in script
     assert 'if [ "$#" -gt 0 ]; then' in script
     assert 'tail -F -n "$LINES" -- "$@" &' in script
-    # Two kernel stages, never an endless stream into tail logic.
-    assert 'dmesg 2>/dev/null | tail -n "$LINES" &' in script
+    # Two kernel stages, never an endless stream into tail logic. The
+    # snapshot runs in the foreground, before the follower starts.
+    assert 'dmesg 2>/dev/null | tail -n "$LINES"\n' in script
     assert "dmesg --follow-new 2>/dev/null &" in script
     assert "dmesg --follow | tail" not in script
-    assert "trap 'for p in $PIDS; do kill" in script
+    # The trap is installed before the first background job.
+    assert script.index("trap 'for p in $PIDS") < script.index("tail -F")
+    assert "done; exit 0' INT TERM HUP" in script
     assert script.rstrip().endswith("wait")
 
 
@@ -442,7 +445,7 @@ def test_logs_follow_without_labels_and_kernel_uses_the_plain_script(
     assert result.exit_code == 0
     script = FakeInvoker.behavior["follow_script"]
     assert 'tail -F -n "$LINES" -- "$@" &' in script
-    assert 'dmesg 2>/dev/null | tail -n "$LINES" &' in script
+    assert 'dmesg 2>/dev/null | tail -n "$LINES"\n' in script
     assert "dmesg --follow-new" in script
     follow_args, _kwargs = FakeInvoker.behavior["calls"][-1]
     assert follow_args[follow_args.index("--") + 1 :][4:] == ["/tmp/dockerd.log"]
@@ -698,3 +701,68 @@ def test_stream_logs_broken_pipe_stops_and_reaps_the_child(tmp_path, monkeypatch
     )
     assert returncode == 0
     _wait_until_gone(marker)
+
+
+def test_follow_script_labels_each_file_with_its_own_label(tmp_path):
+    """Each followed file's lines carry that file's label, not $1."""
+    file_a = tmp_path / "a.log"
+    file_b = tmp_path / "b.log"
+    file_a.write_text("a1\na2\n")
+    file_b.write_text("b1\nb2\n")
+    script = build_follow_logs_script([("[a]", str(file_a)), ("[b]", str(file_b))], 2)
+    proc = subprocess.Popen(
+        ["sh", "-c", script, "sh", f"[a]|{file_a}", f"[b]|{file_b}"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert proc.stdout is not None
+        labels: set[str] = set()
+        while len(labels) < 2:
+            line = proc.stdout.readline()
+            assert line, "script ended before both labels appeared"
+            if line.startswith("[a]"):
+                labels.add("[a]")
+                assert line.rstrip().startswith("[a] a")
+            elif line.startswith("[b]"):
+                labels.add("[b]")
+                assert line.rstrip().startswith("[b] b")
+            else:
+                raise AssertionError(f"unlabeled line: {line!r}")
+        proc.send_signal(signal.SIGTERM)
+        proc.wait(timeout=_REAP_DEADLINE_S)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        if proc.stdout is not None:
+            proc.stdout.close()
+        if proc.stderr is not None:
+            proc.stderr.close()
+
+
+def test_follow_script_trap_installed_before_background_jobs(tmp_path, monkeypatch):
+    """An early SIGTERM leaves no orphan follower behind."""
+    fake = _write_fake_dmesg(tmp_path / "bin")
+    monkeypatch.setenv("PATH", f"{fake.parent}:{os.environ['PATH']}")
+    script = build_follow_logs_script([], 2, kernel=True)
+    proc = subprocess.Popen(
+        ["sh", "-c", script],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    # Signal immediately, before reading anything.
+    proc.send_signal(signal.SIGTERM)
+    try:
+        assert proc.wait(timeout=_REAP_DEADLINE_S) == 0
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        if proc.stdout is not None:
+            proc.stdout.close()
+        if proc.stderr is not None:
+            proc.stderr.close()
+    _wait_until_gone(str(fake))

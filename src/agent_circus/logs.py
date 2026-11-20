@@ -215,8 +215,15 @@ def normalize_log_line(line: str) -> str:
     return line
 
 
-#: POSIX sh loop prefixing every piped line with a label ($1).
-_LABEL_LOOP = 'while IFS= read -r line; do printf \'%s %s\\n\' "$1" "$line"; done'
+def _label_loop(label_expr: str) -> str:
+    """Render a POSIX sh read loop prefixing every line with *label_expr*.
+
+    :param label_expr: Shell word for the label, already quoted by the
+        caller, e.g. ``"$1"`` (function argument), ``"$l"`` (a loop
+        variable) or a ``shlex.quote``-d literal.
+    :returns: The complete loop text.
+    """
+    return f"while IFS= read -r line; do printf '%s %s\\n' {label_expr} \"$line\"; done"
 
 
 def build_logs_script(
@@ -241,6 +248,7 @@ def build_logs_script(
     :returns: The complete guest script text with a final newline.
     """
     n = max(int(lines), 1)
+    prefix_loop = _label_loop('"$1"')
     parts = ["set -eu", f"LINES={n}"]
     if labels:
         parts.extend(
@@ -248,7 +256,7 @@ def build_logs_script(
                 "# Print the last LINES lines of a file, each line prefixed",
                 "# with a label. $1 = label, $2 = file; unreadable prints nothing.",
                 "prefix() {",
-                f'    tail -n "$LINES" -- "$2" 2>/dev/null | {_LABEL_LOOP}',
+                f'    tail -n "$LINES" -- "$2" 2>/dev/null | {prefix_loop}',
                 "}",
             ]
         )
@@ -344,38 +352,38 @@ def build_log_files_script(sources: Sequence[LogSource]) -> str:
 #: POSIX sh trap stopping every recorded background job (``$PIDS``)
 #: when the follow script is interrupted.
 _CLEANUP_TRAP = (
-    "trap 'for p in $PIDS; do kill \"$p\" 2>/dev/null || :; done' INT TERM HUP"
+    "trap 'for p in $PIDS; do kill \"$p\" 2>/dev/null || :; done; exit 0' INT TERM HUP"
 )
 
 
 def _kernel_follow_statements(lines: int, label: str | None) -> list[str]:
-    """Render the background kernel follow statements for a follow script.
+    """Render the kernel follow statements for a follow script.
 
     Two stages avoid piping an endless stream into ``tail -n`` (which
     could wait forever because ``dmesg --follow`` never reaches end of
     file): first a limited ``dmesg`` snapshot prints the initial view,
     then ``dmesg --follow-new`` prints only records arriving after it
-    started. There is a small race between the stages: a kernel record
-    arriving between the snapshot and the follower start can be missed.
+    started. The snapshot runs in the foreground, so the snapshot lines
+    always precede the follower's lines; only a kernel record arriving
+    between the two stages can be missed.
 
     :param lines: Number of trailing snapshot records to print.
     :param label: Label applied to both stages, or ``None`` for plain
         lines.
-    :returns: Statements that start each stage in the background and
-        record its PID in ``$PIDS``; the caller must define ``PIDS``
-        and install :data:`_CLEANUP_TRAP`.
+    :returns: Statements for the snapshot (foreground) and the follower
+        (background, PID recorded in ``$PIDS``); the caller must define
+        ``PIDS`` and install :data:`_CLEANUP_TRAP` first.
     """
     if label is None:
         snapshot = 'dmesg 2>/dev/null | tail -n "$LINES"'
         follow = "dmesg --follow-new 2>/dev/null"
     else:
         quoted = shlex.quote(label)
-        loop = f"while IFS= read -r line; do printf '%s %s\\n' {quoted} \"$line\"; done"
+        loop = _label_loop(quoted)
         snapshot = f'dmesg 2>/dev/null | tail -n "$LINES" | {loop}'
         follow = f"dmesg --follow-new 2>/dev/null | {loop}"
     return [
-        f"{snapshot} &",
-        'PIDS="$PIDS $!"',
+        snapshot,
         f"{follow} &",
         'PIDS="$PIDS $!"',
     ]
@@ -406,20 +414,22 @@ def build_follow_logs_script(
     :returns: The complete guest script text with a final newline; the
         pairs are passed as positional arguments after the script.
     """
+    follow_loop = _label_loop('"$l"')
     parts = [
         "set -eu",
         f"LINES={max(int(lines), 1)}",
         "PIDS=",
+        _CLEANUP_TRAP,
         'for x in "$@"; do',
         "    l=${x%%|*}",
         "    f=${x#*|}",
-        f'    tail -F -n "$LINES" -- "$f" 2>/dev/null | {_LABEL_LOOP} &',
+        f'    tail -F -n "$LINES" -- "$f" 2>/dev/null | {follow_loop} &',
         '    PIDS="$PIDS $!"',
         "done",
     ]
     if kernel:
         parts.extend(_kernel_follow_statements(lines, f"[{KERNEL_SOURCE_NAME}]"))
-    parts.extend((_CLEANUP_TRAP, "wait"))
+    parts.append("wait")
     return "\n".join(parts) + "\n"
 
 
@@ -442,6 +452,7 @@ def build_plain_follow_script(lines: int, *, kernel: bool = True) -> str:
         "set -eu",
         f"LINES={max(int(lines), 1)}",
         "PIDS=",
+        _CLEANUP_TRAP,
         'if [ "$#" -gt 0 ]; then',
         '    tail -F -n "$LINES" -- "$@" &',
         '    PIDS="$PIDS $!"',
@@ -449,7 +460,7 @@ def build_plain_follow_script(lines: int, *, kernel: bool = True) -> str:
     ]
     if kernel:
         parts.extend(_kernel_follow_statements(lines, None))
-    parts.extend((_CLEANUP_TRAP, "wait"))
+    parts.append("wait")
     return "\n".join(parts) + "\n"
 
 
