@@ -23,9 +23,9 @@ def reset_warning_state() -> None:
 def test_legacy_key_warns_once(caplog: pytest.LogCaptureFixture) -> None:
     """A 1.x key is reported at warning level, exactly once per process."""
     with caplog.at_level(logging.WARNING, logger="agent_circus.config"):
-        parse_config({"services": ["pi"]})
-        parse_config({"services": ["pi"]})
-    records = [r for r in caplog.records if "services" in r.getMessage()]
+        parse_config({"runtime": {"engine": "docker"}})
+        parse_config({"runtime": {"engine": "docker"}})
+    records = [r for r in caplog.records if "runtime" in r.getMessage()]
     assert len(records) == 1
     assert records[0].levelno == logging.WARNING
     assert "agent-circus 1.x" in records[0].getMessage()

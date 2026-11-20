@@ -160,11 +160,11 @@ def test_launch_missing_workspace_dir_raises():
 
 
 def test_launch_ignores_config_binary(tmp_path):
+    # The msb binary is not configurable via the project config; the key
+    # is rejected at parse time.
     workspace = _write_config(tmp_path / "proj", b'binary = "/tmp/evil"\n')
-    launch = shell_launch_for_workspace(str(workspace), environ={"HOME": "/home/u"})
-    argv = build_shell_argv(Path("/usr/bin/msb"), "agents-proj", launch)
-    assert argv[0] == "/usr/bin/msb"
-    assert "/tmp/evil" not in argv
+    with pytest.raises(ConfigurationError, match=r"unknown config key \[binary\]"):
+        shell_launch_for_workspace(str(workspace), environ={"HOME": "/home/u"})
 
 
 # ---- PTY process -----------------------------------------------------------

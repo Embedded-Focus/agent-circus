@@ -89,15 +89,18 @@ def test_parse_config_interprets_supported_keys():
     assert config.logging_file == "/tmp/msbc.log"
 
 
-def test_parse_config_warns_on_unsupported_keys(caplog):
-    # Unsupported keys are usually leftovers from agent-circus 1.x, so
-    # they surface as a once-per-process warning that names MIGRATING.md.
+def test_parse_config_warns_on_legacy_keys_and_rejects_unknown(caplog):
+    # Known 1.x keys surface as a once-per-process warning that names
+    # MIGRATING.md; a truly unknown key (a typo) raises.
+    _WARNED_KEYS.clear()
+    with pytest.raises(ConfigurationError, match=r"unknown config key \[services\]"):
+        parse_config({"services": ["pi"], "runtime": {"engine": "docker"}})
     _WARNED_KEYS.clear()
     with caplog.at_level(logging.WARNING):
-        parse_config({"services": ["pi"], "runtime": {"engine": "docker"}})
+        parse_config({"runtime": {"engine": "docker"}, "mcp_servers": []})
     messages = [record.getMessage() for record in caplog.records]
-    assert any("services" in message for message in messages)
     assert any("runtime" in message for message in messages)
+    assert any("mcp_servers" in message for message in messages)
     assert all(record.levelno == logging.WARNING for record in caplog.records)
     assert all("MIGRATING.md" in message for message in messages)
 
@@ -576,3 +579,67 @@ def test_parse_config_1x_key_still_warns_only(caplog):
         config = parse_config({"mcp_servers": [{"name": "x"}]})
     assert config.daemons == ()
     assert any("mcp_servers" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "shadow",
+        "mcp_servers",
+        "data_stores",
+        "ca_certs",
+        "runtime",
+        "llama_cpp",
+        "claude_mem",
+        "host_credentials",
+    ],
+)
+def test_parse_config_legacy_keys_warn_and_do_not_raise(key, caplog):
+    """Each 1.x key warns (once) instead of raising."""
+    from agent_circus.config import _WARNED_KEYS
+
+    _WARNED_KEYS.clear()
+    with caplog.at_level(logging.WARNING, logger="agent_circus.config"):
+        parse_config({key: None})
+    records = [r for r in caplog.records if key in r.getMessage()]
+    assert len(records) == 1
+    assert records[0].levelno == logging.WARNING
+
+
+def test_parse_config_rejects_typo_top_level_key():
+    with pytest.raises(ConfigurationError, match=r"unknown config key \[tracng\]"):
+        parse_config({"tracng": {}})
+
+
+def test_parse_config_rejects_unknown_port_forward_key():
+    with pytest.raises(
+        ConfigurationError, match=r"port_forwards\[0\] has unknown key\(s\): bogus"
+    ):
+        parse_config({"port_forwards": [{"guest_port": 8000, "bogus": 1}]})
+
+
+def test_parse_config_rejects_guest_port_and_container_port():
+    with pytest.raises(
+        ConfigurationError, match=r"port_forwards\[0\]: set either guest_port"
+    ):
+        parse_config({"port_forwards": [{"guest_port": 8000, "container_port": 8001}]})
+
+
+def test_parse_config_rejects_unknown_additional_dir_key():
+    with pytest.raises(
+        ConfigurationError, match=r"additional_dirs\[0\] has unknown key\(s\): seed"
+    ):
+        parse_config({"additional_dirs": [{"path": "/data", "seed": True}]})
+
+
+def test_parse_config_accepts_1x_style_port_forward():
+    """A full 1.x entry (service, container_port, host_port) still works."""
+    config = parse_config(
+        {
+            "port_forwards": [
+                {"service": "web", "container_port": 4096, "host_port": 4097}
+            ]
+        }
+    )
+    assert config.port_forwards[0].guest_port == 4096
+    assert config.port_forwards[0].host_port == 4097

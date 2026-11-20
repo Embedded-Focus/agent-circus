@@ -37,8 +37,9 @@ CONFIG_FILE_NAME = "config.toml"
 
 USER_CONFIG_DIR_ENV_VAR = "XDG_CONFIG_HOME"
 
-#: Top-level config keys interpreted by agent-circus; everything else warns
-#: (1.x keys) or raises (unknown keys).
+#: Top-level config keys interpreted by agent-circus. Any other key
+#: raises, except for the 1.x keys in :data:`LEGACY_TOP_LEVEL_KEYS`,
+#: which warn.
 SUPPORTED_TOP_LEVEL_KEYS: frozenset[str] = frozenset(
     {
         "msb",
@@ -62,6 +63,21 @@ SUPPORTED_TOP_LEVEL_KEYS: frozenset[str] = frozenset(
 #: Keys allowed under ``[msb]``: settings that map directly to the msb
 #: binary.
 MSB_TABLE_KEYS: frozenset[str] = frozenset({"binary", "sandbox", "network", "mounts"})
+
+#: Top-level keys from agent-circus 1.x that 2.x does not support.
+#: These get a migration warning instead of an error.
+LEGACY_TOP_LEVEL_KEYS: frozenset[str] = frozenset(
+    {
+        "shadow",
+        "mcp_servers",
+        "data_stores",
+        "ca_certs",
+        "runtime",
+        "llama_cpp",
+        "claude_mem",
+        "host_credentials",
+    }
+)
 
 #: agent-circus settings that used to live under ``[msb]`` and the
 #: top-level table they moved to.
@@ -642,7 +658,7 @@ def warn_unsupported_keys(config: dict[str, Any]) -> None:
             )
             _WARNED_KEYS.add(key)
             continue
-        if key not in SUPPORTED_TOP_LEVEL_KEYS:
+        if key in LEGACY_TOP_LEVEL_KEYS:
             logger.warning(
                 "Config key [%s] is from agent-circus 1.x and has no effect "
                 "in 2.x; see MIGRATING.md",
@@ -705,7 +721,8 @@ def _parse_additional_dirs(raw: Any) -> tuple[AdditionalDir, ...]:
 
     Mirrors the agent-circus fields: ``path`` (required, absolute),
     ``readonly`` (default ``False``), and ``name`` (default: the basename
-    of *path*). Names and paths must be unique across entries.
+    of *path*). Names and paths must be unique across entries. Unknown
+    keys raise.
 
     :param raw: Raw value or ``None``.
     :returns: Tuple of parsed entries.
@@ -723,6 +740,9 @@ def _parse_additional_dirs(raw: Any) -> tuple[AdditionalDir, ...]:
     for index, entry in enumerate(raw):
         if not isinstance(entry, dict):
             raise ConfigurationError(f"additional_dirs[{index}] must be a table")
+        _reject_unknown_keys(
+            entry, f"additional_dirs[{index}]", ("path", "readonly", "name")
+        )
         path = entry.get("path")
         if not isinstance(path, str) or not path:
             raise ConfigurationError(
@@ -1162,7 +1182,8 @@ def _parse_port_forwards(raw: Any) -> tuple[PortForward, ...]:
 
     Accepts agent-circus entries (``container_port`` plus an ignored
     ``service``) and msb-native entries (``guest_port``). ``host``,
-    ``host_port``, and ``protocol`` are optional.
+    ``host_port``, and ``protocol`` are optional. Unknown keys raise;
+    setting both ``guest_port`` and ``container_port`` raises.
 
     :param raw: Raw array value or ``None``.
     :returns: Tuple of validated port forwards.
@@ -1176,6 +1197,23 @@ def _parse_port_forwards(raw: Any) -> tuple[PortForward, ...]:
     for index, entry in enumerate(raw):
         if not isinstance(entry, dict):
             raise ConfigurationError(f"port_forwards[{index}] must be a table")
+        _reject_unknown_keys(
+            entry,
+            f"port_forwards[{index}]",
+            (
+                "guest_port",
+                "container_port",
+                "service",
+                "host_port",
+                "host",
+                "protocol",
+            ),
+        )
+        if "guest_port" in entry and "container_port" in entry:
+            raise ConfigurationError(
+                f"port_forwards[{index}]: set either guest_port or "
+                "container_port, not both"
+            )
         guest_port = entry.get("guest_port", entry.get("container_port"))
         if guest_port is None:
             raise ConfigurationError(
@@ -1785,6 +1823,12 @@ def parse_config(config: dict[str, Any]) -> AgentCircusConfig:
         key is misplaced.
     """
     warn_unsupported_keys(config)
+    for key in config:
+        if key in SUPPORTED_TOP_LEVEL_KEYS or key in LEGACY_TOP_LEVEL_KEYS:
+            continue
+        raise ConfigurationError(
+            f"unknown config key [{key}]; see the Configuration Reference in README.md"
+        )
     msb_raw = config.get("msb")
     if msb_raw is not None and not isinstance(msb_raw, dict):
         raise ConfigurationError("msb must be a table")
