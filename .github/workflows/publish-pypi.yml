@@ -11,7 +11,6 @@ jobs:
   build:
     name: Build and verify distributions
     runs-on: ubuntu-latest
-    if: ${{ !github.event.release.prerelease }}
 
     steps:
       - name: Check out release tag
@@ -30,22 +29,30 @@ jobs:
       - name: Install Python
         run: uv python install 3.14
 
-      - name: Validate release version
+      - name: Validate release tag and branch
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
         run: |
-          if [[ ! "$RELEASE_TAG" =~ ^v([2-9]|[1-9][0-9]+)\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Release tag must be a stable v2 or later tag: $RELEASE_TAG" >&2
-            exit 1
-          fi
-
-      - name: Validate release branch
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: |
-          if ! git merge-base --is-ancestor "$RELEASE_TAG" origin/main; then
-            echo "Release tag $RELEASE_TAG is not on the main branch" >&2
-            exit 1
+          if [[ "$PRERELEASE" == "true" ]]; then
+            if [[ ! "$RELEASE_TAG" =~ ^v([2-9]|[1-9][0-9]+)\.[0-9]+\.[0-9]+(a|b|rc)[0-9]+$ ]]; then
+              echo "A GitHub pre-release needs a v2 or later pre-release tag such as v2.0.0rc1: $RELEASE_TAG" >&2
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "$RELEASE_TAG" origin/develop \
+              && ! git merge-base --is-ancestor "$RELEASE_TAG" origin/main; then
+              echo "Pre-release tag $RELEASE_TAG is not on develop or main" >&2
+              exit 1
+            fi
+          else
+            if [[ ! "$RELEASE_TAG" =~ ^v([2-9]|[1-9][0-9]+)\.[0-9]+\.[0-9]+$ ]]; then
+              echo "A stable release needs a stable v2 or later tag such as v2.0.0: $RELEASE_TAG" >&2
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "$RELEASE_TAG" origin/main; then
+              echo "Release tag $RELEASE_TAG is not on the main branch" >&2
+              exit 1
+            fi
           fi
 
           uv run --no-project --python 3.14 python - <<'PY'
