@@ -30,16 +30,15 @@
 </div>
 
 > [!NOTE]
-> Support for [microsandbox](https://microsandbox.dev/) is work in progress.
-> Development continues in the
-> [`microsandbox` branch](https://github.com/Embedded-Focus/agent-circus/tree/microsandbox)
-> until it is merged into the
-> [`develop` branch](https://github.com/Embedded-Focus/agent-circus/tree/develop)
-> and later into the
+> This is agent-circus 1.x, the Docker/Podman implementation. It is in
+> maintenance mode and receives security updates only. The versions of
+> the agent harnesses in the image (Claude Code, OpenCode, Codex, Pi,
+> ...) are no longer updated.
+>
+> agent-circus 2.x runs agents in [Microsandbox](https://microsandbox.dev/)
+> micro-VMs. It is developed on the
 > [`main` branch](https://github.com/Embedded-Focus/agent-circus/tree/main).
-> The `develop` and `main` branches are in maintenance mode. They receive
-> dependency updates only. Agent Circus checks these dependencies for
-> known vulnerabilities and updates them as needed.
+> To stay on 1.x, see [Staying on 1.x](#staying-on-1x).
 
 Run AI coding agents in sandboxed containers with full control over
 what they can see, reach, and inherit from your host environment.
@@ -213,6 +212,24 @@ For an installation in an activated virtual environment, use:
 python -m pip install --upgrade agent-circus
 python -m pip uninstall agent-circus
 ```
+
+### Staying on 1.x
+
+agent-circus 2.x replaces this implementation. Pin the major version to
+keep 1.x:
+
+``` shell
+uv tool install 'agent-circus<2'
+```
+
+To run 1.x once without installing it:
+
+``` shell
+uvx --from 'agent-circus<2' agent-circus version
+```
+
+uv installs one version of a package as a tool, so 1.x and 2.x cannot be
+installed as tools at the same time.
 
 ## Working with the Environment
 
