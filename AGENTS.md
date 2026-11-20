@@ -2,8 +2,8 @@
 
 ## Repository Overview
 
-- Purpose: CLI tool for running AI coding agents in sandboxed Docker containers.
-- Core tech: Python, Docker, Docker Compose, Typer, pytest, uv, ruff, ty.
+- Purpose: CLI tool for running AI coding agents in Microsandbox micro-VMs.
+- Core tech: Python, Microsandbox (`msb`), Typer, pytest, uv, ruff, ty.
 
 Used (minimum) versions can be found in pyproject.toml.
 
@@ -11,7 +11,8 @@ Used (minimum) versions can be found in pyproject.toml.
 
 - `tests/`: unit tests for the agent-circus tool.
 - `src/`: source code of this repository/agent-circus
-- `src/agent_circus/templates`: dependencies and versions for containerized agents/libraries
+- `src/agent_circus/templates`: Dockerfile.msb-agents and other
+  dependencies/versions for the sandbox image
 - `pyproject.toml`: formal description of the project environment/dependencies
 
 ## Common Commands

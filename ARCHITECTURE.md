@@ -1,58 +1,47 @@
 # Architecture
 
-This document describes how the repository is structured, how the two
-tools work internally, and what we learned while building them. It is
-written for developers and coding agents that continue work on the
-repository. User-facing documentation lives in `README.md` (agent-circus)
-and `README.msb-circus.md` (msb-circus). Working rules for agents live in
-`AGENTS.md`.
+This document describes how the repository is structured, how the tool
+works internally, and what we learned while building it. It is written
+for developers and coding agents that continue work on the repository.
+User-facing documentation lives in `README.md`; migration help for 1.x
+users in `MIGRATING.md`. Working rules for agents live in `AGENTS.md`.
 
-Last updated: 2026-11-08.
+Last updated: 2026-11-20.
 
 ## 1. Purpose
 
 The repository ships one Python distribution (`agent-circus`, see
-`pyproject.toml`) with two independent CLIs that run AI coding-agent
-harnesses (Claude Code, Codex, OpenCode, Pi, Mistral Vibe) in isolation:
+`pyproject.toml`) with one CLI that runs AI coding-agent harnesses
+(Claude Code, Codex, OpenCode, Pi) in isolation:
 
 | CLI | Isolation | Backend |
 |---|---|---|
-| `agent-circus` | One container per harness | Docker or Podman via Compose |
-| `msb-circus` | One microVM per workspace, all harnesses inside | microsandbox (`msb` CLI, bundled in the `microsandbox` wheel) |
+| `agent-circus` | One microVM per workspace, all harnesses inside | microsandbox (`msb` CLI, bundled in the `microsandbox` wheel) |
 
-A third entry point, `agent-circus-update-templates`, refreshes pinned
-tool versions in the bundled agent-circus templates.
+A second entry point, `agent-circus-update-templates`, refreshes pinned
+tool versions in the bundled msb-agents Dockerfile.
 
-Both CLIs read the **same** project config file,
-`.agent-circus/config.toml`, plus a user-global layer at
-`$XDG_CONFIG_HOME/agent-circus/config.toml`. Each tool interprets only the
-keys it supports and ignores the rest (msb-circus logs ignored keys at
-debug level). msb-circus-only settings live under `[msb]`.
+The CLI reads the project config file `.agent-circus/config.toml`, plus
+a user-global layer at `$XDG_CONFIG_HOME/agent-circus/config.toml`. It
+interprets only the keys it supports and ignores the rest (unsupported
+top-level keys are logged as warnings). agent-circus-specific settings
+live under `[msb]`.
 
 ## 2. Repository layout
 
 ```
 src/
-  agent_circus/          agent-circus CLI (Compose based)
-    commands/            one module per CLI command
-    templates/agent-circus/
-                         Dockerfile, compose.yaml, entrypoint, hooks,
-                         init-firewall.sh, install-ca-certs.sh, ...
-  msb_circus/            msb-circus CLI (microsandbox based)
+  agent_circus/          agent-circus CLI (microsandbox based)
     templates/Dockerfile.msb-agents
     templates/circus_router.py   standalone guest HTTP router
   hatch_build.py         build hook: embeds the source commit
-  microsandbox_sample.py untracked scratch file, not part of the product
-tests/                   pytest suite for both tools (test_msb_circus_* for msb)
-README.md                agent-circus user docs
-README.msb-circus.md     msb-circus user docs
+tests/                   pytest suite
+README.md                user docs
+MIGRATING.md             migration guide from agent-circus 1.x
 AGENTS.md / CLAUDE.md    agent working rules (CLAUDE.md includes AGENTS.md)
 ```
 
-**Rule:** `msb_circus` never imports from `agent_circus`. Shared logic
-(pattern matching, hosts parsing, env filtering) is re-implemented in
-`msb_circus` on purpose (`envs.py`, `hosts.py`). Behavior must stay
-aligned with agent-circus where the config table is shared.
+The Docker/Podman implementation of 1.x lives on the `v1` branch only.
 
 ## 3. High-level component view
 
@@ -63,90 +52,37 @@ flowchart LR
 
     subgraph pkg["Python distribution: agent-circus"]
         ac["agent-circus CLI<br/>(agent_circus)"]
-        mc["msb-circus CLI<br/>(msb_circus)"]
         upd["agent-circus-update-templates"]
-        tpl_ac["agent-circus templates<br/>Dockerfile, compose.yaml, scripts"]
         tpl_mc["Dockerfile.msb-agents"]
         msbwheel["microsandbox wheel<br/>(bundled msb binary)"]
     end
 
     subgraph host["Host"]
-        engine["Docker / Podman<br/>+ Compose"]
         builder["podman / docker build"]
         msb["msb runtime"]
-        proxy["msb-circus proxy<br/>127.0.0.1:7700<br/>+ dashboard on localhost"]
+        proxy["agent-circus proxy<br/>127.0.0.1:7700<br/>+ dashboard on localhost"]
         agent[(ssh-agent socket)]
         hostfiles[("~/.claude, ~/.codex, ~/.pi,<br/>/etc/hosts, ~/.ssh/*")]
     end
 
-    subgraph containers["agent-circus: containers"]
-        svc["one container per harness<br/>claude-code, codex, opencode,<br/>pi, mistral-vibe (+ MCP sidecars)"]
-    end
-
-    subgraph vm["msb-circus: microVM agents-&lt;project&gt;"]
+    subgraph vm["microVM agents-&lt;project&gt;"]
         guest["all harnesses + dockerd<br/>+ SSH agent bridge + circus-router"]
     end
 
     user --> ac
-    user --> mc
     cfg --> ac
-    cfg --> mc
-    ac --> tpl_ac
-    ac --> engine --> svc
-    upd --> tpl_ac
-    mc --> tpl_mc
-    mc --> builder
-    mc --> msbwheel --> msb --> guest
+    upd --> tpl_mc
+    ac --> tpl_mc
+    ac --> builder
+    ac --> msbwheel --> msb --> guest
     proxy -. per-connection splice .-> guest
-    hostfiles -. mounts / copies .-> svc
     hostfiles -. mounts / msb copy .-> guest
-    agent -. bind mount .-> svc
     agent -. vsock route .-> guest
 ```
 
 ## 4. agent-circus
 
 ### 4.1 Concepts
-
-- **Services:** `AVAILABLE_SERVICES = ["claude-code", "codex",
-  "mistral-vibe", "opencode", "pi"]` (`config.py`), one Compose service
-  each, defined in `templates/agent-circus/compose.yaml`.
-- **Modes:** *instant mode* (default) uses the bundled templates directly;
-  *deploy mode* (`agent-circus init --deploy`) copies them into
-  `.agent-circus/` for per-project customization. Deploy mode wins when
-  present.
-- **Runtime selection** (`runtime.py`): CLI `--runtime` >
-  `AGENT_CIRCUS_RUNTIME` > `[runtime] engine` > `docker`.
-- **Features as Compose overrides:** each config feature (`[ssh]`,
-  `[git]`, `[hosts]`, `[ca_certs]`, `env_passthrough`, shadow files,
-  additional dirs, data stores, port forwards, MCP, claude-mem, startup
-  hook, ...) is turned into a small JSON Compose override file and passed
-  with `-f`. Overrides are written to the per-workspace state directory
-  `$XDG_STATE_HOME/agent-circus/<project>/` (`state.py`).
-- **In-container setup** happens in `docker-entrypoint.sh` (copy SSH files
-  from `/run/ssh-host/`, build `.gitconfig`, install CA certs from
-  `/run/ca-host/` via sudo, codex daemon repair, hooks).
-
-### 4.2 Internal view: from config to `docker compose`
-
-```mermaid
-flowchart TB
-    cli["cli.py (Typer app)"] --> cmds["commands/*<br/>up, exec_, build, ps, remove,<br/>destroy, init, deps, config_store,<br/>completion, version"]
-    cmds --> ctx["context.py<br/>load config, build overrides,<br/>assemble ComposeContext"]
-    ctx --> cfgmod["config.py<br/>defaults, layering, validation,<br/>build_*_override(), filter_hosts,<br/>match_files, filter_env"]
-    ctx --> mcp["mcp.py<br/>MCP sidecars"]
-    ctx --> agentcfg["agent_config.py<br/>merge MCP into agent configs<br/>(host files never modified)"]
-    ctx --> runtime["runtime.py<br/>docker | podman"]
-    ctx --> state["state.py<br/>$XDG_STATE_HOME/agent-circus/&lt;project&gt;/"]
-    ctx --> compose["compose.py<br/>ComposeContext, write overrides,<br/>run docker/podman compose"]
-    compose --> tpl["templates/<br/>compose.yaml, Dockerfile,<br/>docker-entrypoint.sh, ..."]
-    compose --> eng["docker compose / podman compose"]
-    deps["dependencies.py + update_versions.py<br/>pinned template versions"] --> tpl
-```
-
-## 5. msb-circus
-
-### 5.1 Concepts
 
 - **One sandbox per workspace**, named `agents-<sanitized project dir>`
   (`config.sandbox_name_for_workspace`). All harnesses run in it; the
@@ -168,7 +104,7 @@ flowchart TB
 - **Boot path:** always `msb run --detach --init auto` (never
   `msb create`), so s6-overlay becomes PID 1 and starts the services.
 
-### 5.2 Internal view: modules
+### 4.2 Internal view: modules
 
 ```mermaid
 flowchart TB
@@ -217,7 +153,7 @@ flowchart TB
     ssh --> config
 ```
 
-### 5.3 Internal view: `up` / `exec` boot sequence
+### 4.3 Internal view: `up` / `exec` boot sequence
 
 `_ensure_sandbox_running()` in `cli.py` is the core. `up` calls it
 directly; `exec` calls it before running the command, so every `exec`
@@ -226,7 +162,7 @@ also refreshes host-derived state.
 ```mermaid
 sequenceDiagram
     autonumber
-    participant CLI as msb-circus (cli.py)
+    participant CLI as agent-circus (cli.py)
     participant Host as Host checks
     participant MSB as msb runtime
     participant Guest as Guest VM
@@ -263,7 +199,7 @@ All per-boot guest steps are **best-effort**: failures log warnings and
 never block the boot. Host-side validation errors are **fatal** before any
 msb call.
 
-### 5.4 Internal view: inside the guest
+### 4.4 Internal view: inside the guest
 
 ```mermaid
 flowchart TB
@@ -293,7 +229,7 @@ Notes:
 
 - s6-overlay is PID 1 (`msb run --init auto`); msb's guest agent
   `/init.krun` keeps running as its child. `msb stop` does not reach
-  PID 1 any more (msb 0.7.13 stays `draining`), so `msb-circus stop`
+  PID 1 any more (msb 0.7.13 stays `draining`), so `agent-circus stop`
   runs `kill -TERM 1` in the guest and waits for msb to report the
   sandbox as stopped (`stop_timeout`), then forces the stop.
 - The services are defined in the Dockerfile (inline `printf`): CA
@@ -308,17 +244,17 @@ Notes:
 - With `docker_disk_persist = true`, the docker disk is a named msb
   volume `agents-<project>-docker`
   (`--mount-named <vol>:/var/lib/docker:kind=disk,size=...`) that
-  outlives the sandbox. Before `msb run`, msb-circus reads
+  outlives the sandbox. Before `msb run`, agent-circus reads
   `msb volume list --format json` and stops on a kind or size mismatch
   (`msb volume inspect` has no JSON output). msb attaches a disk volume
   to one sandbox at a time; a refused `msb run` still leaves a sandbox
-  record, which msb-circus removes. `rm`/`destroy` keep the volume
+  record, which agent-circus removes. `rm`/`destroy` keep the volume
   unless `--volumes` is given.
 - Go programs (dockerd) cache the system cert pool per process, so CAs
   must be installed **before** dockerd starts.
 - Daemons (`[[msb.daemons]]`, `daemons.py`) are not baked into the
   image. After every boot (`up`, `start`; `up` also on a running
-  sandbox), msb-circus runs one install script: it mounts a private
+  sandbox), agent-circus runs one install script: it mounts a private
   tmpfs at `/run/circus-daemons` for the environment files (secrets),
   writes `/run/service/circus-daemon-<name>/` (`run`, `finish`,
   `timeout-kill`, `down` when `autostart = false`, `log/run` with
@@ -327,16 +263,16 @@ Notes:
   s6-overlay resets `/run/service` on every boot. Environment files
   travel base64-encoded in `--env CIRCUS_DAEMON_ENV_<NAME>` of that
   exec. The `finish` script exits 125 (s6: do not restart) after 5
-  exits within 60 s and leaves a `failed` marker. `msb-circus stop`
+  exits within 60 s and leaves a `failed` marker. `agent-circus stop`
   stops all daemons with `s6-svc -wD -d` before `kill -TERM 1`, because
   a test daemon got no clean SIGTERM from the s6-overlay shutdown alone.
 
-### 5.5 Internal view: SSH agent forwarding
+### 4.5 Internal view: SSH agent forwarding
 
 ```mermaid
 flowchart LR
     hostagent[("host ssh-agent<br/>$SSH_AUTH_SOCK<br/>(changes per login)")]
-    link["stable symlink<br/>$XDG_RUNTIME_DIR/msb-circus/ssh-agent.sock<br/>(fallback ~/.cache/msb-circus/)"]
+    link["stable symlink<br/>$XDG_RUNTIME_DIR/agent-circus/ssh-agent.sock<br/>(fallback ~/.cache/agent-circus/)"]
     route["msb vsock route<br/>--vsock link:22022<br/>(fixed at creation)"]
     bridge["guest socat<br/>VSOCK-CONNECT:2:22022"]
     gsock["/run/ssh-agent.sock (0600 root)"]
@@ -357,12 +293,12 @@ flowchart LR
   (symlink trick). The bridge runs as an s6 service, so it starts on
   every boot including `msb start`.
 
-### 5.6 Internal view: `exec` and ACP
+### 4.6 Internal view: `exec` and ACP
 
 ```mermaid
 flowchart LR
     ed["Editor / ACP client"] -- stdin/stdout bytes --> pump
-    subgraph mc["msb-circus exec --acp"]
+    subgraph mc["agent-circus exec --acp"]
         env["env map:<br/>passthrough -> SSH_AUTH_SOCK -> -e"]
         argv["build_exec_args(acp=True)<br/>--stream --quiet, no PTY"]
         pump["run_acp_stream()<br/>byte-faithful stdin/stdout pump,<br/>stderr pump, watchdog"]
@@ -377,30 +313,7 @@ In ACP mode, stdout carries only ACP bytes and warnings go to the log
 file (`[logging] file`), never to stderr (ACP clients treat stderr as an
 error channel). Fatal errors still print to stderr right before exit.
 
-## 6. Feature matrix (shared config tables)
-
-| Config | agent-circus | msb-circus | msb-circus mechanism | Refresh |
-|---|---|---|---|---|
-| `[[additional_dirs]]` | yes | yes | `--volume` at `/workspaces/<name>` | creation |
-| `[[port_forwards]]` | yes | yes | `--port`; host port probe before boot | creation, drift warning |
-| `env_passthrough` | yes | yes | `msb exec --env` per exec | every exec |
-| `[git] worktree_mirror` | yes | yes | second bind mount at host abs path | creation, drift warning |
-| other `[git]` keys | yes | no (debug-ignored) | - | - |
-| `[ssh]` | yes | yes | vsock route + socat bridge + `msb copy` of config files | route: creation; files: every boot |
-| `[hosts]` | yes | yes | managed block in guest `/etc/hosts` via `msb exec` | every up/start/exec |
-| `[ca_certs]` | yes | **planned** | see §9 | - |
-| agent config dirs | data stores / mounts | `/root/.claude`, `/root/.codex` bind mounts + file copies | mounts: creation; copies: every boot |
-| `[msb.*]` | ignored | yes | image, sandbox (memory, cpus, disks), network mode, agent, tracing, mounts, env | mostly creation |
-| `[logging]` | yes | yes | Python logging | - |
-
-**General rule for msb-circus:** anything passed to `msb run` (mounts,
-ports, vsock routes, sandbox env, disks, network) is fixed at creation.
-Changing it needs `msb-circus rm -f && msb-circus up`; msb-circus warns via
-`msb inspect` drift checks where the inspect schema is known. Anything
-done via `msb copy` / `msb exec` after boot is refreshed on every
-`up`/`start`/`exec` and needs no re-creation.
-
-## 7. microsandbox facts we rely on
+## 5. microsandbox facts we rely on
 
 Docs: <https://docs.microsandbox.dev/llms.txt> (index) and `llms-full.txt`.
 Bundled msb version: see `uv.lock` (0.7.13 at the time of writing).
@@ -409,7 +322,7 @@ Bundled msb version: see `uv.lock` (0.7.13 at the time of writing).
   at host CID 2 (since v0.6.9; local backend only; port 123 reserved).
 - `--trust-host-cas` (YAML `network.trust_host_cas`) copies **all**
   trusted host root CAs into the guest at start; off by default. Exact
-  guest location is unknown (being investigated, §9).
+  guest location is unknown (being investigated, §7.1).
 - `--tls-intercept` makes msb's own inspection CA
   (`~/.microsandbox/tls/ca.{crt,key}`) available in the guest at
   `/.msb/tls/ca.pem`; the `circus-ca-import` service imports it.
@@ -427,7 +340,7 @@ Bundled msb version: see `uv.lock` (0.7.13 at the time of writing).
   `kill -TERM 1` in the guest shuts the sandbox down cleanly.
 - `msb ssh` / `msb ssh serve` give SSH access *into* a sandbox; not used.
 
-## 8. Feature status (msb-circus)
+## 6. Feature status
 
 The user verifies msb behavior on a real KVM host; this container has no
 KVM, docker socket, or msb runtime.
@@ -439,52 +352,31 @@ KVM, docker socket, or msb runtime.
 | Removal of the hard-coded fallback msb version | implemented (`641608a`) |
 | SSH agent forwarding | implemented (`b0650bc`); open live checks: does msb re-open the symlinked host socket per connection, does the entrypoint run again on `msb start` |
 | Host entries | implemented (`809068f`) |
-| CA certificates (`[ca_certs]`) | in analysis, see §9 |
+| CA certificates (`[msb.network] trust_host_cas`) | implemented, pending live verification |
 | Init system (s6-overlay) | implemented; pending live verification (plan-msb-s6.md) |
 | Daemons (`[[msb.daemons]]`, runtime s6 services) | implemented, pending live verification |
-| Central proxy (`msb-circus proxy`, guest `circus-router`, `msb-circus urls`) | implemented, pending live verification |
-| Dashboard (`http://localhost:7700/`, `msb-circus dashboard`, `_circus` status endpoint) | implemented, pending live verification |
-| Browser shell (`msb-circus proxy --shell`, `/api/shell`, vendored xterm.js) | implemented, pending live verification |
+| Central proxy (`agent-circus proxy`, guest `circus-router`, `agent-circus urls`) | implemented, pending live verification |
+| Dashboard (`http://localhost:7700/`, `agent-circus dashboard`, `_circus` status endpoint) | implemented, pending live verification |
+| Browser shell (`agent-circus proxy --shell`, `/api/shell`, vendored xterm.js) | implemented, pending live verification |
 
-## 9. Work in progress
+## 7. Work in progress
 
-### 9.1 CA certificates for msb-circus
+### 7.1 CA certificates
 
-Goal: port agent-circus `[ca_certs]` (`patterns`, `path`, default
-`/usr/local/share/ca-certificates`; file-name matching like `[hosts]`).
+Implemented via `[msb.network] trust_host_cas`: msb copies every CA that
+the host trusts into the sandbox at creation. See
+[CA Certificates](README.md#ca-certificates) in the README.
 
-Proposed design (not yet approved):
-
-1. Same table and matching. Validate PEM content on the host; install
-   every file as `<stem>.crt` (agent-circus silently ignores non-`.crt`).
-2. On every boot/start/reuse: clear guest dir
-   `/usr/local/share/ca-certificates/msb-circus/`, `msb copy` the selected
-   files, run `update-ca-certificates` (one `msb exec`). Best-effort.
-3. Entrypoint must run `update-ca-certificates` on every boot when that
-   dir exists (before dockerd). First-boot gap: dockerd started before the
-   copy; documented, or fixed later with a real init.
-4. Open decisions: tool-specific trust env (`NODE_USE_SYSTEM_CA=1`,
-   `REQUESTS_CA_BUNDLE`, uv native TLS; names to be verified), and an
-   optional `[msb.network] trust_host_cas` passthrough.
-
-**Live investigation in progress:** to see what `--trust-host-cas` puts
-into the guest, `src/msb_circus/sandbox.py:build_run_args` currently
-**always appends `--trust-host-cas`**. This change is marked `TEMPORARY`,
-is **uncommitted**, and breaks three argv tests on purpose. Revert it
-(`git checkout src/msb_circus/sandbox.py`) once the user reports the
-guest listing of `/.msb/tls`, mounts, and the trust-store certificate
-count. Without the flag, `/.msb/tls` is empty.
-
-### 9.2 Init system
+### 7.2 Init system
 
 Implemented; see `plan-msb-s6.md`.
 
-## 10. Conventions and working rules
+## 8. Conventions and working rules
 
 - Run everything through uv: `uv run pytest`, `uv run ruff check`,
   `uv run ruff format --check`, `uv run ty check`. All must pass before a
   commit.
-- Commits: Conventional Commits with scope (`feat(msb-circus): ...`),
+- Commits: Conventional Commits with scope (`feat(agent-circus): ...`),
   imperative subject under 60 characters, exactly one short description
   paragraph, no AI or tool credit footers, **unsigned**
   (`uv run git commit --no-gpg-sign`; the user signs). One feature or fix
@@ -500,7 +392,7 @@ Implemented; see `plan-msb-s6.md`.
   arguments (`sh -c SCRIPT sh ARG`), never by string interpolation. Test
   them by running the script locally against temp files.
 
-## 11. Lessons learned
+## 9. Lessons learned
 
 - `os.path.realpath()` on a symlink follows it. The SSH loop check
   compared `realpath(link)` and failed on every refresh after the first;
@@ -515,3 +407,18 @@ Implemented; see `plan-msb-s6.md`.
 - Things that look like host paths inside copied config files (e.g.
   `IdentityFile`, `UseKeychain` in `~/.ssh/config`) may not work in a
   Linux guest; document instead of rewriting user files.
+
+## 10. Branches and releases
+
+| Branch | Content | Versions | Tags | Published to |
+|---|---|---|---|---|
+| `v1` | Docker/Podman implementation, security updates only | `1.0.x` | `v1.0.x` | PyPI |
+| `develop` | microsandbox implementation, new and not yet battle-tested | `2.Y.ZaN`, `bN`, `rcN` | `v2.0.0rc1`, ... | TestPyPI only |
+| `main` | microsandbox implementation, battle-tested | `2.Y.Z` | `v2.Y.Z` | PyPI |
+
+A fix raises `PATCH`, a backward-compatible feature raises `MINOR`, a
+breaking change raises `MAJOR`. Pre-releases come from `develop` and go
+to TestPyPI only; PyPI gets stable releases only. Fixes for both lines
+are cherry-picked by hand; nothing merges between `v1` and `develop`.
+`develop` is merged into `main` when a release candidate has been in
+daily use for about two weeks without blocking bugs.
