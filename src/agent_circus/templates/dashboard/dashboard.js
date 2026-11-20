@@ -1,4 +1,4 @@
-/* msb-circus dashboard: polling and rendering. Plain ES2020, no
+/* agent-circus dashboard: polling and rendering. Plain ES2020, no
    framework. All DOM changes go through createElement/textContent (or
    replaceChildren); sandbox names and paths from msb are never parsed
    as HTML. */
@@ -51,7 +51,7 @@
 
   // ---- state --------------------------------------------------------------
 
-  var STORAGE_PREFIX = "msb-circus.";
+  var STORAGE_PREFIX = "agent-circus.";
 
   var state = {
     data: null, // last parsed /api/state payload
@@ -108,7 +108,7 @@
       var disabled = make("button", "copy-btn", "Shell");
       disabled.type = "button";
       disabled.disabled = true;
-      disabled.title = "Open the dashboard with msb-circus dashboard to enable the shell";
+      disabled.title = "Open the dashboard with agent-circus dashboard to enable the shell";
       return disabled;
     }
     var link = make("a", "copy-btn", "Shell");
@@ -148,8 +148,8 @@
     el("view-detail").hidden = route.view !== "detail";
     document.title =
       route.view === "detail"
-        ? route.sandbox + " · msb-circus dashboard"
-        : "msb-circus dashboard";
+        ? route.sandbox + " · agent-circus dashboard"
+        : "agent-circus dashboard";
     window.scrollTo(0, 0);
     if (scopeChanged) state.data = null;
     scheduleFetch(0);
@@ -758,7 +758,7 @@
     if (visible.length === 0) {
       wrap.className = "cards";
       wrap.replaceChildren(
-        make("div", "empty", "No sandboxes match. Start one with: msb-circus up")
+        make("div", "empty", "No sandboxes match. Start one with: agent-circus up")
       );
       return;
     }
@@ -951,7 +951,7 @@
       banner.hidden = false;
       banner.className = "banner serious";
       banner.textContent =
-        "Lost contact with the proxy. Is msb-circus proxy still running?";
+        "Lost contact with the proxy. Is agent-circus proxy still running?";
       return;
     }
     if (data && data.refresh_error) {
@@ -1116,7 +1116,7 @@
     pairs.push(
       ...metaPair(
         "Kind",
-        make("span", null, sandbox.managed ? "msb-circus sandbox" : "other msb sandbox")
+        make("span", null, sandbox.managed ? "agent-circus sandbox" : "other msb sandbox")
       )
     );
     if (shellEnabled(data)) {
@@ -1147,8 +1147,8 @@
       off.append(
         make("span", null, "Browser shell is off. Restart the proxy with: ")
       );
-      off.append(make("code", null, "msb-circus proxy --shell"));
-      off.append(copyButton("msb-circus proxy --shell"));
+      off.append(make("code", null, "agent-circus proxy --shell"));
+      off.append(copyButton("agent-circus proxy --shell"));
       pairs.push(...metaPair("Shells", off));
     }
     dl.replaceChildren(...pairs);
@@ -1169,7 +1169,7 @@
           "div",
           "empty",
           "No daemons registered. Add [[msb.daemons]] to the workspace " +
-            "config and run msb-circus up."
+            "config and run agent-circus up."
         )
       );
       return;

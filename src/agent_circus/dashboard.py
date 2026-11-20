@@ -238,7 +238,7 @@ def build_hints(sandbox: dict) -> list[dict]:
 
     Every hint carries a copyable command; commands are prefixed with
     ``cd <workspace> && `` when the workspace is known. Sandboxes that
-    are not managed by msb-circus get no hints.
+    are not managed by agent-circus get no hints.
 
     :param sandbox: A sandbox view dict (as built by
         :func:`build_sandbox_view`, with ``hints`` not yet set).
@@ -258,7 +258,7 @@ def build_hints(sandbox: dict) -> list[dict]:
             {
                 "level": "info",
                 "text": "Sandbox is stopped.",
-                "command": command("msb-circus up"),
+                "command": command("agent-circus up"),
             }
         )
     elif router_state == "no-router":
@@ -267,7 +267,7 @@ def build_hints(sandbox: dict) -> list[dict]:
                 "level": "warning",
                 "text": "Created without the router port. The proxy cannot "
                 "reach its daemons.",
-                "command": command("msb-circus rm -f && msb-circus up"),
+                "command": command("agent-circus rm -f && agent-circus up"),
             }
         )
     elif router_state == "unreachable":
@@ -275,16 +275,16 @@ def build_hints(sandbox: dict) -> list[dict]:
             {
                 "level": "error",
                 "text": "The router in this sandbox does not answer.",
-                "command": command("msb-circus up"),
+                "command": command("agent-circus up"),
             }
         )
     elif router_state == "outdated":
         hints.append(
             {
                 "level": "info",
-                "text": "The router is older than this msb-circus. Daemon "
+                "text": "The router is older than this agent-circus. Daemon "
                 "details are not available.",
-                "command": command("msb-circus up"),
+                "command": command("agent-circus up"),
             }
         )
     for daemon in sandbox.get("daemons", []):
@@ -294,7 +294,7 @@ def build_hints(sandbox: dict) -> list[dict]:
                 {
                     "level": "error",
                     "text": f"Daemon {name} failed (crash limit reached).",
-                    "command": command(f"msb-circus daemon restart {name}"),
+                    "command": command(f"agent-circus daemon restart {name}"),
                 }
             )
         elif (
@@ -307,7 +307,7 @@ def build_hints(sandbox: dict) -> list[dict]:
                     "level": "warning",
                     "text": f"Daemon {name} runs but does not listen on "
                     f"port {daemon['port']}.",
-                    "command": command(f"msb-circus daemon logs {name}"),
+                    "command": command(f"agent-circus daemon logs {name}"),
                 }
             )
         elif daemon["state"] == "stopped":
@@ -315,7 +315,7 @@ def build_hints(sandbox: dict) -> list[dict]:
                 {
                     "level": "info",
                     "text": f"Daemon {name} is stopped.",
-                    "command": command(f"msb-circus daemon start {name}"),
+                    "command": command(f"agent-circus daemon start {name}"),
                 }
             )
     return hints

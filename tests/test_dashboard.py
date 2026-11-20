@@ -256,7 +256,7 @@ def test_build_hints_stopped():
     assert view["router"]["state"] == "stopped"
     hint = view["hints"][0]
     assert hint["level"] == "info"
-    assert hint["command"] == "cd /home/u/src/foo && msb-circus up"
+    assert hint["command"] == "cd /home/u/src/foo && agent-circus up"
 
 
 def test_build_hints_no_router():
@@ -264,21 +264,21 @@ def test_build_hints_no_router():
     assert view["router"]["state"] == "no-router"
     hint = view["hints"][0]
     assert hint["level"] == "warning"
-    assert "rm -f && msb-circus up" in hint["command"]
+    assert "rm -f && agent-circus up" in hint["command"]
 
 
 def test_build_hints_unreachable():
     view = _sandbox_view("unreachable")
     hint = view["hints"][0]
     assert hint["level"] == "error"
-    assert hint["command"] == "cd /home/u/src/foo && msb-circus up"
+    assert hint["command"] == "cd /home/u/src/foo && agent-circus up"
 
 
 def test_build_hints_outdated():
     view = _sandbox_view("outdated")
     hint = view["hints"][0]
     assert hint["level"] == "info"
-    assert "older than this msb-circus" in hint["text"]
+    assert "older than this agent-circus" in hint["text"]
 
 
 def test_build_hints_failed_daemon():
@@ -286,7 +286,7 @@ def test_build_hints_failed_daemon():
     failed = [h for h in view["hints"] if h["level"] == "error"]
     assert len(failed) == 1
     assert "Daemon worker failed" in failed[0]["text"]
-    assert failed[0]["command"].endswith("msb-circus daemon restart worker")
+    assert failed[0]["command"].endswith("agent-circus daemon restart worker")
 
 
 def test_build_hints_not_listening():
@@ -299,7 +299,7 @@ def test_build_hints_not_listening():
     hint = view["hints"][0]
     assert hint["level"] == "warning"
     assert "does not listen on port 4096" in hint["text"]
-    assert hint["command"].endswith("msb-circus daemon logs web")
+    assert hint["command"].endswith("agent-circus daemon logs web")
 
 
 def test_build_hints_stopped_daemon():
@@ -311,7 +311,7 @@ def test_build_hints_stopped_daemon():
     view = _sandbox_view(status)
     hint = view["hints"][0]
     assert hint["level"] == "info"
-    assert hint["command"].endswith("msb-circus daemon start web")
+    assert hint["command"].endswith("agent-circus daemon start web")
 
 
 def test_build_hints_quotes_workspace_with_spaces():

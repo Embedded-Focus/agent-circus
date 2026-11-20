@@ -1,4 +1,4 @@
-"""Tests for the central host proxy (msb-circus proxy)."""
+"""Tests for the central host proxy (agent-circus proxy)."""
 
 import asyncio
 import importlib.util
@@ -272,7 +272,7 @@ def test_proxy_command_reports_port_in_use(tmp_path, monkeypatch):
         result = runner.invoke(app, ["proxy", "-p", str(port), "-w", str(tmp_path)])
         assert result.exit_code == 1
         assert "is in use" in result.output
-        assert "MSB_CIRCUS_PROXY_PORT" in result.output
+        assert "AGENT_CIRCUS_PROXY_PORT" in result.output
     finally:
         blocker.close()
 

@@ -1,4 +1,4 @@
-"""Tests for msb-circus logging setup (CLI options and [logging] config)."""
+"""Tests for agent-circus logging setup (CLI options and [logging] config)."""
 
 import logging
 

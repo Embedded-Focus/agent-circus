@@ -6,7 +6,7 @@ import pytest
 
 from agent_circus.cli import _log_unused_host_agent_skills
 
-NOTE = "not available in msb-circus sandboxes"
+NOTE = "not available in agent-circus sandboxes"
 
 
 def test_log_unused_host_agent_skills_notes_at_debug_when_skills_exist(
@@ -22,7 +22,7 @@ def test_log_unused_host_agent_skills_notes_at_debug_when_skills_exist(
     assert len(notes) == 1
     assert notes[0].levelno == logging.DEBUG
     assert str(skills_dir) in notes[0].getMessage()
-    assert "msb-circus skills add" in notes[0].getMessage()
+    assert "agent-circus skills add" in notes[0].getMessage()
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 

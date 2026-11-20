@@ -1,4 +1,4 @@
-"""Tests for agent harness config handling in msb-circus.
+"""Tests for agent harness config handling in agent-circus.
 
 Covers the host config-dir bind mounts (claude-code, codex), the one-way
 config file copies (claude-code, pi, opencode), the Claude Code folder

@@ -379,7 +379,7 @@ def parse_root_disk_spec(
     """Parse a ``--root-disk`` spec into ``(kind, size_mib)``.
 
     :param spec: Spec string as configured (e.g. ``"flat:32G"``, ``"16G"``).
-    :returns: Kind and size in MiB; ``(None, None)`` for forms msb-circus
+    :returns: Kind and size in MiB; ``(None, None)`` for forms agent-circus
         does not model (e.g. user-supplied disk images), so drift checks
         skip the comparison.
     """
@@ -464,7 +464,7 @@ def parse_inspect_disk_config(output: str) -> GuestDiskConfig:
     ``capacity_mib``) and the root disk tagged with ``kind`` (``managed``,
     ``tmpfs``, ``flat``, ``disk-image``); anything else is ignored. The
     docker disk is assumed to be the sandbox's only mount-owned disk,
-    which holds while sandboxes are created by msb-circus. A ``Named``
+    which holds while sandboxes are created by agent-circus. A ``Named``
     mount at :data:`DOCKER_DATA_GUEST_PATH` is the persistent docker
     volume; msb reports no size for it here.
 

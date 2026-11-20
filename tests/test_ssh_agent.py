@@ -35,12 +35,12 @@ def _make_socket(name: str = "agent.sock") -> tuple[socket.socket, str]:
 
 def test_agent_link_path_prefers_xdg_runtime_dir(tmp_path):
     link = agent_link_path({"XDG_RUNTIME_DIR": str(tmp_path), "HOME": "/elsewhere"})
-    assert link == tmp_path / "msb-circus" / "ssh-agent.sock"
+    assert link == tmp_path / "agent-circus" / "ssh-agent.sock"
 
 
 def test_agent_link_path_falls_back_to_home_cache(tmp_path):
     link = agent_link_path({"HOME": str(tmp_path)})
-    assert link == tmp_path / ".cache" / "msb-circus" / "ssh-agent.sock"
+    assert link == tmp_path / ".cache" / "agent-circus" / "ssh-agent.sock"
 
 
 def test_refresh_agent_link_points_at_current_socket(tmp_path, monkeypatch):
@@ -108,14 +108,14 @@ def test_refresh_agent_link_rejects_missing_socket(tmp_path):
 def test_refresh_agent_link_rejects_self_reference(tmp_path):
     _real, real_path = _make_socket("real.sock")
     try:
-        link_dir = tmp_path / "msb-circus"
+        link_dir = tmp_path / "agent-circus"
         link_dir.mkdir()
         link = link_dir / "ssh-agent.sock"
         link.symlink_to(real_path)
         # SSH_AUTH_SOCK resolves through the link to a real socket; the
         # refresh must still detect the loop.
         with pytest.raises(
-            ConfigurationError, match="points at the msb-circus agent link"
+            ConfigurationError, match="points at the agent-circus agent link"
         ):
             refresh_agent_link(
                 {"XDG_RUNTIME_DIR": str(tmp_path), "SSH_AUTH_SOCK": str(link)}

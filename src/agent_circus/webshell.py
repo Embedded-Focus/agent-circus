@@ -9,7 +9,7 @@ PTY output and WebSocket input, and maps resizes to ``TIOCSWINSZ`` plus
 The shell is off by default: the CLI only creates a :class:`ShellManager`
 with a token when the user passes ``--shell``. Everything here assumes
 Linux or macOS (``pty``, ``fcntl``, ``termios``); Windows is not a
-target of msb-circus.
+target of agent-circus.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ SHELL_MAX_SESSIONS = 8
 HELLO_TIMEOUT_S = 10.0
 #: Seconds between SIGHUP and SIGKILL when a session ends.
 KILL_GRACE_S = 3.0
-#: Guest command: bash (as in ``msb-circus exec -- bash``), else sh.
+#: Guest command: bash (as in ``agent-circus exec -- bash``), else sh.
 SHELL_SCRIPT = "if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh"
 #: Terminal variables; the lowest precedence, the config may override.
 TERMINAL_ENV = {"TERM": "xterm-256color", "COLORTERM": "truecolor"}
@@ -70,7 +70,7 @@ def shell_launch_for_workspace(
 ) -> ShellLaunch:
     """Load the workspace config and return the shell's launch spec.
 
-    Mirrors ``msb-circus exec -- bash`` in that workspace:
+    Mirrors ``agent-circus exec -- bash`` in that workspace:
     ``load_config``, ``merged_env(config, (), {})`` and
     ``resolve_agent_workdir``. Only the environment and the workdir are
     taken from the config; host-side settings such as ``binary`` are
@@ -86,7 +86,7 @@ def shell_launch_for_workspace(
     if workspace is None:
         raise ConfigurationError(
             "The workspace of this sandbox is unknown (no /workspace "
-            "mount). Use msb-circus exec in a terminal."
+            "mount). Use agent-circus exec in a terminal."
         )
     if not Path(workspace).is_dir():
         raise ConfigurationError(
@@ -117,7 +117,7 @@ def build_shell_argv(binary: Path, sandbox: str, launch: ShellLaunch) -> list[st
     """Return the host argv that starts the shell in a sandbox.
 
     Uses :func:`agent_circus.exec_.build_exec_args` with the same keyword
-    arguments ``msb-circus exec`` passes, so the guest sees the same
+    arguments ``agent-circus exec`` passes, so the guest sees the same
     environment and directory. The only intended differences from the
     ``exec`` command: the command (``SHELL_SCRIPT`` instead of ``bash``),
     the two terminal variables and no ``-e`` overrides.
@@ -283,9 +283,9 @@ class PtyProcess:
 def shell_token_path(environ: Mapping[str, str] | None = None) -> Path:
     """Return the shell token file path.
 
-    ``$XDG_RUNTIME_DIR/msb-circus/shell-token`` when XDG_RUNTIME_DIR is
+    ``$XDG_RUNTIME_DIR/agent-circus/shell-token`` when XDG_RUNTIME_DIR is
     set (cleared at logout, so there is a new token per login session),
-    else ``~/.local/state/msb-circus/shell-token``.
+    else ``~/.local/state/agent-circus/shell-token``.
 
     :param environ: Environment mapping, defaults to :data:`os.environ`.
     :returns: The token file path.
@@ -293,8 +293,8 @@ def shell_token_path(environ: Mapping[str, str] | None = None) -> Path:
     env = os.environ if environ is None else environ
     runtime_dir = env.get("XDG_RUNTIME_DIR")
     if runtime_dir:
-        return Path(runtime_dir) / "msb-circus" / "shell-token"
-    return Path.home() / ".local" / "state" / "msb-circus" / "shell-token"
+        return Path(runtime_dir) / "agent-circus" / "shell-token"
+    return Path.home() / ".local" / "state" / "agent-circus" / "shell-token"
 
 
 def _token_file_unsafe(path: Path) -> str | None:
@@ -522,7 +522,7 @@ class ShellManager:
             await self._error_and_close(
                 ws,
                 4503,
-                "The shell is off. Restart the proxy with: msb-circus proxy --shell",
+                "The shell is off. Restart the proxy with: agent-circus proxy --shell",
             )
             return
         try:
@@ -545,7 +545,7 @@ class ShellManager:
             await self._error_and_close(
                 ws,
                 4404,
-                f"Sandbox {sandbox!r} is not running or not a msb-circus sandbox",
+                f"Sandbox {sandbox!r} is not running or not a agent-circus sandbox",
             )
             return
         if len(self._sessions) >= self._max_sessions:

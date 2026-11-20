@@ -1,4 +1,4 @@
-"""Guest log sources and the guest scripts behind ``msb-circus logs``.
+"""Guest log sources and the guest scripts behind ``agent-circus logs``.
 
 The sandbox writes several log files inside the guest (see the source
 table below); the kernel ring buffer is reachable through ``dmesg``.
@@ -32,7 +32,7 @@ KERNEL_SOURCE_NAME = "kernel"
 class LogSource:
     """One selectable log source of the sandbox VM.
 
-    :ivar name: Name used on the ``msb-circus logs`` command line.
+    :ivar name: Name used on the ``agent-circus logs`` command line.
     :ivar description: One-line description for ``--list`` and errors.
     :ivar pattern: Guest file path or glob of the log files; ``None``
         for non-file sources (the kernel).
@@ -64,7 +64,7 @@ KERNEL_SOURCE = LogSource(
 )
 
 #: Guest log sources of the sandbox in the canonical presentation order
-#: of ``msb-circus logs``: kernel first, then bridge, dockerd, hooks and
+#: of ``agent-circus logs``: kernel first, then bridge, dockerd, hooks and
 #: daemons. This order is a display convention, not a claim about exact
 #: event times: the bridge and dockerd s6 services start independently,
 #: so their relative startup order is not guaranteed. Every source
@@ -87,7 +87,7 @@ GUEST_LOG_SOURCES: tuple[LogSource, ...] = (
         name="hooks",
         label_prefix="hook",
         description="Provision and startup hooks",
-        pattern="/var/log/msb-circus/*.log",
+        pattern="/var/log/agent-circus/*.log",
         glob=True,
         per_file='n=${f##*/}; n=${n%.log}; prefix "[hook.$n]" "$f"',
     ),

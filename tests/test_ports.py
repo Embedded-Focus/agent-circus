@@ -1,4 +1,4 @@
-"""Tests for msb-circus port forwarding: config, builders, drift parsing."""
+"""Tests for agent-circus port forwarding: config, builders, drift parsing."""
 
 import pytest
 

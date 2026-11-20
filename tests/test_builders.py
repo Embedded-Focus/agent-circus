@@ -1,4 +1,4 @@
-"""Tests for msb-circus argv builders (sandbox, exec, images, envs)."""
+"""Tests for agent-circus argv builders (sandbox, exec, images, envs)."""
 
 import pytest
 

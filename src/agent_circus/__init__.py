@@ -1,4 +1,4 @@
-"""msb-circus: manage AI coding-agent sandboxes with Microsandbox."""
+"""agent-circus: manage AI coding-agent sandboxes with Microsandbox."""
 
 from importlib.metadata import version as distribution_version
 

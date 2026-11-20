@@ -1,4 +1,4 @@
-"""Tests for the top-level ``[env]`` table in msb-circus."""
+"""Tests for the top-level ``[env]`` table in agent-circus."""
 
 import logging
 import re

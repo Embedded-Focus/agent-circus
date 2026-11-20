@@ -1,7 +1,7 @@
 """Minimal WebSocket server on asyncio streams (RFC 6455, server side).
 
 The dashboard's shell endpoint needs a WebSocket server, but the shell
-is an opt-in feature and msb-circus has no runtime dependencies beyond
+is an opt-in feature and agent-circus has no runtime dependencies beyond
 msb itself. This module implements the server side of RFC 6455 on the
 standard library only: the upgrade handshake, a frame codec and a
 :class:`WebSocket` class for one connection. No extensions, no

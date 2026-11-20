@@ -1,4 +1,4 @@
-"""Lightweight execution traces for ``msb-circus exec``."""
+"""Lightweight execution traces for ``agent-circus exec``."""
 
 from __future__ import annotations
 
@@ -221,7 +221,7 @@ class TraceSession:
         :param workspace: Project workspace.
         :param root: Trace root directory.
         :param config: Effective trace settings.
-        :param msb_config: Effective msb-circus configuration.
+        :param msb_config: Effective agent-circus configuration.
         :param sandbox: Sandbox name.
         :param command: Agent command. Only its executable name is saved.
         :param acp: Whether the execution uses ACP.
@@ -269,8 +269,8 @@ class TraceSession:
             file.write(trace_id + "\n")
 
     def _add_log_handler(self) -> None:
-        """Copy msb-circus logs into this trace."""
-        path = self.directory / "msb-circus.log"
+        """Copy agent-circus logs into this trace."""
+        path = self.directory / "agent-circus.log"
         handler = logging.FileHandler(path)
         path.chmod(0o600)
         handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))

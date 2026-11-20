@@ -8,7 +8,7 @@ container image pins are resolved through the registry API, so a new tag is
 always accompanied by its fresh multi-arch manifest-list digest.
 
 Installed as its own console script (``agent-circus-update-templates``),
-separate from the ``msb-circus`` CLI, since it edits the Dockerfile
+separate from the ``agent-circus`` CLI, since it edits the Dockerfile
 *source* rather than acting on a deployed workspace.
 
 Shortcomings: the Dockerfile is derived from this module's own file

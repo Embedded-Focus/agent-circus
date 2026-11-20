@@ -1,6 +1,6 @@
 """System skills store and installer sandbox helpers.
 
-System skills are skills that every msb-circus sandbox sees. They live in
+System skills are skills that every agent-circus sandbox sees. They live in
 a host-side store (a "fake home" that the ``skills`` CLI writes) and are
 installed by the ``skills`` CLI inside a short-lived installer sandbox,
 so the host needs no Node.js. Agent sandboxes mount the store's skill
@@ -48,9 +48,9 @@ def system_skills_store(
 
     Precedence: the configured ``[msb.skills] store`` value (``~`` is
     expanded, must be absolute after expansion), then
-    ``$XDG_DATA_HOME/msb-circus/system-skills`` (only when absolute; the
+    ``$XDG_DATA_HOME/agent-circus/system-skills`` (only when absolute; the
     XDG spec says to ignore relative values), then
-    ``$HOME/.local/share/msb-circus/system-skills``.
+    ``$HOME/.local/share/agent-circus/system-skills``.
 
     :param configured: Configured store path, or ``None`` for the default.
     :param environ: Environment mapping read for ``XDG_DATA_HOME`` and
@@ -68,7 +68,7 @@ def system_skills_store(
         base = Path(data_home)
     else:
         base = Path(env.get("HOME", str(Path.home()))) / _DEFAULT_DATA_HOME
-    return base / "msb-circus" / "system-skills"
+    return base / "agent-circus" / "system-skills"
 
 
 def expand_store_path(configured: str) -> Path:
@@ -96,9 +96,9 @@ def expand_store_path(configured: str) -> Path:
 def installer_lock_path(environ: Mapping[str, str] | None = None) -> Path:
     """Return the host path of the skills installer lock file.
 
-    ``$XDG_STATE_HOME/msb-circus/skills-installer.lock``; if
+    ``$XDG_STATE_HOME/agent-circus/skills-installer.lock``; if
     ``XDG_STATE_HOME`` is unset, empty or relative (the XDG spec says to
-    ignore relative values), ``$HOME/.local/state/msb-circus/skills-installer.lock``.
+    ignore relative values), ``$HOME/.local/state/agent-circus/skills-installer.lock``.
 
     :param environ: Environment mapping read for ``XDG_STATE_HOME`` and
         ``HOME``; defaults to :data:`os.environ` so tests can pass a dict.
@@ -110,7 +110,7 @@ def installer_lock_path(environ: Mapping[str, str] | None = None) -> Path:
         base = Path(state_home)
     else:
         base = Path(env.get("HOME", str(Path.home()))) / ".local/state"
-    return base / "msb-circus" / "skills-installer.lock"
+    return base / "agent-circus" / "skills-installer.lock"
 
 
 def store_skills_dir(store: Path) -> Path:
@@ -186,8 +186,8 @@ def build_skills_command(args: Sequence[str]) -> list[str]:
     """
     if not args:
         raise ValueError(
-            "Usage: msb-circus skills add|remove|list|update|check|find "
-            "[arguments]. Try 'msb-circus skills --help'."
+            "Usage: agent-circus skills add|remove|list|update|check|find "
+            "[arguments]. Try 'agent-circus skills --help'."
         )
     if "--copy" in args[1:]:
         raise ValueError(

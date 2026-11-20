@@ -1,4 +1,4 @@
-"""Tests for lightweight msb-circus execution traces."""
+"""Tests for lightweight agent-circus execution traces."""
 
 from __future__ import annotations
 

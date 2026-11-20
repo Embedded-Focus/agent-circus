@@ -404,7 +404,7 @@ def test_build_write_trust_args_single_dir():
     script = args[5]
     assert 'mkdir -p "$HOME/.pi/agent"' in script
     assert 'cat > "$HOME/.pi/agent/trust.json"' in script
-    assert "<<'MSB_CIRCUS_EOF'" in script
+    assert "<<'AGENT_CIRCUS_EOF'" in script
     assert '{"/workspace": true}' in script
 
 
@@ -675,7 +675,7 @@ def test_exec_acp_survives_stdin_consuming_probes(tmp_path):
     )
     child_code = (
         "import sys; from agent_circus.cli import run_cli; "
-        "sys.argv = ['msb-circus', '--log-level', 'DEBUG', "
+        "sys.argv = ['agent-circus', '--log-level', 'DEBUG', "
         "'--log-file', '/dev/null', 'exec', '--acp', '--workspace', "
         f"'{tmp_path}', '--', 'cat']; run_cli()"
     )

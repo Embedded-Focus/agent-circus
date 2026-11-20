@@ -1,4 +1,4 @@
-"""Tests for ``[msb.hooks]`` parsing in msb-circus configuration."""
+"""Tests for ``[msb.hooks]`` parsing in agent-circus configuration."""
 
 import logging
 import re

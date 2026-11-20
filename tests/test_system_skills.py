@@ -22,13 +22,13 @@ def test_system_skills_store_defaults_to_home_when_no_xdg(tmp_path) -> None:
     store = system_skills_store(
         None, environ={"HOME": str(tmp_path), "XDG_DATA_HOME": ""}
     )
-    assert store == tmp_path / ".local/share/msb-circus/system-skills"
+    assert store == tmp_path / ".local/share/agent-circus/system-skills"
 
 
 def test_system_skills_store_uses_xdg_data_home(tmp_path) -> None:
     """A set XDG_DATA_HOME wins over $HOME."""
     store = system_skills_store(None, environ={"XDG_DATA_HOME": str(tmp_path)})
-    assert store == tmp_path / "msb-circus" / "system-skills"
+    assert store == tmp_path / "agent-circus" / "system-skills"
 
 
 def test_system_skills_store_ignores_empty_xdg_data_home(tmp_path) -> None:
@@ -36,7 +36,7 @@ def test_system_skills_store_ignores_empty_xdg_data_home(tmp_path) -> None:
     store = system_skills_store(
         None, environ={"XDG_DATA_HOME": "", "HOME": str(tmp_path)}
     )
-    assert store == tmp_path / ".local/share/msb-circus" / "system-skills"
+    assert store == tmp_path / ".local/share/agent-circus" / "system-skills"
 
 
 def test_system_skills_store_expands_configured_tilde(
@@ -146,13 +146,13 @@ def test_system_skills_store_ignores_relative_xdg_data_home(
     store = system_skills_store(
         None, environ={"XDG_DATA_HOME": data_home, "HOME": str(tmp_path)}
     )
-    assert store == tmp_path / ".local/share/msb-circus/system-skills"
+    assert store == tmp_path / ".local/share/agent-circus/system-skills"
 
 
 def test_expand_store_path_rejects_unknown_user() -> None:
     """``~user`` with an unknown user raises ConfigurationError."""
     with pytest.raises(ConfigurationError, match="cannot be expanded"):
-        expand_store_path("~no-such-user-msb-circus/skills")
+        expand_store_path("~no-such-user-agent-circus/skills")
 
 
 def test_installer_lock_path_defaults_to_home_state_dir(tmp_path) -> None:
@@ -160,7 +160,7 @@ def test_installer_lock_path_defaults_to_home_state_dir(tmp_path) -> None:
     from agent_circus.system_skills import installer_lock_path
 
     path = installer_lock_path(environ={"HOME": str(tmp_path), "XDG_STATE_HOME": ""})
-    assert path == tmp_path / ".local/state/msb-circus/skills-installer.lock"
+    assert path == tmp_path / ".local/state/agent-circus/skills-installer.lock"
 
 
 def test_installer_lock_path_uses_xdg_state_home(tmp_path) -> None:
@@ -168,7 +168,7 @@ def test_installer_lock_path_uses_xdg_state_home(tmp_path) -> None:
     from agent_circus.system_skills import installer_lock_path
 
     path = installer_lock_path(environ={"XDG_STATE_HOME": str(tmp_path / "state")})
-    assert path == tmp_path / "state/msb-circus/skills-installer.lock"
+    assert path == tmp_path / "state/agent-circus/skills-installer.lock"
 
 
 @pytest.mark.parametrize("state_home", ["state", "./rel/state"])
@@ -181,7 +181,7 @@ def test_installer_lock_path_ignores_relative_xdg_state_home(
     path = installer_lock_path(
         environ={"XDG_STATE_HOME": state_home, "HOME": str(tmp_path)}
     )
-    assert path == tmp_path / ".local/state/msb-circus/skills-installer.lock"
+    assert path == tmp_path / ".local/state/agent-circus/skills-installer.lock"
 
 
 def test_build_skills_command_rejects_copy() -> None:

@@ -4,7 +4,7 @@
    are taken from the named sources; no code is copied. */
 window.MSB_SHELL_THEMES = [
   {
-    "id": "msb-light", "label": "msb-circus light", "group": "Dashboard", "scheme": "light",
+    "id": "msb-light", "label": "agent-circus light", "group": "Dashboard", "scheme": "light",
     "source": "dashboard.css (light)",
     "colors": {
       "background": "#fcfcfb", "foreground": "#0b0b0b", "cursor": "#2a78d6", "cursorAccent": "#fcfcfb",
@@ -12,7 +12,7 @@ window.MSB_SHELL_THEMES = [
     }
   },
   {
-    "id": "msb-dark", "label": "msb-circus dark", "group": "Dashboard", "scheme": "dark",
+    "id": "msb-dark", "label": "agent-circus dark", "group": "Dashboard", "scheme": "dark",
     "source": "dashboard.css (dark)",
     "colors": {
       "background": "#1a1a19", "foreground": "#f0efec", "cursor": "#3987e5", "cursorAccent": "#1a1a19",

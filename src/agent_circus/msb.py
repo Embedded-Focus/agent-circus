@@ -183,7 +183,7 @@ def check_version(binary: Path, expected: str | None = None) -> str | None:
         return version
     if version != expected:
         logger.warning(
-            "msb version %s differs from the version msb-circus is tested "
+            "msb version %s differs from the version agent-circus is tested "
             "against (%s); CLI flags may have changed",
             version,
             expected,

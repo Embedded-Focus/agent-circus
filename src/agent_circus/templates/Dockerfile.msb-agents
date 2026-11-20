@@ -125,13 +125,13 @@ RUN addgroup --system docker || true
 #   /.msb/tls/ca.pem before dockerd starts (Go caches the system cert pool
 #   per process). Host CAs (--trust-host-cas) are installed by msb itself.
 # - circus-ssh-agent-bridge (longrun): when CIRCUS_SSH_AGENT_VSOCK_PORT is
-#   set (msb-circus passes it with a matching --vsock route), socat relays
+#   set (agent-circus passes it with a matching --vsock route), socat relays
 #   /run/ssh-agent.sock to the host SSH agent over vsock (CID 2). Idles
 #   otherwise. Log: /tmp/ssh-agent-bridge.log.
 # - circus-dockerd (longrun, after circus-ca-import): dockerd 29 needs a
 #   real filesystem under /var/lib/docker (overlayfs on overlayfs fails),
 #   i.e. a mount-owned disk or a flat root. Otherwise it logs why and
-#   idles. CIRCUS_DOCKERD_SHUTDOWN_TIMEOUT (seconds, set by msb-circus)
+#   idles. CIRCUS_DOCKERD_SHUTDOWN_TIMEOUT (seconds, set by agent-circus)
 #   bounds how long dockerd waits for containers at shutdown.
 #   Log: /tmp/dockerd.log.
 # Idle services run `sleep infinity` instead of exiting, because s6
@@ -190,7 +190,7 @@ RUN set -eu; \
         'if [ "$usable" -ne 1 ]; then' \
         '    echo "docker is not usable in this sandbox: the docker data root is on overlayfs."' \
         '    echo "Enable docker with docker_disk = \"10G\" (or root_disk = \"flat:32G\") under [msb.sandbox] in"' \
-        '    echo ".agent-circus/config.toml, then recreate the sandbox (msb-circus rm -f && msb-circus up)."' \
+        '    echo ".agent-circus/config.toml, then recreate the sandbox (agent-circus rm -f && agent-circus up)."' \
         '    exec sleep infinity' \
         'fi' \
         'exec dockerd --shutdown-timeout "${CIRCUS_DOCKERD_SHUTDOWN_TIMEOUT:-20}"' \

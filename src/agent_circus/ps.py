@@ -1,4 +1,4 @@
-"""Output formatting for the ``msb-circus ps`` command.
+"""Output formatting for the ``agent-circus ps`` command.
 
 The table format mirrors ``docker compose ps`` (and therefore
 ``agent-circus ps``): a column-aligned table with a header row and

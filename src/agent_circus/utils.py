@@ -1,4 +1,4 @@
-"""Utility functions for msb-circus."""
+"""Utility functions for agent-circus."""
 
 import logging
 import sys

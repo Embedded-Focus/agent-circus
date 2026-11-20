@@ -1,4 +1,4 @@
-"""Tests for the msb-circus urls command."""
+"""Tests for the agent-circus urls command."""
 
 import json
 import socket

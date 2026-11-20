@@ -92,7 +92,7 @@ def skills_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     :param monkeypatch: Pytest environment patch helper.
     :returns: The store root directory.
     """
-    store = tmp_path / "xdg-data" / "msb-circus" / "system-skills"
+    store = tmp_path / "xdg-data" / "agent-circus" / "system-skills"
     (store / ".agents" / "skills").mkdir(parents=True)
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -201,7 +201,7 @@ def test_system_skill_mounts_created_on_demand_and_expected_in_drift(
     config = MsbConfig()
     assert _system_skill_mounts(config, create=False) == []
     mounts = _system_skill_mounts(config, create=True)
-    store = tmp_path / "xdg-data" / "msb-circus" / "system-skills"
+    store = tmp_path / "xdg-data" / "agent-circus" / "system-skills"
     assert (store / ".agents" / "skills").is_dir()
     assert mounts == [
         (str(store / ".agents/skills"), "/root/.agents/skills:ro"),

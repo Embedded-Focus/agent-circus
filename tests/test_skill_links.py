@@ -172,7 +172,7 @@ def test_warn_on_broken_skill_links_checks_system_store(
     workspace, home = layout
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
-    skills_dir = tmp_path / "xdg-data/msb-circus/system-skills/.agents/skills"
+    skills_dir = tmp_path / "xdg-data/agent-circus/system-skills/.agents/skills"
     skills_dir.mkdir(parents=True)
     (skills_dir / "gone").symlink_to("../../missing/gone")
     with caplog.at_level(logging.WARNING):
@@ -188,7 +188,7 @@ def test_warn_on_broken_skill_links_lists_store_link_once(
     workspace, home = layout
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
-    skills_dir = tmp_path / "xdg-data/msb-circus/system-skills/.agents/skills"
+    skills_dir = tmp_path / "xdg-data/agent-circus/system-skills/.agents/skills"
     skills_dir.mkdir(parents=True)
     (skills_dir / "gone").symlink_to("../../missing/gone")
     with caplog.at_level(logging.WARNING):

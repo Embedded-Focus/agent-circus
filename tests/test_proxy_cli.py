@@ -1,4 +1,4 @@
-"""Tests for the msb-circus proxy command's shell wiring."""
+"""Tests for the agent-circus proxy command's shell wiring."""
 
 import asyncio
 from pathlib import Path

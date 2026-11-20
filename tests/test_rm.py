@@ -1,4 +1,4 @@
-"""Tests for the msb-circus remove (rm) command."""
+"""Tests for the agent-circus remove (rm) command."""
 
 import json
 from pathlib import Path

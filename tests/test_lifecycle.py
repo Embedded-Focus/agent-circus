@@ -1,4 +1,4 @@
-"""Tests for the msb-circus lifecycle commands: up, stop, start, destroy."""
+"""Tests for the agent-circus lifecycle commands: up, stop, start, destroy."""
 
 import contextlib
 import json
@@ -141,7 +141,7 @@ class FakeInvoker:
             if rc is None:
                 rc = self.behavior.get("ssh_add_rc", 0)
             return SimpleNamespace(returncode=rc, stdout="", stderr="")
-        if args[0] == "exec" and any("BEGIN msb-circus hosts" in a for a in args):
+        if args[0] == "exec" and any("BEGIN agent-circus hosts" in a for a in args):
             # hosts block write: exit code scripted via hosts_rc
             return SimpleNamespace(
                 returncode=self.behavior.get("hosts_rc", 0), stdout="", stderr=""
@@ -201,7 +201,7 @@ def test_up_errors_when_image_missing_without_build(tmp_path, fake_msb):
     fake_msb["inspect_rc"] = 1
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 1
-    assert "msb-circus build" in result.output
+    assert "agent-circus build" in result.output
 
 
 def test_up_boots_fresh_sandbox_with_documented_workflow(tmp_path, fake_msb):
@@ -775,11 +775,11 @@ def test_up_boots_with_git_worktree_mirror_mount(tmp_path, fake_msb, monkeypatch
         f"{tmp_path}:/workspace",
         f"{tmp_path}:{tmp_path}",
         (
-            f"{tmp_path / 'xdg-data/msb-circus/system-skills/.agents/skills'}:"
+            f"{tmp_path / 'xdg-data/agent-circus/system-skills/.agents/skills'}:"
             "/root/.agents/skills:ro"
         ),
         (
-            f"{tmp_path / 'xdg-data/msb-circus/system-skills/.agents/skills'}:"
+            f"{tmp_path / 'xdg-data/agent-circus/system-skills/.agents/skills'}:"
             "/etc/claude-code/.claude/skills:ro"
         ),
     ]
@@ -1405,7 +1405,7 @@ def test_up_with_hosts_writes_matching_entries(tmp_path, fake_msb):
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
     execs = [c for c in fake_msb["calls"] if c[0] == "exec"]
-    writes = [c for c in execs if "BEGIN msb-circus hosts" in c[-3]]
+    writes = [c for c in execs if "BEGIN agent-circus hosts" in c[-3]]
     assert len(writes) == 1
     assert "10.1.2.3 myserver.test.local alias.test.local" in writes[0][-1]
     assert "10.1.2.4 other.corp.internal" not in writes[0][-1]
@@ -1415,7 +1415,7 @@ def test_up_without_hosts_does_not_touch_etc_hosts(tmp_path, fake_msb):
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
     assert not [
-        c for c in fake_msb["calls"] if any("BEGIN msb-circus hosts" in a for a in c)
+        c for c in fake_msb["calls"] if any("BEGIN agent-circus hosts" in a for a in c)
     ]
 
 
@@ -1435,7 +1435,7 @@ def test_start_refreshes_host_entries(tmp_path, fake_msb):
     writes = [
         c
         for c in fake_msb["calls"]
-        if c[0] == "exec" and "BEGIN msb-circus hosts" in c[-3]
+        if c[0] == "exec" and "BEGIN agent-circus hosts" in c[-3]
     ]
     assert ["start", name] in fake_msb["calls"]
     assert len(writes) == 1
@@ -1538,8 +1538,8 @@ def test_up_installs_git_wrapper_with_mirror_root(tmp_path, fake_msb, monkeypatc
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
     script = _installed_git_wrapper(fake_msb["calls"])
-    assert "MSB_CIRCUS_GUEST_ROOT-/workspace}" in script
-    assert f"MSB_CIRCUS_MIRROR_ROOT-{tmp_path}}}" in script
+    assert "AGENT_CIRCUS_GUEST_ROOT-/workspace}" in script
+    assert f"AGENT_CIRCUS_MIRROR_ROOT-{tmp_path}}}" in script
 
 
 def test_up_installs_git_wrapper_without_mirror_root(tmp_path, fake_msb):
@@ -1549,8 +1549,8 @@ def test_up_installs_git_wrapper_without_mirror_root(tmp_path, fake_msb):
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
     script = _installed_git_wrapper(fake_msb["calls"])
-    assert "MSB_CIRCUS_GUEST_ROOT-/workspace}" in script
-    assert "MSB_CIRCUS_MIRROR_ROOT-''}" in script
+    assert "AGENT_CIRCUS_GUEST_ROOT-/workspace}" in script
+    assert "AGENT_CIRCUS_MIRROR_ROOT-''}" in script
 
 
 def test_format_capacity_gib_and_mib():

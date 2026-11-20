@@ -199,7 +199,7 @@ def test_invoker_run_never_reads_host_stdin(tmp_path, monkeypatch):
     """Helper invocations must not consume the host's stdin descriptor.
 
     Piped ``msb exec`` reads host stdin unconditionally (forwarding it to the
-    guest). When msb-circus probes the sandbox or writes the pi trust file,
+    guest). When agent-circus probes the sandbox or writes the pi trust file,
     an inherited stdin would steal bytes from a concurrent ACP stream — for
     example the editor's initialize request.
     """

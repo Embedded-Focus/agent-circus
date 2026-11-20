@@ -1,4 +1,4 @@
-"""HTTP frontend of the msb-circus dashboard, served by the proxy.
+"""HTTP frontend of the agent-circus dashboard, served by the proxy.
 
 The proxy answers connections whose Host is ``localhost``,
 ``127.0.0.1`` or ``[::1]`` (each optionally with a port) with the
@@ -79,7 +79,7 @@ _LOOPBACK_NAMES = {"localhost", "127.0.0.1", "[::1]", "::1"}
 #: Valid daemon names for the log endpoint (config.DAEMON_NAME_PATTERN).
 _DAEMON_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 
-#: Valid sandbox names for the ?sandbox= scope (msb-circus names are
+#: Valid sandbox names for the ?sandbox= scope (agent-circus names are
 #: lower-case DNS-like labels; other msb sandboxes are rare and only
 #: get the overview).
 _SANDBOX_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,127}$")

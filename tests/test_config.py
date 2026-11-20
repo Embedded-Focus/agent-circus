@@ -1,4 +1,4 @@
-"""Tests for msb-circus configuration loading."""
+"""Tests for agent-circus configuration loading."""
 
 import logging
 from pathlib import Path
@@ -155,7 +155,7 @@ def test_parse_config_rejects_empty_skills_store():
         parse_config({"msb": {"skills": {"store": ""}}})
 
 
-@pytest.mark.parametrize("store", ["rel/path", "~no-such-user-msb-circus/x"])
+@pytest.mark.parametrize("store", ["rel/path", "~no-such-user-agent-circus/x"])
 def test_parse_config_rejects_invalid_skills_store(store):
     with pytest.raises(ConfigurationError, match=r"msb\.skills\.store"):
         parse_config({"msb": {"skills": {"store": store}}})

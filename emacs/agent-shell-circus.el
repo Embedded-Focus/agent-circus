@@ -1,4 +1,4 @@
-;;; agent-shell-circus.el --- agent-shell backends for agent-circus and msb-circus -*- lexical-binding: t; -*-
+;;; agent-shell-circus.el --- agent-shell backends for agent-circus and agent-circus -*- lexical-binding: t; -*-
 
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "28.1"))
@@ -6,12 +6,12 @@
 
 ;;; Commentary:
 
-;; This file wires `agent-shell' to either agent-circus or msb-circus.
+;; This file wires `agent-shell' to either agent-circus or agent-circus.
 ;; Both tools run agent harnesses in an isolated guest and speak ACP on
 ;; their `exec' subcommand:
 ;;
 ;;   agent-circus exec <service> -- <harness>   (Docker or Podman container)
-;;   msb-circus exec --acp -- <harness>   (Microsandbox micro-VM)
+;;   agent-circus exec --acp -- <harness>   (Microsandbox micro-VM)
 ;;
 ;; `agent-shell-command-prefix' is only a PREFIX: agent-shell appends the
 ;; agent's own ACP command (for example `agent-shell-opencode-acp-command',
@@ -28,14 +28,14 @@
 ;; configuration, change the two constants below to match it.
 ;;
 ;; API keys stay out of this file. agent-circus reads host credentials and
-;; env_passthrough from .agent-circus/config.toml; msb-circus reads
+;; env_passthrough from .agent-circus/config.toml; agent-circus reads
 ;; env_passthrough from the same file.
 ;;
-;; Logging: msb-circus writes its own logs to stderr, but the ACP backend
+;; Logging: agent-circus writes its own logs to stderr, but the ACP backend
 ;; (acp.el) treats every non-empty stderr chunk from the agent process as
-;; an API error and renders an error dialog for it. msb-circus therefore
+;; an API error and renders an error dialog for it. agent-circus therefore
 ;; silences stderr in ACP mode (`exec --acp`) and logs to the --log-file
-;; only; without --log-file it falls back to /tmp/msb-circus-acp.log. Keep
+;; only; without --log-file it falls back to /tmp/agent-circus-acp.log. Keep
 ;; --log-file here so the logs land in a predictable place.
 ;;
 ;; Usage: put this file on your `load-path', then in your init file:
@@ -48,32 +48,32 @@
 (require 'agent-shell)
 
 (defgroup agent-shell-circus nil
-  "agent-shell integration for agent-circus and msb-circus."
+  "agent-shell integration for agent-circus and agent-circus."
   :group 'agent-shell)
 
 (defconst rpo/agent-shell-circus-container-workspace-path "/workspace/"
   "Workspace path inside an agent-circus container.")
 
 (defconst rpo/agent-shell-circus-msb-workspace-path "/workspace/"
-  "Workspace path inside a msb-circus sandbox.")
+  "Workspace path inside a agent-circus sandbox.")
 
-(defcustom rpo/agent-shell-circus-backend 'msb-circus
+(defcustom rpo/agent-shell-circus-backend 'agent-circus
   "Which circus backend agent-shell uses for new sessions.
 `agent-circus' runs harnesses in Docker or Podman containers.
-`msb-circus' runs harnesses in a Microsandbox micro-VM."
+`agent-circus' runs harnesses in a Microsandbox micro-VM."
   :type '(radio
           (const :tag "agent-circus (Docker or Podman)" agent-circus)
-          (const :tag "msb-circus (Microsandbox)" msb-circus))
+          (const :tag "agent-circus (Microsandbox)" agent-circus))
   :group 'agent-shell-circus)
 
 (defun rpo/agent-shell-circus-set-backend (backend)
-  "Select BACKEND (`agent-circus' or `msb-circus') for new sessions.
+  "Select BACKEND (`agent-circus' or `agent-circus') for new sessions.
 Running sessions keep the backend they started with."
   (interactive
    (list (intern (completing-read "Backend: "
-                                  '("agent-circus" "msb-circus")
+                                  '("agent-circus" "agent-circus")
                                   nil t))))
-  (unless (memq backend '(agent-circus msb-circus))
+  (unless (memq backend '(agent-circus agent-circus))
     (user-error "Unknown backend: %s" backend))
   (setq rpo/agent-shell-circus-backend backend)
   (message "agent-shell will use %s for new sessions." backend))
@@ -81,7 +81,7 @@ Running sessions keep the backend they started with."
 (defun rpo/agent-shell-circus--workspace-path ()
   "Return the workspace path inside the guest of the selected backend."
   (pcase rpo/agent-shell-circus-backend
-    ('msb-circus rpo/agent-shell-circus-msb-workspace-path)
+    ('agent-circus rpo/agent-shell-circus-msb-workspace-path)
     (_ rpo/agent-shell-circus-container-workspace-path)))
 
 (defun rpo/agent-shell-circus--agent-circus-service (identifier)
@@ -123,7 +123,7 @@ For example:
   "Return the exec command prefix to run for BUFFER's agent.
 
 The command prefix depends on `rpo/agent-shell-circus-backend'.
-agent-circus selects the service by identifier. msb-circus always
+agent-circus selects the service by identifier. agent-circus always
 runs in ACP mode.
 
 This returns the prefix only. agent-shell appends the agent's own
@@ -135,9 +135,9 @@ harness command to the prefix: the doubled command makes the guest
 harness reject its arguments."
   (let ((id (map-elt (agent-shell-get-config buffer) :identifier)))
     (pcase rpo/agent-shell-circus-backend
-      ('msb-circus
-       (list "msb-circus" "--log-level" "DEBUG"
-             "--log-file" "/tmp/msb-circus.log"
+      ('agent-circus
+       (list "agent-circus" "--log-level" "DEBUG"
+             "--log-file" "/tmp/agent-circus.log"
              "exec" "--acp" "--"))
       (_
        (append (list "agent-circus" "--log-level" "DEBUG"

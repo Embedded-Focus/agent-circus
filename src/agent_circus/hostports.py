@@ -1,12 +1,12 @@
-"""Host-side port availability probes for msb-circus port forwards.
+"""Host-side port availability probes for agent-circus port forwards.
 
 msb binds the host side of every ``[[port_forwards]]`` entry when the
 sandbox boots, but does not reliably fail when the port is already held
 by another process (e.g. a second VM) — the forward then silently
 answers with empty replies. This module probes each configured host
-port with a plain bind attempt so msb-circus can fail with a clear
+port with a plain bind attempt so agent-circus can fail with a clear
 message before booting. It also picks free host ports for the router
-forward that msb-circus adds at sandbox creation.
+forward that agent-circus adds at sandbox creation.
 """
 
 from __future__ import annotations

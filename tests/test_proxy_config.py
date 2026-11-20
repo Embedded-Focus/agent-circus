@@ -1,4 +1,4 @@
-"""Tests for the expose setting and proxy helpers in msb-circus config."""
+"""Tests for the expose setting and proxy helpers in agent-circus config."""
 
 import pytest
 
@@ -61,7 +61,9 @@ def test_parse_daemons_explicit_expose_without_port_raises():
 
 
 def test_parse_daemons_router_port_raises():
-    with pytest.raises(ConfigurationError, match="reserved for the msb-circus router"):
+    with pytest.raises(
+        ConfigurationError, match="reserved for the agent-circus router"
+    ):
         parse_config(
             {
                 "msb": {
@@ -74,7 +76,9 @@ def test_parse_daemons_router_port_raises():
 
 
 def test_parse_port_forwards_router_guest_port_raises():
-    with pytest.raises(ConfigurationError, match="reserved for the msb-circus router"):
+    with pytest.raises(
+        ConfigurationError, match="reserved for the agent-circus router"
+    ):
         parse_config({"port_forwards": [{"guest_port": ROUTER_GUEST_PORT}]})
 
 

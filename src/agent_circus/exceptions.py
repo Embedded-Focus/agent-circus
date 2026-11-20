@@ -1,10 +1,10 @@
-"""Exceptions for msb-circus."""
+"""Exceptions for agent-circus."""
 
 from __future__ import annotations
 
 
 class MsbCircusError(Exception):
-    """Base class for all msb-circus errors."""
+    """Base class for all agent-circus errors."""
 
 
 class ConfigurationError(MsbCircusError):

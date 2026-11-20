@@ -153,7 +153,7 @@ def merged_env(
     A later source overrides both the value and the classification of a
     key.
 
-    :param config: Resolved msb-circus configuration.
+    :param config: Resolved agent-circus configuration.
     :param env_passthrough: Extra passthrough patterns of the entry.
     :param env: Extra variables of the entry.
     :param environ: Host environment for passthrough resolution, defaults

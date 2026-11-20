@@ -1,4 +1,4 @@
-"""Tests for msb-circus logs: sources, guest scripts, transform, CLI."""
+"""Tests for agent-circus logs: sources, guest scripts, transform, CLI."""
 
 import json
 import os
@@ -160,7 +160,7 @@ def test_build_logs_script_labels_fixed_and_glob_sources():
     assert "prefix '[bridge]' /tmp/ssh-agent-bridge.log" in script
     assert "for f in /var/log/circus-daemons/*/current; do" in script
     assert 'prefix "[daemon.$n]" "$f"' in script
-    assert "for f in /var/log/msb-circus/*.log; do" in script
+    assert "for f in /var/log/agent-circus/*.log; do" in script
     assert 'prefix "[hook.$n]" "$f"' in script
     # Labels replace the old section headers entirely; the kernel is not
     # part of the file-source tuple.
@@ -211,7 +211,7 @@ def test_build_log_files_script_lists_patterns_in_order():
     assert patterns == [
         (
             "for f in /tmp/ssh-agent-bridge.log /tmp/dockerd.log"
-            " /var/log/msb-circus/*.log /var/log/circus-daemons/*/current; do"
+            " /var/log/agent-circus/*.log /var/log/circus-daemons/*/current; do"
         )
     ]
 
@@ -225,7 +225,7 @@ def test_log_label_for_glob_paths_derives_the_wildcard_match():
     assert log_label("/var/log/circus-daemons/opencode-web/current") == (
         "[daemon.opencode-web]"
     )
-    assert log_label("/var/log/msb-circus/provision.log") == "[hook.provision]"
+    assert log_label("/var/log/agent-circus/provision.log") == "[hook.provision]"
 
 
 def test_log_label_falls_back_to_the_basename_for_unknown_paths():

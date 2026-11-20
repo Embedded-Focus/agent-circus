@@ -62,7 +62,7 @@ class InstallerError(MsbCircusError):
 def installer_lock(path: Path) -> Generator[None, None, None]:
     """Hold an exclusive host lock for the whole installer run.
 
-    Only works between msb-circus processes on this host; the OS releases
+    Only works between agent-circus processes on this host; the OS releases
     the lock when the process dies, so a crash leaves no stale lock. The
     lock file itself is kept (only its lock is released).
 
@@ -80,7 +80,7 @@ def installer_lock(path: Path) -> Generator[None, None, None]:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as e:
             raise InstallerError(
-                f"another msb-circus skills command is running (lock: {path})"
+                f"another agent-circus skills command is running (lock: {path})"
             ) from e
         try:
             yield
@@ -102,12 +102,12 @@ def run_skills_installer(
     :meth:`MsbInvoker.run`, which captures output and closes stdin.
 
     :param invoker: Invoker bound to the resolved msb binary.
-    :param config: Resolved msb-circus configuration.
+    :param config: Resolved agent-circus configuration.
     :param args: Forwarded user arguments (subcommand first).
     :returns: Exit code of the ``skills`` CLI.
     :raises InstallerError: On a disallowed subcommand (code 2), a
         missing image, an msb failure (list, leftover removal, boot)
-        (code 1), or when another msb-circus skills command holds the
+        (code 1), or when another agent-circus skills command holds the
         installer lock (code 1).
     """
     try:
@@ -125,7 +125,7 @@ def run_skills_installer(
     if probe.returncode != 0:
         raise InstallerError(
             f"image {config.image.tag} is not in the msb cache. Run "
-            "msb-circus build first."
+            "agent-circus build first."
         )
     with installer_lock(installer_lock_path()):
         try:

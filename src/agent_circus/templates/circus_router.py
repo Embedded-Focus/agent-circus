@@ -1,4 +1,4 @@
-"""circus-router: per-connection HTTP router inside the msb-circus guest.
+"""circus-router: per-connection HTTP router inside the agent-circus guest.
 
 This script runs in the sandbox guest under the guest's ``python3`` (the
 standard library only; Python 3.11+). It listens on ``0.0.0.0:7780`` as
@@ -161,7 +161,7 @@ class Routes:
     """Daemon routes, reloaded from a JSON file when it changes.
 
     The file maps daemon names to guest TCP ports. The mtime is checked
-    on every lookup, so msb-circus can rewrite routes without restarting
+    on every lookup, so agent-circus can rewrite routes without restarting
     the router. A missing or invalid file gives an empty mapping.
     """
 
@@ -408,7 +408,7 @@ async def handle(
                 502,
                 "Bad Gateway",
                 f"Daemon {name!r} does not accept connections on port {port}. "
-                f"See: msb-circus daemon logs {name}",
+                f"See: agent-circus daemon logs {name}",
             )
         )
         await writer.drain()

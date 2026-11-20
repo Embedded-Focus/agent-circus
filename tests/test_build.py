@@ -1,4 +1,4 @@
-"""Tests for the msb-circus build and import commands."""
+"""Tests for the agent-circus build and import commands."""
 
 from pathlib import Path
 from types import SimpleNamespace

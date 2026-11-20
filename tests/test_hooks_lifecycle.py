@@ -1,4 +1,4 @@
-"""Tests for project hooks during the msb-circus lifecycle commands."""
+"""Tests for project hooks during the agent-circus lifecycle commands."""
 
 import contextlib
 import json
@@ -126,7 +126,7 @@ class FakeInvoker:
         if args[0] == "exec" and "ssh-add" in args:
             # SSH agent probe
             return SimpleNamespace(returncode=0, stdout="", stderr="")
-        if args[0] == "exec" and any("BEGIN msb-circus hosts" in a for a in args):
+        if args[0] == "exec" and any("BEGIN agent-circus hosts" in a for a in args):
             # hosts block write
             return SimpleNamespace(
                 returncode=self.behavior.get("hosts_rc", 0), stdout="", stderr=""
@@ -302,7 +302,7 @@ def test_exec_running_sandbox_warns_about_due_provision_without_running_it(
         if hook == "provision"
     ]
     warnings = [r for r in records if r.levelno == logging.WARNING]
-    assert any("msb-circus up" in r.getMessage() for r in warnings)
+    assert any("agent-circus up" in r.getMessage() for r in warnings)
 
 
 def test_exec_running_sandbox_runs_due_startup(tmp_path, fake_msb):

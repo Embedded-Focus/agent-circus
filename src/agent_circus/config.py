@@ -1,9 +1,9 @@
-"""Configuration loading and validation for msb-circus.
+"""Configuration loading and validation for agent-circus.
 
-msb-circus reads the same ``.agent-circus/config.toml`` file that
-agent-circus uses.  Only the keys this tool supports are interpreted
+agent-circus reads the project ``.agent-circus/config.toml`` file. Only
+the keys this tool supports are interpreted
 (:data:`SUPPORTED_TOP_LEVEL_KEYS`); every other top-level key is logged
-as unsupported and ignored.  msb-circus-specific settings live under the
+as unsupported and ignored.  agent-circus-specific settings live under the
 ``[msb]`` table, which agent-circus in turn warns-and-ignores.
 """
 
@@ -28,7 +28,7 @@ CONFIG_FILE_NAME = "config.toml"
 
 USER_CONFIG_DIR_ENV_VAR = "XDG_CONFIG_HOME"
 
-#: Top-level config keys interpreted by msb-circus; everything else warns.
+#: Top-level config keys interpreted by agent-circus; everything else warns.
 SUPPORTED_TOP_LEVEL_KEYS: frozenset[str] = frozenset(
     {
         "msb",
@@ -52,7 +52,7 @@ INIT_NONE = "none"
 """``[msb.sandbox] init`` value that sends no ``--init`` flag."""
 
 DEFAULT_STOP_TIMEOUT = 45
-"""Seconds msb-circus waits for an s6 shutdown before forcing a stop."""
+"""Seconds agent-circus waits for an s6 shutdown before forcing a stop."""
 
 DEFAULT_DOCKER_STOP_TIMEOUT = 20
 """Seconds dockerd may take to stop containers at shutdown."""
@@ -88,7 +88,7 @@ SSH_GUEST_DIR = "/root/.ssh"
 #: guarantee ``HOME`` in the VM boot environment that s6 services (and
 #: thus daemons) inherit. Daemons get this as a default ``HOME`` so
 #: harnesses resolve their config below ``$HOME`` like in an interactive
-#: ``msb-circus exec`` shell.
+#: ``agent-circus exec`` shell.
 GUEST_HOME = "/root"
 
 #: Sandbox env var read by the image's dockerd service (seconds at
@@ -100,10 +100,10 @@ DEFAULT_HOSTS_FILE = "/etc/hosts"
 
 #: Guest TCP port of the circus-router s6 service (one per sandbox).
 ROUTER_GUEST_PORT = 7780
-#: Default host port of ``msb-circus proxy``.
+#: Default host port of ``agent-circus proxy``.
 DEFAULT_PROXY_PORT = 7700
 #: Host environment variable that overrides the proxy port.
-PROXY_PORT_ENV_VAR = "MSB_CIRCUS_PROXY_PORT"
+PROXY_PORT_ENV_VAR = "AGENT_CIRCUS_PROXY_PORT"
 #: Domain suffix of proxy URLs (browsers resolve *.localhost to loopback).
 PROXY_DOMAIN = "localhost"
 
@@ -201,7 +201,7 @@ class SandboxConfig:
     :ivar init: Value for ``--init`` at sandbox creation (``"auto"``,
         ``"none"`` sends no flag, or an absolute path to another init);
         applies at creation only.
-    :ivar stop_timeout: Host-side seconds msb-circus waits for an s6
+    :ivar stop_timeout: Host-side seconds agent-circus waits for an s6
         shutdown before forcing the stop.
     :ivar docker_stop_timeout: Seconds dockerd may take to stop
         containers at shutdown; sent as sandbox env at creation.
@@ -224,7 +224,7 @@ def docker_enabled(config: MsbConfig) -> bool:
     the case when a dedicated docker disk is requested, or when the root
     disk is a flat (non-overlayfs) root.
 
-    :param config: Resolved msb-circus configuration.
+    :param config: Resolved agent-circus configuration.
     :returns: ``True`` when dockerd can create containers in the sandbox.
     """
     if config.sandbox.docker_disk is not None:
@@ -298,7 +298,7 @@ class PortForward:
     agent-circus (``container_port``) so the same table works in both
     tools; ``guest_port`` is accepted as an msb-native alias. The
     ``service`` field of agent-circus entries is accepted but ignored:
-    msb-circus runs one sandbox per workspace, so there is nothing to
+    agent-circus runs one sandbox per workspace, so there is nothing to
     select a service from.
 
     :ivar guest_port: Port inside the sandbox.
@@ -470,7 +470,7 @@ class HostsConfig:
 
 @dataclass(frozen=True)
 class MsbConfig:
-    """Resolved msb-circus configuration.
+    """Resolved agent-circus configuration.
 
     :ivar binary: Optional explicit path to the ``msb`` binary.
     :ivar image: Image build/import settings.
@@ -505,7 +505,7 @@ class MsbConfig:
     :ivar git: Git settings; ``None`` when the ``[git]`` table is absent.
     :ivar ssh: SSH agent forwarding settings; ``None`` disables forwarding.
     :ivar hosts: Host entry forwarding; ``None`` disables it.
-    :ivar logging_level: Log level for msb-circus's own logging.
+    :ivar logging_level: Log level for agent-circus's own logging.
     :ivar logging_file: Optional log file path.
     """
 
@@ -592,7 +592,7 @@ def read_config_layers(
 def warn_unsupported_keys(config: dict[str, Any]) -> None:
     """Log a debug message for every unsupported top-level config key.
 
-    Agent-circus and msb-circus share a config file, so unsupported keys
+    Agent-circus and agent-circus share a config file, so unsupported keys
     are expected and not worth a warning on every invocation. The
     ``ca_certs`` key is logged at INFO level instead, because users may
     expect it to work here as it does in agent-circus.
@@ -602,13 +602,13 @@ def warn_unsupported_keys(config: dict[str, Any]) -> None:
     for key in config:
         if key == "ca_certs":
             logger.info(
-                "msb-circus does not support [ca_certs]; ignoring it. Add the "
+                "agent-circus does not support [ca_certs]; ignoring it. Add the "
                 "certificates to the host CA store and set "
                 "msb.network.trust_host_cas = true instead."
             )
             continue
         if key not in SUPPORTED_TOP_LEVEL_KEYS:
-            logger.debug("Unsupported config key %r for msb-circus — ignoring", key)
+            logger.debug("Unsupported config key %r for agent-circus — ignoring", key)
 
 
 def sanitize_project_name(name: str) -> str:
@@ -706,7 +706,7 @@ def effective_mounts(config: MsbConfig, workspace: Path) -> list[tuple[str, str]
     additional directory as ``/workspaces/<name>``, read-only when the
     entry says so.
 
-    :param config: Resolved msb-circus configuration.
+    :param config: Resolved agent-circus configuration.
     :param workspace: Workspace directory.
     :returns: ``(host path, guest mount specification)`` pairs. A list
         because the same host path may appear at several guest targets.
@@ -744,7 +744,7 @@ def resolve_agent_workdir(config: MsbConfig, workspace: Path) -> str:
     records paths that are valid on the host, and ``/workspace`` when
     it is off.
 
-    :param config: Resolved msb-circus configuration.
+    :param config: Resolved agent-circus configuration.
     :param workspace: Workspace directory (absolute host path).
     :returns: Guest working directory.
     """
@@ -764,7 +764,7 @@ def resolve_agent_config_mounts(
 
     Iterates :data:`AGENT_CONFIG_DIR_MOUNTS`, keeps every entry whose host
     directory (``$HOME/<dir>``) exists, and logs a warning for each missing
-    one so silent skips stay visible. Guest paths assume the msb-circus
+    one so silent skips stay visible. Guest paths assume the agent-circus
     image's root user.
 
     :param environ: Environment mapping for the ``$HOME`` lookup, defaults
@@ -784,8 +784,8 @@ def resolve_agent_config_mounts(
                     "Host config directory %s for %s not found; skipping its "
                     "sandbox mount (the harness starts without host config and "
                     "credentials). Log in inside the guest or create the "
-                    "directory, then re-create the sandbox: msb-circus rm -f "
-                    "&& msb-circus up.",
+                    "directory, then re-create the sandbox: agent-circus rm -f "
+                    "&& agent-circus up.",
                     host_dir,
                     harness,
                 )
@@ -803,7 +803,7 @@ def resolve_agent_skill_mounts(
     directory (``$HOME/<dir>``) exists, and appends ``:ro`` to the guest
     path so agents in the sandbox cannot change skills that also run on
     the host. A missing directory is normal and only logged at debug
-    level. Guest paths assume the msb-circus image's root user.
+    level. Guest paths assume the agent-circus image's root user.
 
     :param environ: Environment mapping for the ``$HOME`` lookup, defaults
         to :data:`os.environ`.
@@ -1111,7 +1111,7 @@ def _parse_port_forwards(raw: Any) -> tuple[PortForward, ...]:
         if guest_port == ROUTER_GUEST_PORT and protocol == "tcp":
             raise ConfigurationError(
                 f"port_forwards[{index}] guest_port {ROUTER_GUEST_PORT} is "
-                "reserved for the msb-circus router"
+                "reserved for the agent-circus router"
             )
         forwards.append(
             PortForward(
@@ -1187,7 +1187,7 @@ def _parse_daemons(raw: Any) -> tuple[DaemonConfig, ...]:
         if port == ROUTER_GUEST_PORT:
             raise ConfigurationError(
                 f"{label}.port {ROUTER_GUEST_PORT} is reserved for the "
-                "msb-circus router"
+                "agent-circus router"
             )
         expose = entry.get("expose", True)
         if not isinstance(expose, bool):
@@ -1246,7 +1246,7 @@ def resolve_proxy_port(
 ) -> int:
     """Return the host port of the central proxy.
 
-    Precedence: *cli_value*, then ``MSB_CIRCUS_PROXY_PORT``, then
+    Precedence: *cli_value*, then ``AGENT_CIRCUS_PROXY_PORT``, then
     :data:`DEFAULT_PROXY_PORT`.
 
     :param cli_value: Port given on the command line, if any.
@@ -1500,7 +1500,7 @@ def _parse_git(raw: Any) -> GitConfig | None:
     for key in raw:
         if key not in ("worktree_mirror", "config_path", "signing_key_path"):
             logger.debug(
-                "Unsupported config key 'git.%s' for msb-circus — ignoring", key
+                "Unsupported config key 'git.%s' for agent-circus — ignoring", key
             )
     return GitConfig(
         worktree_mirror=worktree_mirror,
@@ -1542,7 +1542,7 @@ def _parse_ssh(raw: Any) -> SshConfig | None:
     for key in raw:
         if key not in ("config_path", "known_hosts_path"):
             logger.debug(
-                "Unsupported config key 'ssh.%s' for msb-circus — ignoring", key
+                "Unsupported config key 'ssh.%s' for agent-circus — ignoring", key
             )
     return SshConfig(
         config_path=paths["config_path"],
@@ -1591,7 +1591,7 @@ def _parse_hosts(raw: Any) -> HostsConfig | None:
     for key in raw:
         if key not in ("patterns", "file"):
             logger.debug(
-                "Unsupported config key 'hosts.%s' for msb-circus — ignoring", key
+                "Unsupported config key 'hosts.%s' for agent-circus — ignoring", key
             )
     return HostsConfig(patterns=tuple(patterns), file=file)
 
@@ -1621,7 +1621,7 @@ def _parse_env_tables(top_raw: Any, msb_raw: Any) -> dict[str, str]:
 
     ``[msb.env]`` wins for a key set in both. Values are passed through
     verbatim: values containing ``$`` are guest shell words that expand
-    when a guest shell evaluates them (see ``plan-msb-circus-env-expand.md``).
+    when a guest shell evaluates them (see ``plan-agent-circus-env-expand.md``).
 
     :param top_raw: Raw ``[env]`` table or ``None``.
     :param msb_raw: Raw ``[msb.env]`` table or ``None``.
@@ -1695,8 +1695,8 @@ def parse_config(config: dict[str, Any]) -> MsbConfig:
     msb_raw = msb_raw or {}
     if "hooks" in config and "hooks" not in msb_raw:
         logger.info(
-            "[hooks] is an agent-circus setting and is not used by msb-circus; "
-            "see [msb.hooks] in README.msb-circus.md."
+            "[hooks] is an agent-circus setting and is not used by agent-circus; "
+            "see [msb.hooks] in README.md."
         )
     binary = msb_raw.get("binary")
     if binary is not None and not isinstance(binary, str):
@@ -1820,7 +1820,7 @@ def _warn_on_project_skills(workspace: Path) -> None:
 
 
 def load_config(workspace: Path, environ: dict[str, str] | None = None) -> MsbConfig:
-    """Load, merge, and validate msb-circus configuration.
+    """Load, merge, and validate agent-circus configuration.
 
     ``[msb.skills]`` is taken from the user-global config only (see
     :func:`load_user_skills_config`); a ``[msb.skills]`` table in the

@@ -1,7 +1,7 @@
 """Forward selected host ``/etc/hosts`` entries into the msb sandbox.
 
 microsandbox offers no static DNS records and applies rootfs patches only
-before the first boot, so msb-circus instead writes a managed block into
+before the first boot, so agent-circus instead writes a managed block into
 the guest's ``/etc/hosts`` via ``msb exec`` after every boot, start, and
 reuse. Host-side changes therefore apply without re-creating the sandbox,
 and guest lines outside the managed block are preserved. The parser and

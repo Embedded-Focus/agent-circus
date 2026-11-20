@@ -1,4 +1,4 @@
-"""Tests for the msb-circus hook commands: hooks, hook run/logs."""
+"""Tests for the agent-circus hook commands: hooks, hook run/logs."""
 
 import json
 from pathlib import Path
@@ -104,7 +104,7 @@ def test_hooks_fails_when_sandbox_is_not_running(tmp_path, fake_msb):
     fake_msb["running"] = False
     result = runner.invoke(app, ["hooks", "--workspace", str(tmp_path)])
     assert result.exit_code == 1
-    assert "msb-circus up" in result.output
+    assert "agent-circus up" in result.output
 
 
 def test_hook_run_runs_hook_in_ensure_mode(tmp_path, fake_msb):
@@ -165,4 +165,4 @@ def test_hook_logs_runs_tail_on_log(tmp_path, fake_msb):
     )
     assert result.exit_code == 0
     execs = [c for c in fake_msb["calls"] if c[0] == "exec"]
-    assert any("tail" in c and "/var/log/msb-circus/startup.log" in c for c in execs)
+    assert any("tail" in c and "/var/log/agent-circus/startup.log" in c for c in execs)

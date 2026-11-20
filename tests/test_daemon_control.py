@@ -1,4 +1,4 @@
-"""Tests for msb-circus daemon control scripts and status parsing."""
+"""Tests for agent-circus daemon control scripts and status parsing."""
 
 from __future__ import annotations
 

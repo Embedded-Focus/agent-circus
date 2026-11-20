@@ -202,10 +202,10 @@ def test_check_ssh_public_key_rejects_binary_bytes(tmp_path):
 
 def test_render_managed_gitconfig_with_both_parts():
     text = render_managed_gitconfig(include_host_config=True, include_signing_key=True)
-    assert text.startswith("# Managed by msb-circus")
-    assert "[include]\n\tpath = /root/.config/msb-circus/git/host.gitconfig\n" in text
+    assert text.startswith("# Managed by agent-circus")
+    assert "[include]\n\tpath = /root/.config/agent-circus/git/host.gitconfig\n" in text
     assert (
-        "[user]\n\tsigningkey = /root/.config/msb-circus/git/signingkey.pub\n" in text
+        "[user]\n\tsigningkey = /root/.config/agent-circus/git/signingkey.pub\n" in text
     )
     assert text.endswith("\n")
     assert text.index("[include]") < text.index("[user]")
@@ -264,7 +264,7 @@ def test_gitconfig_script_creates_global_config_with_include(tmp_path):
     _run_gitconfig_script(content, managed, global_config)
     assert managed.read_text() == content
     text = global_config.read_text()
-    assert text.startswith("# msb-circus: include the managed git config")
+    assert text.startswith("# agent-circus: include the managed git config")
     assert f"\tpath = {managed}\n" in text
 
 
@@ -277,8 +277,8 @@ def test_gitconfig_script_prepends_include_and_keeps_content(tmp_path):
     )
     _run_gitconfig_script(content, managed, global_config)
     text = global_config.read_text()
-    assert text.startswith("# msb-circus: include the managed git config")
-    assert text.index("msb-circus") < text.index("[user]\n\tname = Agent")
+    assert text.startswith("# agent-circus: include the managed git config")
+    assert text.index("agent-circus") < text.index("[user]\n\tname = Agent")
     assert "[user]\n\tname = Agent\n" in text
 
 
@@ -310,7 +310,7 @@ def test_gitconfig_script_result_is_read_by_git(tmp_path):
     managed = tmp_path / "managed" / "gitconfig"
     global_config = tmp_path / ".gitconfig"
     content = (
-        "# Managed by msb-circus\n"
+        "# Managed by agent-circus\n"
         f"[include]\n\tpath = {host_config}\n"
         f"[user]\n\tsigningkey = {tmp_path / 'signingkey.pub'}\n"
     )
@@ -350,5 +350,5 @@ def test_build_write_gitconfig_args_passes_paths_as_arguments():
 
 
 def test_builder_uses_gitconfig_constants():
-    assert GIT_GUEST_HOST_CONFIG == "/root/.config/msb-circus/git/host.gitconfig"
-    assert GIT_GUEST_SIGNING_KEY == "/root/.config/msb-circus/git/signingkey.pub"
+    assert GIT_GUEST_HOST_CONFIG == "/root/.config/agent-circus/git/host.gitconfig"
+    assert GIT_GUEST_SIGNING_KEY == "/root/.config/agent-circus/git/signingkey.pub"

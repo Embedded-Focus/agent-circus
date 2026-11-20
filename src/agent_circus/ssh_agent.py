@@ -2,7 +2,7 @@
 
 The sandbox's vsock route to the host SSH agent is fixed when the sandbox
 is created, but ``$SSH_AUTH_SOCK`` changes with every host login session.
-msb-circus therefore points the route at a stable symlink (refreshed
+agent-circus therefore points the route at a stable symlink (refreshed
 before every boot, start, and reuse) and passes a sandbox-level env var
 that makes the image's s6 services bridge a guest Unix socket to the
 host agent over virtio-vsock. No private key material enters the guest.
@@ -50,8 +50,8 @@ def _resolve_parent(path: str | Path) -> str:
 def agent_link_path(environ: Mapping[str, str] | None = None) -> Path:
     """Return the stable host path that the sandbox vsock route points at.
 
-    ``$XDG_RUNTIME_DIR/msb-circus/ssh-agent.sock`` when ``XDG_RUNTIME_DIR``
-    is set and non-empty, else ``$HOME/.cache/msb-circus/ssh-agent.sock``.
+    ``$XDG_RUNTIME_DIR/agent-circus/ssh-agent.sock`` when ``XDG_RUNTIME_DIR``
+    is set and non-empty, else ``$HOME/.cache/agent-circus/ssh-agent.sock``.
 
     :param environ: Environment mapping, defaults to :data:`os.environ`.
     :returns: Absolute path of the symlink.
@@ -59,9 +59,9 @@ def agent_link_path(environ: Mapping[str, str] | None = None) -> Path:
     env = os.environ if environ is None else environ
     xdg = env.get("XDG_RUNTIME_DIR", "")
     if xdg:
-        return Path(xdg) / "msb-circus" / "ssh-agent.sock"
+        return Path(xdg) / "agent-circus" / "ssh-agent.sock"
     home = env.get("HOME", str(Path.home()))
-    return Path(home) / ".cache" / "msb-circus" / "ssh-agent.sock"
+    return Path(home) / ".cache" / "agent-circus" / "ssh-agent.sock"
 
 
 def refresh_agent_link(environ: Mapping[str, str] | None = None) -> Path:
@@ -93,7 +93,7 @@ def refresh_agent_link(environ: Mapping[str, str] | None = None) -> Path:
     # it would report a loop on every refresh after the first one.
     if _resolve_parent(target) == _resolve_parent(link):
         raise ConfigurationError(
-            "SSH_AUTH_SOCK points at the msb-circus agent link itself; "
+            "SSH_AUTH_SOCK points at the agent-circus agent link itself; "
             "export the real agent socket instead"
         )
     if len(os.fsencode(str(link))) > _SOCKET_PATH_LIMIT:

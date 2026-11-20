@@ -1,4 +1,4 @@
-"""Tests for the msb-circus ps command and sandbox list parsing."""
+"""Tests for the agent-circus ps command and sandbox list parsing."""
 
 import json
 import time
@@ -157,13 +157,13 @@ def test_ps_reports_workspace_sandbox(tmp_path, fake_msb):
 def test_ps_all_flag_lists_every_sandbox(tmp_path, fake_msb):
     fake_msb["stdout"] = json.dumps(
         [
-            {"name": "agents-msb-circus", "status": "Running"},
+            {"name": "agents-agent-circus", "status": "Running"},
             {"name": "scratch", "status": "Stopped"},
         ]
     )
     result = runner.invoke(app, ["ps", "--workspace", str(tmp_path), "--all"])
     assert result.exit_code == 0
-    assert "agents-msb-circus" in result.output
+    assert "agents-agent-circus" in result.output
     assert "scratch" in result.output
 
 

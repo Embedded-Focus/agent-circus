@@ -1,6 +1,6 @@
 """Central HTTP proxy on the host: routes ``<daemon>.<sandbox>.localhost``.
 
-``msb-circus proxy`` listens on one local port and forwards every
+``agent-circus proxy`` listens on one local port and forwards every
 connection to the router forward of the target sandbox (found via
 ``msb inspect``), which in turn routes to the daemon inside the guest.
 
@@ -342,7 +342,7 @@ async def handle(
             "Misdirected Request",
             "Use http://<daemon>.<sandbox>.localhost:<port>/ — open "
             "http://localhost:<port>/ for the dashboard, or list URLs "
-            "with: msb-circus urls",
+            "with: agent-circus urls",
         )
         await finish()
         return
@@ -357,7 +357,7 @@ async def handle(
             502,
             "Bad Gateway",
             f"Sandbox {sandbox!r} was created without the router port. "
-            "Re-create it: msb-circus rm -f && msb-circus up",
+            "Re-create it: agent-circus rm -f && agent-circus up",
         )
         await finish()
         return
@@ -369,7 +369,7 @@ async def handle(
             502,
             "Bad Gateway",
             f"Sandbox {sandbox!r} does not answer. Is it running? Start "
-            "it with: msb-circus up",
+            "it with: agent-circus up",
         )
         await finish()
         return

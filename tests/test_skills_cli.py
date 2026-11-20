@@ -1,4 +1,4 @@
-"""Tests for the ``msb-circus skills`` CLI command (typer layer)."""
+"""Tests for the ``agent-circus skills`` CLI command (typer layer)."""
 
 import json
 from pathlib import Path
@@ -52,7 +52,7 @@ def installer(tmp_path, monkeypatch: pytest.MonkeyPatch):
     :returns: ``(FakeInvoker.behavior, config, store)`` tuple.
     """
     FakeInvoker.behavior = {}
-    store = tmp_path / "xdg-data" / "msb-circus" / "system-skills"
+    store = tmp_path / "xdg-data" / "agent-circus" / "system-skills"
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
     config = MsbConfig(
         image=ImageConfig(tag="img:1"), skills=SkillsConfig(store=str(store))
@@ -97,7 +97,7 @@ def test_skills_command_without_args_prints_usage_and_exits_2(
     monkeypatch.setattr(cli_module, "resolve_msb_binary", fail_resolve)
     result = CliRunner().invoke(cli_module.app, ["skills"])
     assert result.exit_code == 2
-    assert "Usage: msb-circus skills" in result.output
+    assert "Usage: agent-circus skills" in result.output
     assert str(store) in result.output
 
 

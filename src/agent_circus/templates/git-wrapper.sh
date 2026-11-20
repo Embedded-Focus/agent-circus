@@ -1,5 +1,5 @@
 #!/bin/bash
-# msb-circus git wrapper (installed as /usr/local/bin/git by msb-circus;
+# agent-circus git wrapper (installed as /usr/local/bin/git by agent-circus;
 # local edits are overwritten on every sandbox start).
 #
 # Keeps "git worktree add" and "git worktree move" targets inside the
@@ -8,13 +8,13 @@
 # also runs worktree commands that go through the guest mount through the
 # host path instead, so Git records host paths. Every other command runs
 # the real git unchanged. This guides agents; it is not a security boundary.
-real_git="${MSB_CIRCUS_REAL_GIT:-/usr/bin/git}"
+real_git="${AGENT_CIRCUS_REAL_GIT:-/usr/bin/git}"
 # With [git] worktree_mirror, the workspace is mounted at guest_root and a
 # second time at mirror_root (its host path). Only worktrees made through
-# mirror_root record paths that are valid on the host. msb-circus fills in
+# mirror_root record paths that are valid on the host. agent-circus fills in
 # both values on install; mirror_root stays empty without the mirror.
-guest_root=${MSB_CIRCUS_GUEST_ROOT-@GUEST_ROOT@}
-mirror_root=${MSB_CIRCUS_MIRROR_ROOT-@MIRROR_ROOT@}
+guest_root=${AGENT_CIRCUS_GUEST_ROOT-@GUEST_ROOT@}
+mirror_root=${AGENT_CIRCUS_MIRROR_ROOT-@MIRROR_ROOT@}
 
 args=("$@")
 n=${#args[@]}
@@ -173,7 +173,7 @@ run_translated() {
         fi
         k=$((k + 1))
     done
-    echo "msb-circus: running \"git worktree $action\" through $mirror_root," \
+    echo "agent-circus: running \"git worktree $action\" through $mirror_root," \
         "the host path of $guest_root (the same directory), so Git records" \
         "paths that are valid on the host." >&2
     exec "$real_git" "${argv[@]}"
@@ -303,7 +303,7 @@ else
     esac
 fi
 {
-    echo "fatal: msb-circus: rejected worktree path $path"
+    echo "fatal: agent-circus: rejected worktree path $path"
     echo "Run this instead:"
     echo "  $suggest"
     echo "Why: $why"

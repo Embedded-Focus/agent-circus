@@ -28,12 +28,12 @@ logger = logging.getLogger(__name__)
 
 #: Heredoc delimiter for the pi trust-file script; JSON payloads are single-
 #: line, so a delimiter collision is impossible.
-_TRUST_HEREDOC_DELIMITER = "MSB_CIRCUS_EOF"
+_TRUST_HEREDOC_DELIMITER = "AGENT_CIRCUS_EOF"
 
-#: First marker line of the msb-circus managed block in the guest hosts file.
-HOSTS_BLOCK_BEGIN = "# BEGIN msb-circus hosts (managed, do not edit)"
-#: Last marker line of the msb-circus managed block in the guest hosts file.
-HOSTS_BLOCK_END = "# END msb-circus hosts"
+#: First marker line of the agent-circus managed block in the guest hosts file.
+HOSTS_BLOCK_BEGIN = "# BEGIN agent-circus hosts (managed, do not edit)"
+#: Last marker line of the agent-circus managed block in the guest hosts file.
+HOSTS_BLOCK_END = "# END agent-circus hosts"
 
 #: Guest path of the hosts file the managed block is written into.
 GUEST_HOSTS_FILE = "/etc/hosts"
@@ -70,7 +70,7 @@ def _hosts_script(path: str) -> str:
 
 
 def build_write_hosts_args(name: str, block: str) -> list[str]:
-    """Build argv replacing the msb-circus block in the guest ``/etc/hosts``.
+    """Build argv replacing the agent-circus block in the guest ``/etc/hosts``.
 
     Removes an existing managed block and appends *block* between the
     marker lines; an empty *block* only removes the managed block. Lines
@@ -134,7 +134,7 @@ for (const dir of __DIRS__) {
   projects[dir] = entry;
 }
 state.projects = projects;
-const tmp = file + ".msb-circus.tmp";
+const tmp = file + ".agent-circus.tmp";
 fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + "\\n", { mode: 0o600 });
 fs.renameSync(tmp, file);
 """
@@ -271,9 +271,9 @@ def _gitconfig_script() -> str:
         'mv "$managed.tmp" "$managed"\n'
         'line=$(printf "\tpath = %s" "$managed")\n'
         'if [ -f "$global" ] && grep -qxF "$line" "$global"; then exit 0; fi\n'
-        'tmp="$global.msb-circus.tmp"\n'
+        'tmp="$global.agent-circus.tmp"\n'
         "{\n"
-        '  printf "%s\\n" "# msb-circus: include the managed git config (do not edit this block)"\n'
+        '  printf "%s\\n" "# agent-circus: include the managed git config (do not edit this block)"\n'
         '  printf "%s\\n" "[include]"\n'
         '  printf "%s\\n" "$line"\n'
         '  if [ -f "$global" ]; then cat "$global"; fi\n'
@@ -606,7 +606,7 @@ def run_acp_stream(
 #: ``$2`` destination path.
 _INSTALL_EXECUTABLE_SCRIPT = (
     "set -e\n"
-    'tmp="$2.msb-circus.tmp"\n'
+    'tmp="$2.agent-circus.tmp"\n'
     'printf "%s" "$1" > "$tmp"\n'
     'chmod 755 "$tmp"\n'
     'mv -f "$tmp" "$2"\n'

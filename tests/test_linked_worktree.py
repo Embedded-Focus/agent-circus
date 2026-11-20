@@ -1,4 +1,4 @@
-"""Tests for the linked Git worktree guard of msb-circus."""
+"""Tests for the linked Git worktree guard of agent-circus."""
 
 from pathlib import Path
 from types import SimpleNamespace

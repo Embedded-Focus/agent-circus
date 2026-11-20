@@ -1,4 +1,4 @@
-"""Tests for the msb-circus daemon commands: daemons, daemon start/stop/restart/logs."""
+"""Tests for the agent-circus daemon commands: daemons, daemon start/stop/restart/logs."""
 
 import json
 from pathlib import Path
@@ -105,7 +105,7 @@ def test_daemons_fails_when_sandbox_is_not_running(tmp_path, fake_msb):
     fake_msb["running"] = False
     result = runner.invoke(app, ["daemons", "--workspace", str(tmp_path)])
     assert result.exit_code == 1
-    assert "msb-circus up" in result.output
+    assert "agent-circus up" in result.output
 
 
 def test_daemon_start_runs_start_script_and_prints_url(tmp_path, fake_msb):

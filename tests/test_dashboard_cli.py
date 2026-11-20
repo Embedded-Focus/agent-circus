@@ -1,4 +1,4 @@
-"""Tests for the msb-circus dashboard command."""
+"""Tests for the agent-circus dashboard command."""
 
 from typer.testing import CliRunner
 

@@ -85,7 +85,7 @@
         {
           "level": "error",
           "text": "Daemon opencode-web failed (crash limit reached).",
-          "command": "cd /home/u/src/bar && msb-circus daemon restart opencode-web"
+          "command": "cd /home/u/src/bar && agent-circus daemon restart opencode-web"
         }
       ]
     },
@@ -107,7 +107,7 @@
         {
           "level": "info",
           "text": "Sandbox is stopped.",
-          "command": "cd /home/u/src/baz && msb-circus up"
+          "command": "cd /home/u/src/baz && agent-circus up"
         }
       ]
     }

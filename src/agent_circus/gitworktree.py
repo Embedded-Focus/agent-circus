@@ -2,7 +2,7 @@
 
 A linked worktree (``git worktree add``) keeps its Git metadata in the
 main repository, outside the worktree directory. The sandbox only mounts
-the workspace, so Git cannot work inside it, and msb-circus refuses to
+the workspace, so Git cannot work inside it, and agent-circus refuses to
 start there.
 """
 
@@ -201,9 +201,9 @@ def ensure_not_linked_worktree(workspace: Path) -> None:
     worktree, common_dir = found
     raise ConfigurationError(
         f"The workspace {workspace} is in the linked Git worktree {worktree}. "
-        "msb-circus does not run in linked worktrees, because their Git "
+        "agent-circus does not run in linked worktrees, because their Git "
         f"metadata lives in {common_dir}, outside the sandbox. Run "
-        "msb-circus from the main checkout and manage worktrees there."
+        "agent-circus from the main checkout and manage worktrees there."
     )
 
 

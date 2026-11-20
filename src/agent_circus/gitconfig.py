@@ -1,6 +1,6 @@
 """Forwarding of the host git configuration into the sandbox (``[git]``).
 
-msb-circus copies the host gitconfig and an optional SSH public signing
+agent-circus copies the host gitconfig and an optional SSH public signing
 key into the guest and writes a managed gitconfig that includes the host
 copy and sets ``user.signingkey``. The guest's ``/root/.gitconfig`` only
 receives one managed include block at the top, so agents keep their own
@@ -17,14 +17,14 @@ from pathlib import Path
 
 from .config import GitConfig
 
-#: Guest directory of the msb-circus managed git files.
-GIT_GUEST_DIR = "/root/.config/msb-circus/git"
+#: Guest directory of the agent-circus managed git files.
+GIT_GUEST_DIR = "/root/.config/agent-circus/git"
 #: Guest copy of the host gitconfig, included by the managed file.
-GIT_GUEST_HOST_CONFIG = "/root/.config/msb-circus/git/host.gitconfig"
+GIT_GUEST_HOST_CONFIG = "/root/.config/agent-circus/git/host.gitconfig"
 #: Guest copy of the host SSH public signing key.
-GIT_GUEST_SIGNING_KEY = "/root/.config/msb-circus/git/signingkey.pub"
-#: Guest gitconfig written by msb-circus (include + signingkey).
-GIT_GUEST_MANAGED_CONFIG = "/root/.config/msb-circus/git/gitconfig"
+GIT_GUEST_SIGNING_KEY = "/root/.config/agent-circus/git/signingkey.pub"
+#: Guest gitconfig written by agent-circus (include + signingkey).
+GIT_GUEST_MANAGED_CONFIG = "/root/.config/agent-circus/git/gitconfig"
 #: Guest global gitconfig receiving the managed include block.
 GIT_GUEST_GLOBAL_CONFIG = "/root/.gitconfig"
 
@@ -149,7 +149,7 @@ def render_managed_gitconfig(
     if not include_host_config and not include_signing_key:
         raise ValueError("at least one of the parts is required")
     lines = [
-        "# Managed by msb-circus; rewritten on every up, start and exec. Do not edit."
+        "# Managed by agent-circus; rewritten on every up, start and exec. Do not edit."
     ]
     if include_host_config:
         lines += ["[include]", f"\tpath = {GIT_GUEST_HOST_CONFIG}"]

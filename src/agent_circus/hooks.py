@@ -1,6 +1,6 @@
 """Shell script generation and output parsing for project hooks.
 
-msb-circus runs the two project hooks ``provision`` and ``startup``
+agent-circus runs the two project hooks ``provision`` and ``startup``
 inside the microsandbox VM ("guest") via ``msb exec <sandbox> -- sh -c
 <script> ...``.  State lives in :data:`HOOK_STATE_DIR`: a ``<hook>.state``
 file holds ``key=``, ``exit=`` and ``finished=`` lines.  ``provision`` is
@@ -20,9 +20,9 @@ import shlex
 from dataclasses import dataclass
 
 #: Guest directory with hook state, scripts and locks.
-HOOK_STATE_DIR = "/var/lib/msb-circus/hooks"
+HOOK_STATE_DIR = "/var/lib/agent-circus/hooks"
 #: Guest directory with hook logs (``<hook>.log``).
-HOOK_LOG_DIR = "/var/log/msb-circus"
+HOOK_LOG_DIR = "/var/log/agent-circus"
 #: Guest file with the boot id; it changes on every boot.
 BOOT_ID_FILE = "/proc/sys/kernel/random/boot_id"
 #: Run/check script exit code when the runner itself failed.

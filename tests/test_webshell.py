@@ -349,7 +349,7 @@ def test_token_matches_rejects_non_strings():
 
 def test_shell_token_path_uses_xdg_runtime_dir():
     assert shell_token_path({"XDG_RUNTIME_DIR": "/run/user/1000"}) == (
-        Path("/run/user/1000") / "msb-circus" / "shell-token"
+        Path("/run/user/1000") / "agent-circus" / "shell-token"
     )
     assert shell_token_path({}).name == "shell-token"
 
@@ -702,7 +702,7 @@ def test_disabled_manager_returns_4503():
                 await ws.send(_hello())
                 message = json.loads(await asyncio.wait_for(ws.recv(), 5))
                 assert message["type"] == "error"
-                assert "msb-circus proxy --shell" in message["message"]
+                assert "agent-circus proxy --shell" in message["message"]
                 code = await _await_close(ws)
             except websockets.exceptions.ConnectionClosed as e:
                 code = e.rcvd.code if e.rcvd else None

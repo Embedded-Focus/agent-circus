@@ -54,7 +54,7 @@ def installer(tmp_path, monkeypatch: pytest.MonkeyPatch):
     :returns: ``(FakeInvoker.behavior, config, store)`` tuple.
     """
     FakeInvoker.behavior = {}
-    store = tmp_path / "xdg-data" / "msb-circus" / "system-skills"
+    store = tmp_path / "xdg-data" / "agent-circus" / "system-skills"
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
     monkeypatch.setattr(skills_installer, "MsbInvoker", FakeInvoker)
@@ -192,7 +192,7 @@ def test_installer_fails_without_cached_image(installer) -> None:
         )
     assert excinfo.value.exit_code == 1
     assert "run" not in _kinds(behavior["calls"])
-    assert "msb-circus build first" in str(excinfo.value)
+    assert "agent-circus build first" in str(excinfo.value)
 
 
 def test_installer_rejects_unknown_subcommand(installer) -> None:
@@ -285,7 +285,9 @@ def test_installer_fails_when_lock_is_held_elsewhere(installer) -> None:
     import os
 
     behavior, config, _store = installer
-    lock_path = Path(os.environ["XDG_STATE_HOME"]) / "msb-circus/skills-installer.lock"
+    lock_path = (
+        Path(os.environ["XDG_STATE_HOME"]) / "agent-circus/skills-installer.lock"
+    )
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with open(lock_path, "a") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -296,7 +298,7 @@ def test_installer_fails_when_lock_is_held_elsewhere(installer) -> None:
                 ["add", "owner/repo"],
             )
     assert excinfo.value.exit_code == 1
-    assert "another msb-circus skills command" in str(excinfo.value)
+    assert "another agent-circus skills command" in str(excinfo.value)
     # The lock is taken after the image check: no list/boot/exec happens.
     assert not [c for c in behavior["calls"] if c[0] in ("list", "run", "remove")]
 

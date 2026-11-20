@@ -45,7 +45,7 @@ def git_env() -> dict[str, str]:
         "GIT_AUTHOR_EMAIL": "t@example.com",
         "GIT_COMMITTER_NAME": "t",
         "GIT_COMMITTER_EMAIL": "t@example.com",
-        "MSB_CIRCUS_REAL_GIT": REAL_GIT or "git",
+        "AGENT_CIRCUS_REAL_GIT": REAL_GIT or "git",
     }
 
 
@@ -223,7 +223,7 @@ printf '%s\\n' "$@" > "$STUB_LOG"
 """
 
 #: First words of the note that the wrapper prints when it translates.
-TRANSLATION_NOTE = 'msb-circus: running "git worktree'
+TRANSLATION_NOTE = 'agent-circus: running "git worktree'
 
 
 def stub_wrapper(
@@ -251,7 +251,7 @@ def stub_wrapper(
         cwd=cwd,
         env={
             **git_env(),
-            "MSB_CIRCUS_REAL_GIT": str(stub),
+            "AGENT_CIRCUS_REAL_GIT": str(stub),
             "STUB_COMMON": common,
             "STUB_LOG": str(log),
         },
@@ -593,7 +593,7 @@ def test_git_wrapper_suggests_repo_root_without_mirror(repo: Path):
 
 def test_git_wrapper_script_quotes_roots():
     script = git_wrapper_script("/workspace", "/home/a b/it's")
-    assert "MSB_CIRCUS_GUEST_ROOT-/workspace}" in script
+    assert "AGENT_CIRCUS_GUEST_ROOT-/workspace}" in script
     assert "@MIRROR_ROOT@" not in script
     result = subprocess.run(
         ["bash", "-n", "-c", script], check=False, capture_output=True, text=True
@@ -688,7 +688,7 @@ def test_git_wrapper_suggests_mirrored_move_source(tmp_path: Path, repo: Path):
 def test_git_wrapper_message_puts_command_first(repo: Path):
     result = wrapper(repo, "worktree", "add", "../sib", "-b", "sib")
     lines = result.stderr.splitlines()
-    assert lines[0].startswith("fatal: msb-circus: rejected worktree path ")
+    assert lines[0].startswith("fatal: agent-circus: rejected worktree path ")
     assert lines[1] == "Run this instead:"
     assert lines[2].startswith("  git -C ")
     assert lines[3].startswith("Why: ")

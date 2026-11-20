@@ -1,4 +1,4 @@
-"""Tests for ``[[msb.daemons]]`` parsing in msb-circus configuration."""
+"""Tests for ``[[msb.daemons]]`` parsing in agent-circus configuration."""
 
 import re
 

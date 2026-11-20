@@ -1,4 +1,4 @@
-/* msb-circus browser shell: xterm.js front end for /api/shell.
+/* agent-circus browser shell: xterm.js front end for /api/shell.
    Plain ES2020, no modules; Terminal and FitAddon come from the UMD
    globals. All DOM changes go through createElement/textContent. */
 /* global window, document, localStorage, WebSocket, Terminal, FitAddon */
@@ -6,7 +6,7 @@
 "use strict";
 
 (function () {
-  var STORAGE_PREFIX = "msb-circus.";
+  var STORAGE_PREFIX = "agent-circus.";
 
   function el(id) {
     return document.getElementById(id);
@@ -141,7 +141,7 @@
     var wrap = make("span");
     wrap.append(
       make("span", null, TOKEN_HELP),
-      make("code", null, "msb-circus dashboard"),
+      make("code", null, "agent-circus dashboard"),
       make(
         "span",
         null,
@@ -227,9 +227,9 @@
     1000: null, // handled via the exit message
     1002: "Connection error.",
     1008: "Connection error.",
-    4404: "Sandbox is not running. Start it with: cd <workspace> && msb-circus up",
+    4404: "Sandbox is not running. Start it with: cd <workspace> && agent-circus up",
     4429: "Too many open shells (8). Close one and try again.",
-    4503: "The shell is off. Restart the proxy with: msb-circus proxy --shell",
+    4503: "The shell is off. Restart the proxy with: agent-circus proxy --shell",
   };
 
   function onClosed(code) {
@@ -245,7 +245,7 @@
       var wrap = make("span");
       wrap.append(
         make("span", null, "The shell is off. Restart the proxy with: "),
-        make("code", null, "msb-circus proxy --shell")
+        make("code", null, "agent-circus proxy --shell")
       );
       showMessage([wrap]);
       el("shell-reconnect").hidden = true;
