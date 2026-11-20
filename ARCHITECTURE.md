@@ -86,7 +86,7 @@ flowchart LR
 
 - **One sandbox per workspace**, named `agents-<sanitized project dir>`
   (`config.sandbox_name_for_workspace`). All harnesses run in it; the
-  harness is chosen per `exec` (`[msb.agent] command`, default `pi`).
+  harness is chosen per `exec` (`[agent] command`, default `pi`).
 - **The guest runs as root.** Guest paths for user config are under
   `/root` (e.g. `/root/.claude`, `/root/.ssh`).
 - **msb is driven only through its CLI.** Every msb call goes through
@@ -192,7 +192,7 @@ sequenceDiagram
     CLI->>MSB: msb inspect: drift warnings (config mounts, ports, disks, worktree mirror)
     CLI->>Guest: msb exec: docker info until ready (if docker enabled)
     CLI->>Guest: msb exec: install circus-router s6 service + routes.json (best-effort)
-    CLI->>Guest: msb exec: register [[msb.daemons]] with s6, wait for their ports
+    CLI->>Guest: msb exec: register [[daemons]] with s6, wait for their ports
 ```
 
 All per-boot guest steps are **best-effort**: failures log warnings and
@@ -210,7 +210,7 @@ flowchart TB
         dockerd["circus-dockerd (longrun)<br/>only if /var/lib/docker is usable<br/>log: /tmp/dockerd.log"]
         socat["circus-ssh-agent-bridge (longrun)<br/>only if CIRCUS_SSH_AGENT_VSOCK_PORT set<br/>/run/ssh-agent.sock <-> VSOCK 2:22022<br/>log: /tmp/ssh-agent-bridge.log"]
         execs["msb exec sessions:<br/>harnesses, ACP streams, setup scripts"]
-        daemons["circus-daemon-&lt;name&gt; (runtime s6 services, [[msb.daemons]])<br/>/run/service/circus-daemon-&lt;name&gt;<br/>env: /run/circus-daemons (tmpfs, 0700)<br/>log: /var/log/circus-daemons/&lt;name&gt;"]
+        daemons["circus-daemon-&lt;name&gt; (runtime s6 services, [[daemons]])<br/>/run/service/circus-daemon-&lt;name&gt;<br/>env: /run/circus-daemons (tmpfs, 0700)<br/>log: /var/log/circus-daemons/&lt;name&gt;"]
         router["circus-router (runtime s6 service, one per sandbox)<br/>/run/service/circus-router<br/>script: /run/circus-router/router.py<br/>routes: /run/circus-router/routes.json (mtime-reloaded)<br/>status: Host _circus, /status JSON (routes, reachability)<br/>log: /var/log/circus-router"]
         msbdir["/.msb: scripts/, tls/, heartbeat.json, rootfs"]
         disks["/workspace (bind), /workspaces/&lt;name&gt; (bind),<br/>/root/.claude, /root/.codex (bind),<br/>/var/lib/docker (mount-owned ext4 disk,<br/>or named volume with docker_disk_persist)"]
@@ -252,7 +252,7 @@ Notes:
   unless `--volumes` is given.
 - Go programs (dockerd) cache the system cert pool per process, so CAs
   must be installed **before** dockerd starts.
-- Daemons (`[[msb.daemons]]`, `daemons.py`) are not baked into the
+- Daemons (`[[daemons]]`, `daemons.py`) are not baked into the
   image. After every boot (`up`, `start`; `up` also on a running
   sandbox), agent-circus runs one install script: it mounts a private
   tmpfs at `/run/circus-daemons` for the environment files (secrets),
@@ -354,7 +354,7 @@ KVM, docker socket, or msb runtime.
 | Host entries | implemented (`809068f`) |
 | CA certificates (`[msb.network] trust_host_cas`) | implemented, pending live verification |
 | Init system (s6-overlay) | implemented; pending live verification (plan-msb-s6.md) |
-| Daemons (`[[msb.daemons]]`, runtime s6 services) | implemented, pending live verification |
+| Daemons (`[[daemons]]`, runtime s6 services) | implemented, pending live verification |
 | Central proxy (`agent-circus proxy`, guest `circus-router`, `agent-circus urls`) | implemented, pending live verification |
 | Dashboard (`http://localhost:7700/`, `agent-circus dashboard`, `_circus` status endpoint) | implemented, pending live verification |
 | Browser shell (`agent-circus proxy --shell`, `/api/shell`, vendored xterm.js) | implemented, pending live verification |

@@ -48,16 +48,16 @@ def fake_msb(tmp_path, monkeypatch):
     config_dir = tmp_path / ".agent-circus"
     config_dir.mkdir()
     (config_dir / "config.toml").write_bytes(
-        b"[[msb.daemons]]\n"
+        b"[[daemons]]\n"
         b'name = "web"\n'
         b'command = ["python", "-m", "http.server", "4096"]\n'
         b"port = 4096\n\n"
-        b"[[msb.daemons]]\n"
+        b"[[daemons]]\n"
         b'name = "hidden"\n'
         b'command = ["sleep", "1"]\n'
         b"port = 4097\n"
         b"expose = false\n\n"
-        b"[[msb.daemons]]\n"
+        b"[[daemons]]\n"
         b'name = "noport"\n'
         b'command = ["sleep", "1"]\n\n'
         b"[[port_forwards]]\n"
@@ -247,7 +247,7 @@ def test_urls_without_exposed_daemons_prints_hint(tmp_path):
     config_dir = tmp_path / ".agent-circus"
     config_dir.mkdir()
     (config_dir / "config.toml").write_bytes(
-        b'[[msb.daemons]]\nname = "db"\ncommand = ["sleep", "1"]\n'
+        b'[[daemons]]\nname = "db"\ncommand = ["sleep", "1"]\n'
     )
     result = runner.invoke(app, ["urls", "--workspace", str(tmp_path)])
     assert result.exit_code == 0

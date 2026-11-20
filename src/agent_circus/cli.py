@@ -668,7 +668,7 @@ def build(
         typer.Option(
             "--dockerfile",
             help=(
-                "Dockerfile to build. Defaults to [msb.image] dockerfile from "
+                "Dockerfile to build. Defaults to [image] dockerfile from "
                 "the config, then the bundled msb-agents template."
             ),
         ),
@@ -678,7 +678,7 @@ def build(
         typer.Option(
             "--platform",
             help=(
-                "Target platform (e.g. linux/amd64). Defaults to [msb.image] "
+                "Target platform (e.g. linux/amd64). Defaults to [image] "
                 "platform from the config, then the host architecture."
             ),
         ),
@@ -687,7 +687,7 @@ def build(
         str | None,
         typer.Option(
             "--tag",
-            help="Image tag. Defaults to [msb.image] tag from the config.",
+            help="Image tag. Defaults to [image] tag from the config.",
         ),
     ] = None,
     context: Annotated[
@@ -1611,7 +1611,7 @@ def _system_skill_mounts(
 ) -> list[tuple[str, str]]:
     """Return the read-only system skill mounts for a new sandbox.
 
-    Resolves the store from ``[msb.skills] store``. With ``create=True``
+    Resolves the store from ``[skills] store``. With ``create=True``
     (sandbox creation) the store's skill directory is created when
     missing, so a skill installed later is visible without a re-create;
     a failure to create it only warns and the sandbox starts without
@@ -2254,7 +2254,7 @@ def _sandbox_creation_env(env: Mapping[str, str]) -> dict[str, str]:
     hooks, daemons), so they are skipped here; literal values keep the
     current behavior.
 
-    :param env: Merged ``[env]``/``[msb.env]`` variables.
+    :param env: Merged ``[env]`` variables.
     :returns: Values safe to pass to ``msb run --env``.
     """
     skipped = sorted(k for k, v in env.items() if "$" in v)
@@ -2273,7 +2273,7 @@ def _daemon_envs(
     """Return the merged environment of every configured daemon.
 
     The environment of a daemon is, in increasing precedence: the
-    ``[env]``/``[msb.env]`` variables, the top-level ``env_passthrough``
+    ``[env]`` variables, the top-level ``env_passthrough``
     variables, ``SSH_AUTH_SOCK`` (when ``[ssh]`` is configured), the
     daemon's own ``env_passthrough`` variables, and its ``env`` entries.
     ``HOME`` defaults to :data:`GUEST_HOME` (the guest runs as root, but
@@ -2677,7 +2677,7 @@ def _ensure_hooks(
     run_provision: bool,
     quiet: bool,
 ) -> bool:
-    """Run the due project hooks (``[msb.hooks]``) in the sandbox.
+    """Run the due project hooks (``[hooks]``) in the sandbox.
 
     ``provision`` runs first, then ``startup``. With *run_provision*
     false, a due ``provision`` hook is only reported. A failing check
@@ -3735,7 +3735,7 @@ def _require_daemon(config: AgentCircusConfig, daemon_name: str) -> DaemonConfig
     names = [daemon.name for daemon in config.daemons]
     hint = f" (configured: {', '.join(names)})" if names else ""
     typer.echo(
-        f"Error: no daemon named {daemon_name!r} in [[msb.daemons]]{hint}",
+        f"Error: no daemon named {daemon_name!r} in [[daemons]]{hint}",
         err=True,
     )
     raise typer.Exit(code=1)
@@ -3759,7 +3759,7 @@ def _require_hook(config: AgentCircusConfig, hook_name: str) -> HookConfig:
     hook = getattr(config.hooks, hook_name)
     if hook is None:
         typer.echo(
-            f"Error: the {hook_name} hook is not configured in [msb.hooks].",
+            f"Error: the {hook_name} hook is not configured in [hooks].",
             err=True,
         )
         raise typer.Exit(code=1)
@@ -3856,7 +3856,7 @@ def daemons_list(
     statuses = parse_status_output(result.stdout or "")
     if not config.daemons and not statuses:
         typer.echo(
-            "No daemons configured. Add them under [[msb.daemons]] "
+            "No daemons configured. Add them under [[daemons]] "
             "in .agent-circus/config.toml."
         )
         return
@@ -3953,7 +3953,7 @@ def urls(
     ]
     if not rows:
         typer.echo(
-            "No exposed daemons. A daemon with a port in [[msb.daemons]] "
+            "No exposed daemons. A daemon with a port in [[daemons]] "
             "is exposed by default."
         )
         return
@@ -4116,8 +4116,7 @@ def hooks_list(
     name = sandbox_name_for_workspace(workspace)
     if config.hooks.provision is None and config.hooks.startup is None:
         typer.echo(
-            "No hooks configured. Add them under [msb.hooks] "
-            "in .agent-circus/config.toml."
+            "No hooks configured. Add them under [hooks] in .agent-circus/config.toml."
         )
         return
     _require_running_sandbox(invoker, name)
@@ -4171,9 +4170,7 @@ def hooks_list(
 
 @daemon_app.command(name="start")
 def daemon_start(
-    daemon_name: Annotated[
-        str, typer.Argument(help="Daemon name from [[msb.daemons]].")
-    ],
+    daemon_name: Annotated[str, typer.Argument(help="Daemon name from [[daemons]].")],
     workspace: Annotated[
         Path,
         typer.Option(
@@ -4198,9 +4195,7 @@ def daemon_start(
 
 @daemon_app.command(name="stop")
 def daemon_stop(
-    daemon_name: Annotated[
-        str, typer.Argument(help="Daemon name from [[msb.daemons]].")
-    ],
+    daemon_name: Annotated[str, typer.Argument(help="Daemon name from [[daemons]].")],
     workspace: Annotated[
         Path,
         typer.Option(
@@ -4224,9 +4219,7 @@ def daemon_stop(
 
 @daemon_app.command(name="restart")
 def daemon_restart(
-    daemon_name: Annotated[
-        str, typer.Argument(help="Daemon name from [[msb.daemons]].")
-    ],
+    daemon_name: Annotated[str, typer.Argument(help="Daemon name from [[daemons]].")],
     workspace: Annotated[
         Path,
         typer.Option(
@@ -4251,9 +4244,7 @@ def daemon_restart(
 
 @daemon_app.command(name="logs")
 def daemon_logs(
-    daemon_name: Annotated[
-        str, typer.Argument(help="Daemon name from [[msb.daemons]].")
-    ],
+    daemon_name: Annotated[str, typer.Argument(help="Daemon name from [[daemons]].")],
     lines: Annotated[
         int,
         typer.Option("--lines", "-n", min=1, help="Number of lines to show."),

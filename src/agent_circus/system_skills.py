@@ -46,7 +46,7 @@ def system_skills_store(
 ) -> Path:
     """Resolve the host path of the system skill store.
 
-    Precedence: the configured ``[msb.skills] store`` value (``~`` is
+    Precedence: the configured ``[skills] store`` value (``~`` is
     expanded, must be absolute after expansion), then
     ``$XDG_DATA_HOME/agent-circus/system-skills`` (only when absolute; the
     XDG spec says to ignore relative values), then
@@ -72,7 +72,7 @@ def system_skills_store(
 
 
 def expand_store_path(configured: str) -> Path:
-    """Expand and validate a configured ``[msb.skills] store`` path.
+    """Expand and validate a configured ``[skills] store`` path.
 
     :param configured: Configured store path; ``~`` and ``~user`` are
         expanded.
@@ -84,11 +84,11 @@ def expand_store_path(configured: str) -> Path:
         path = Path(configured).expanduser()
     except RuntimeError as e:
         raise ConfigurationError(
-            f"msb.skills.store cannot be expanded ({configured!r}): {e}"
+            f"skills.store cannot be expanded ({configured!r}): {e}"
         ) from e
     if not path.is_absolute():
         raise ConfigurationError(
-            f"msb.skills.store must be an absolute path (got {configured!r})"
+            f"skills.store must be an absolute path (got {configured!r})"
         )
     return path
 

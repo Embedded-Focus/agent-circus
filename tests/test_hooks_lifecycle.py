@@ -180,11 +180,11 @@ def _write_config(tmp_path: Path, body: str) -> None:
 
 
 HOOKS_CONFIG = """\
-[msb.hooks]
+[hooks]
 provision = "echo provision"
 startup = "echo startup"
 
-[[msb.daemons]]
+[[daemons]]
 name = "web"
 command = ["sleep", "1"]
 """
@@ -235,7 +235,7 @@ def test_up_new_sandbox_runs_provision_then_startup_before_daemons(tmp_path, fak
 def test_up_without_hooks_makes_no_hook_exec_calls(tmp_path, fake_msb):
     _write_config(
         tmp_path,
-        '[[msb.daemons]]\nname = "web"\ncommand = ["sleep", "1"]\n',
+        '[[daemons]]\nname = "web"\ncommand = ["sleep", "1"]\n',
     )
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
@@ -331,7 +331,7 @@ def test_exec_booting_sandbox_runs_provision(tmp_path, fake_msb):
 
 
 def test_hooks_show_output_unless_quiet(tmp_path):
-    config = parse_config({"msb": {"hooks": {"provision": "echo provision"}}})
+    config = parse_config({"hooks": {"provision": "echo provision"}})
     for quiet, expected in ((False, False), (True, True)):
         FakeInvoker.behavior = {"check_stdout": "provision new\n"}
         invoker = cast(MsbInvoker, FakeInvoker(Path("/fake")))
@@ -377,10 +377,10 @@ def test_optional_startup_failure_warns_and_registers_daemons(tmp_path, fake_msb
 def test_optional_provision_failure_continues_with_startup(tmp_path, fake_msb):
     _write_config(
         tmp_path,
-        "[msb.hooks.provision]\n"
+        "[hooks.provision]\n"
         'script = "echo provision"\n'
         "required = false\n"
-        "[msb.hooks.startup]\n"
+        "[hooks.startup]\n"
         'script = "echo startup"\n',
     )
     fake_msb["check_stdout"] = "provision new\nstartup due\n"
@@ -397,7 +397,7 @@ def test_unset_passthrough_variable_fails_hook(tmp_path, fake_msb, monkeypatch):
     monkeypatch.delenv("SURELY_UNSET_VAR_XYZ", raising=False)
     _write_config(
         tmp_path,
-        "[msb.hooks.provision]\n"
+        "[hooks.provision]\n"
         'script = "echo provision"\n'
         "required = true\n"
         'env_passthrough = ["SURELY_UNSET_VAR_XYZ"]\n',
@@ -412,7 +412,7 @@ def test_unset_passthrough_variable_fails_hook(tmp_path, fake_msb, monkeypatch):
 def test_missing_hook_file_fails_required_hook(tmp_path, fake_msb):
     _write_config(
         tmp_path,
-        '[msb.hooks.provision]\nfile = "nope.sh"\n',
+        '[hooks.provision]\nfile = "nope.sh"\n',
     )
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 1
@@ -435,7 +435,7 @@ def test_hook_check_failure_warns_and_continues(tmp_path, fake_msb):
 def test_hook_run_passes_env_workdir_and_mode(tmp_path, fake_msb):
     _write_config(
         tmp_path,
-        "[msb.hooks.provision]\n"
+        "[hooks.provision]\n"
         'script = "echo provision"\n'
         'env = { FOO = "bar" }\n'
         'workdir = "/tmp"\n',

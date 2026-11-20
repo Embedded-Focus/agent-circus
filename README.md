@@ -159,7 +159,7 @@ The build skips itself when the image tag is already in the msb image cache.
 Use `--force` to rebuild anyway. Use `--engine docker` to build with Docker
 instead of Podman.
 
-If you use your own Dockerfile instead (see `[msb.image] dockerfile`), it
+If you use your own Dockerfile instead (see `[image] dockerfile`), it
 needs an init system for the sandbox services, or the setting
 `init = "none"` under `[msb.sandbox]`. Without an init, the image must
 not set `ENTRYPOINT ["/init"]`; msb then keeps its own guest agent as
@@ -257,7 +257,7 @@ agent-circus brings your host harness configuration into the sandbox:
   edits to these files are overwritten by the next refresh. Authenticate
   through `env_passthrough` (see [Secrets](#secrets)).
 
-agent-circus pre-trusts the agent workdir (`[msb.agent] workdir`), the
+agent-circus pre-trusts the agent workdir (`[agent] workdir`), the
 worktree mirror path (when enabled), and every
 `additional_dirs` mount for pi and pi-acp: after each boot or start it
 writes `~/.pi/agent/trust.json` in the guest, so the first harness start in
@@ -294,7 +294,7 @@ do this. Absolute symlinks to host paths break inside the sandbox;
 
 System skills are skills that every sandbox sees. They live in a store
 on the host, by default `~/.local/share/agent-circus/system-skills/`
-(below `$XDG_DATA_HOME` when that is set). Set `[msb.skills] store` to
+(below `$XDG_DATA_HOME` when that is set). Set `[skills] store` to
 use another absolute path (`~` is allowed). agent-circus reads this key
 only from the user config (`~/.config/agent-circus/config.toml`); it
 ignores it in a project config, with a warning, because the store is
@@ -491,7 +491,7 @@ no longer need them.
 Use this configuration to enable traces for all `exec` commands:
 
 ``` toml
-[msb.tracing]
+[tracing]
 enabled = true
 directory = ".agent-circus/traces"
 sample_interval = 1.0
@@ -655,7 +655,7 @@ env_passthrough = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
 [msb]
 # binary = "/usr/local/bin/msb"        # default: the bundled msb binary
 
-[msb.image]
+[image]
 tag = "docker.io/library/msb-agents:26"
 # dockerfile = "Dockerfile.msb-agents" # default: the bundled Dockerfile
 # platform = "linux/arm64"             # default: the host architecture
@@ -683,7 +683,7 @@ mode = "public,private"                # default; unrestricted network access
 # trust_host_cas = false              # trust the host's CAs; see
                                        # "CA Certificates"
 
-[msb.skills]                            # user config only
+[skills]                            # user config only
 # store = "~/.local/share/agent-circus/system-skills"  # system skill store;
                                        # see "System skills"
 
@@ -693,28 +693,28 @@ guest_port = 8000                       # or container_port
 # host = "127.0.0.1"                    # default: loopback only
 # protocol = "tcp"                      # or "udp"
 
-[msb.agent]
+[agent]
 command = ["pi"]                       # default exec target
 # workdir = "/workspace"               # default; host path with git.worktree_mirror
 
-[[msb.daemons]]                         # a supervised process; see "Daemons"
+[[daemons]]                         # a supervised process; see "Daemons"
 name = "opencode-web"                   # lowercase letters, digits and "-"
 command = ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096"]
 # autostart = true                      # start on every boot
 # port = 4096                           # wait for it; show the URL
-# workdir = "/workspace"                # default: [msb.agent] workdir
+# workdir = "/workspace"                # default: [agent] workdir
 # env = { KEY = "value" }               # extra variables
 # env_passthrough = ["OPENAI_API_KEY"]  # host variables for this daemon
 
-[msb.hooks]                             # project setup scripts; see "Hooks"
+[hooks]                             # project setup scripts; see "Hooks"
 provision = "apt-get update && apt-get install -y ripgrep"  # once per
                                         # sandbox and after each change
 
-[msb.hooks.startup]                     # table form: once per boot
+[hooks.startup]                     # table form: once per boot
 script = "uv sync"                      # or: file = "path/to/script.sh"
 # required = false                      # default: true for provision
 # timeout = 300                         # seconds; default: no timeout
-# workdir = "/workspace"                # default: [msb.agent] workdir
+# workdir = "/workspace"                # default: [agent] workdir
 # env = { KEY = "value" }               # extra variables
 # env_passthrough = ["NPM_TOKEN"]       # host variables for this hook
 
@@ -737,7 +737,7 @@ patterns = []                          # globs or re:-prefixed regexes
 ```
 
 All fields are optional. The values above are the defaults. The
-`[[msb.daemons]]` and `[msb.hooks]` entries are examples; there are no
+`[[daemons]]` and `[hooks]` entries are examples; there are no
 daemons and no hooks by default.
 
 ## Environment Variables
@@ -749,10 +749,6 @@ Set fixed, non-secret variables for the sandbox in the `[env]` table:
 GCX_KEYCHAIN = "off"
 GOPROXY = "https://proxy.corp.internal/go,direct"
 ```
-
-agent-circus also reads the table `[msb.env]`. Use it for values that
-only agent-circus should apply. If a
-variable is in both tables, `[msb.env]` wins.
 
 agent-circus applies the variables at these times:
 
@@ -770,7 +766,7 @@ created. To change such a value, re-create the sandbox
 When a variable is set in more than one place, the later source in this
 list wins:
 
-1. `[env]`, then `[msb.env]`
+1. `[env]`
 2. `env_passthrough` (top level)
 3. `env_passthrough` and `env` of a hook or daemon
 4. `agent-circus exec -e KEY=VALUE`
@@ -941,7 +937,7 @@ reachable from the host browser at
 [central proxy](#central-proxy):
 
 ``` toml
-[[msb.daemons]]
+[[daemons]]
 name = "opencode-web"
 command = ["opencode", "serve", "--port", "4096"]
 port = 4096
@@ -973,7 +969,7 @@ env_passthrough = ["OPENCODE_PASSWORD"]
 | `autostart` | `true` | Start the daemon on every boot. With `false`, start it with `agent-circus daemon start`. |
 | `port` | none | Guest TCP port. agent-circus waits up to 30 seconds for it after a start, and shows the URL. |
 | `expose` | `true` | Route the port through the central proxy (only effective with a `port`). |
-| `workdir` | the `[msb.agent]` workdir | Guest working directory |
+| `workdir` | the `[agent]` workdir | Guest working directory |
 | `env` | none | Extra environment variables |
 | `env_passthrough` | none | Host environment variables, with the same patterns as the top-level `env_passthrough` |
 
@@ -1035,7 +1031,7 @@ shows all daemon logs together with the other sandbox logs (see
 it ends. A daemon is started by s6, and s6 restarts it after a crash, so
 the variables must be stored in the guest. agent-circus therefore writes the
 environment of each daemon (`env`, `env_passthrough`, the top-level
-`env_passthrough`, and `[env]` / `[msb.env]`) to a file in the guest:
+`env_passthrough`, and `[env]`) to a file in the guest:
 
 - The file is `/run/circus-daemons/<name>/env.sh`. `/run/circus-daemons` is
   a separate tmpfs (memory only) that only root can read. The values do not
@@ -1161,7 +1157,7 @@ example a foreign domain that resolves to `127.0.0.1`) gets HTTP 421
 with a pointer to the dashboard. This is a DNS rebinding guard.
 
 To stop a daemon from being reachable through the proxy, set
-`expose = false` on its `[[msb.daemons]]` entry. A daemon without a
+`expose = false` on its `[[daemons]]` entry. A daemon without a
 `port` is never exposed.
 
 ### Run as a systemd user service
@@ -1459,7 +1455,7 @@ prefixes every line with its source in square brackets, in the style of
 | `[bridge]` | `bridge` | `/tmp/ssh-agent-bridge.log` | The SSH agent bridge |
 | `[dockerd]` | `dockerd` | `/tmp/dockerd.log` | The Docker engine daemon |
 | `[hook.<name>]` | `hooks` | `/var/log/agent-circus/*.log` | The last run of each hook |
-| `[daemon.<name>]` | `daemons` | `/var/log/circus-daemons/*/current` | Each [[msb.daemons]] entry |
+| `[daemon.<name>]` | `daemons` | `/var/log/circus-daemons/*/current` | Each [[daemons]] entry |
 
 The output is grouped by source; the order above is a display
 convention, not event time. The kernel section comes first because its
@@ -1542,7 +1538,7 @@ your own image. There are two hooks:
 | `provision` | Once per sandbox, and again when the script changes | Install packages and tools: `apt-get install`, `npm install -g`, downloads, `docker pull` |
 | `startup` | Once per boot of the sandbox | Prepare the project: write tool configs, `docker compose up -d`, database migrations |
 
-Both hooks run as root, in the agent workdir (`[msb.agent] workdir`).
+Both hooks run as root, in the agent workdir (`[agent] workdir`).
 A long-running process does not belong in a hook. Make it a daemon (see
 [Daemons](#daemons)).
 
@@ -1554,7 +1550,7 @@ server URL and a token from your host shell:
 ``` toml
 env_passthrough = ["GRAFANA_*"]
 
-[msb.hooks]
+[hooks]
 provision = """
 set -eu
 GCX_VERSION=1.6.0
@@ -1619,12 +1615,12 @@ The short form is a string with the script. The table form allows more
 settings:
 
 ``` toml
-[msb.hooks.provision]
+[hooks.provision]
 file = ".agent-circus/hooks/provision.sh"  # or: script = "..."
 required = true                            # default: true for provision,
                                            # false for startup
 timeout = 600                              # seconds; default: no timeout
-workdir = "/workspace"                     # default: [msb.agent] workdir
+workdir = "/workspace"                     # default: [agent] workdir
 env = { NPM_CONFIG_LOGLEVEL = "warn" }     # extra variables
 env_passthrough = ["NPM_TOKEN"]            # host variables for this hook
 ```
@@ -1635,11 +1631,11 @@ env_passthrough = ["NPM_TOKEN"]            # host variables for this hook
 | `file` | – | A script file on the host. A relative path starts at the workspace root. agent-circus reads the file on the host at every run. |
 | `required` | `true` (`provision`), `false` (`startup`) | When a required hook fails, the command exits with code 1 and skips the later steps (`startup`, daemons). The sandbox keeps running. When an optional hook fails, agent-circus prints a warning and continues. |
 | `timeout` | none | Stop the hook after this many seconds. |
-| `workdir` | the `[msb.agent] workdir` | Guest working directory |
+| `workdir` | the `[agent] workdir` | Guest working directory |
 | `env` | `{}` | Extra variables |
 | `env_passthrough` | `[]` | Host variables for this hook, with the same rules as the top-level `env_passthrough` |
 
-A hook gets the same variables as a daemon: `[env]` and `[msb.env]`, the
+A hook gets the same variables as a daemon: `[env]`, the
 top-level `env_passthrough`, `SSH_AUTH_SOCK` (with `[ssh]`), its own
 `env_passthrough`, and its `env`. If a plain name in `env_passthrough` is
 not set on the host, the hook fails. Variable names must not start with
@@ -1843,7 +1839,7 @@ without the mirror and logs a short note. An explicit
 `worktree_mirror = true` stops with an error in that case instead.
 
 With the mirror on, agents start in the host path of the workspace
-instead of `/workspace` (unless `[msb.agent] workdir` or `exec --workdir`
+instead of `/workspace` (unless `[agent] workdir` or `exec --workdir`
 sets another directory). Git then records paths that are valid on the
 host, and you do not need extra instructions in `AGENTS.md`. ACP sessions
 from an editor still open in `/workspace`, because the editor maps file

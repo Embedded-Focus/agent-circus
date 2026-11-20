@@ -61,12 +61,9 @@ def test_parse_config_rejects_non_bool_worktree_mirror():
         parse_config({"git": {"worktree_mirror": "yes"}})
 
 
-def test_parse_config_logs_unsupported_git_subkeys_at_debug(caplog):
-    with caplog.at_level(logging.DEBUG):
+def test_parse_config_rejects_unknown_git_subkeys():
+    with pytest.raises(ConfigurationError, match=r"git has unknown key\(s\): foo"):
         parse_config({"git": {"worktree_mirror": True, "foo": 1}})
-    messages = [record.getMessage() for record in caplog.records]
-    assert any("git.foo" in message for message in messages)
-    assert all(record.levelno == logging.DEBUG for record in caplog.records)
 
 
 def test_parse_config_does_not_report_config_path_as_unsupported(caplog):
@@ -189,11 +186,11 @@ def test_resolve_agent_workdir_uses_host_path_with_mirror(tmp_path):
 
 def test_resolve_agent_workdir_prefers_explicit_workdir(tmp_path):
     config = parse_config(
-        {"git": {"worktree_mirror": True}, "msb": {"agent": {"workdir": "/w"}}}
+        {"git": {"worktree_mirror": True}, "agent": {"workdir": "/w"}}
     )
     assert resolve_agent_workdir(config, tmp_path) == "/w"
 
 
 def test_parse_config_rejects_empty_agent_workdir():
     with pytest.raises(ConfigurationError, match="workdir"):
-        parse_config({"msb": {"agent": {"workdir": ""}}})
+        parse_config({"agent": {"workdir": ""}})

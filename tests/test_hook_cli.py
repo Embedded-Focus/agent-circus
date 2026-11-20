@@ -56,7 +56,7 @@ def fake_msb(tmp_path, monkeypatch):
     config_dir = tmp_path / ".agent-circus"
     config_dir.mkdir()
     (config_dir / "config.toml").write_bytes(
-        b'[msb.hooks]\nprovision = "echo p"\nstartup = "echo s"\n'
+        b'[hooks]\nprovision = "echo p"\nstartup = "echo s"\n'
     )
     monkeypatch.setattr(cli_module, "resolve_msb_binary", lambda b: Path("/fake"))
     monkeypatch.setattr(cli_module, "check_version", lambda binary: "0.7.12")
@@ -82,7 +82,7 @@ def test_hooks_lists_states(tmp_path, fake_msb):
 
 def test_hooks_shows_never_run_and_not_configured(tmp_path, fake_msb):
     (tmp_path / ".agent-circus" / "config.toml").write_bytes(
-        b'[msb.hooks]\nprovision = "echo p"\n'
+        b'[hooks]\nprovision = "echo p"\n'
     )
     fake_msb["status_stdout"] = "boot=b1\n"
     result = runner.invoke(app, ["hooks", "--workspace", str(tmp_path)])
@@ -93,7 +93,7 @@ def test_hooks_shows_never_run_and_not_configured(tmp_path, fake_msb):
 
 
 def test_hooks_without_config_prints_hint(tmp_path, fake_msb):
-    (tmp_path / ".agent-circus" / "config.toml").write_bytes(b"[msb.agent]\n")
+    (tmp_path / ".agent-circus" / "config.toml").write_bytes(b"[agent]\n")
     result = runner.invoke(app, ["hooks", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
     assert "No hooks configured" in result.output
@@ -150,7 +150,7 @@ def test_hook_run_unknown_hook_fails(tmp_path, fake_msb):
 
 def test_hook_run_unconfigured_hook_fails(tmp_path, fake_msb):
     (tmp_path / ".agent-circus" / "config.toml").write_bytes(
-        b'[msb.hooks]\nprovision = "echo p"\n'
+        b'[hooks]\nprovision = "echo p"\n'
     )
     result = runner.invoke(
         app, ["hook", "run", "startup", "--workspace", str(tmp_path)]

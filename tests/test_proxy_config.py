@@ -17,47 +17,28 @@ from agent_circus.exceptions import ConfigurationError
 
 def test_parse_daemons_expose_defaults_to_true():
     config = parse_config(
-        {"msb": {"daemons": [{"name": "web", "command": ["a"], "port": 4096}]}}
+        {"daemons": [{"name": "web", "command": ["a"], "port": 4096}]}
     )
     assert config.daemons[0].expose is True
 
 
 def test_parse_daemons_expose_false_is_kept():
     config = parse_config(
-        {
-            "msb": {
-                "daemons": [
-                    {
-                        "name": "web",
-                        "command": ["a"],
-                        "port": 4096,
-                        "expose": False,
-                    }
-                ]
-            }
-        }
+        {"daemons": [{"name": "web", "command": ["a"], "port": 4096, "expose": False}]}
     )
     assert config.daemons[0].expose is False
 
 
 def test_parse_daemons_expose_non_bool_raises():
-    with pytest.raises(ConfigurationError, match=r"msb\.daemons\[0\]\.expose"):
+    with pytest.raises(ConfigurationError, match=r"daemons\[0\]\.expose"):
         parse_config(
-            {
-                "msb": {
-                    "daemons": [
-                        {"name": "web", "command": ["a"], "port": 4096, "expose": 1}
-                    ]
-                }
-            }
+            {"daemons": [{"name": "web", "command": ["a"], "port": 4096, "expose": 1}]}
         )
 
 
 def test_parse_daemons_explicit_expose_without_port_raises():
-    with pytest.raises(ConfigurationError, match=r"msb\.daemons\[0\]\.expose"):
-        parse_config(
-            {"msb": {"daemons": [{"name": "web", "command": ["a"], "expose": True}]}}
-        )
+    with pytest.raises(ConfigurationError, match=r"daemons\[0\]\.expose"):
+        parse_config({"daemons": [{"name": "web", "command": ["a"], "expose": True}]})
 
 
 def test_parse_daemons_router_port_raises():
@@ -65,13 +46,7 @@ def test_parse_daemons_router_port_raises():
         ConfigurationError, match="reserved for the agent-circus router"
     ):
         parse_config(
-            {
-                "msb": {
-                    "daemons": [
-                        {"name": "web", "command": ["a"], "port": ROUTER_GUEST_PORT}
-                    ]
-                }
-            }
+            {"daemons": [{"name": "web", "command": ["a"], "port": ROUTER_GUEST_PORT}]}
         )
 
 

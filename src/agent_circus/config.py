@@ -37,7 +37,8 @@ CONFIG_FILE_NAME = "config.toml"
 
 USER_CONFIG_DIR_ENV_VAR = "XDG_CONFIG_HOME"
 
-#: Top-level config keys interpreted by agent-circus; everything else warns.
+#: Top-level config keys interpreted by agent-circus; everything else warns
+#: (1.x keys) or raises (unknown keys).
 SUPPORTED_TOP_LEVEL_KEYS: frozenset[str] = frozenset(
     {
         "msb",
@@ -49,8 +50,30 @@ SUPPORTED_TOP_LEVEL_KEYS: frozenset[str] = frozenset(
         "git",
         "ssh",
         "hosts",
+        "image",
+        "agent",
+        "tracing",
+        "skills",
+        "daemons",
+        "hooks",
     }
 )
+
+#: Keys allowed under ``[msb]``: settings that map directly to the msb
+#: binary.
+MSB_TABLE_KEYS: frozenset[str] = frozenset({"binary", "sandbox", "network", "mounts"})
+
+#: agent-circus settings that used to live under ``[msb]`` and the
+#: top-level table they moved to.
+MSB_MOVED_KEYS: dict[str, str] = {
+    "image": "[image]",
+    "agent": "[agent]",
+    "tracing": "[tracing]",
+    "skills": "[skills]",
+    "daemons": "[[daemons]]",
+    "hooks": "[hooks]",
+    "env": "[env]",
+}
 
 DEFAULT_IMAGE_TAG = "docker.io/library/msb-agents:26"
 DEFAULT_MEMORY = "4G"
@@ -178,7 +201,7 @@ AGENT_SKILL_DIR_MOUNTS: tuple[tuple[str, str], ...] = (
 
 @dataclass(frozen=True)
 class ImageConfig:
-    """Image build/import settings (``[msb.image]``).
+    """Image build/import settings (``[image]``).
 
     :ivar tag: Full image reference to build and import.
     :ivar dockerfile: Dockerfile path relative to the workspace; ``None``
@@ -257,7 +280,7 @@ class NetworkConfig:
 
 @dataclass(frozen=True)
 class SkillsConfig:
-    """System skill store settings (``[msb.skills]``).
+    """System skill store settings (``[skills]``).
 
     :ivar store: Host path of the system skill store, or ``None`` for
         the default location (see :func:`agent_circus.system_skills.system_skills_store`);
@@ -269,7 +292,7 @@ class SkillsConfig:
 
 @dataclass(frozen=True)
 class AgentConfig:
-    """Default exec target (``[msb.agent]``).
+    """Default exec target (``[agent]``).
 
     :ivar workdir: Explicit guest working directory, or None when unset
         (see resolve_agent_workdir).
@@ -281,7 +304,7 @@ class AgentConfig:
 
 @dataclass(frozen=True)
 class TracingConfig:
-    """Trace settings for agent executions (``[msb.tracing]``).
+    """Trace settings for agent executions (``[tracing]``).
 
     :ivar enabled: Enable tracing for every ``exec`` command.
     :ivar directory: Host trace root. Relative paths use the workspace as base.
@@ -334,7 +357,7 @@ _ENV_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 @dataclass(frozen=True)
 class DaemonConfig:
-    """A long-running process supervised in the sandbox (``[[msb.daemons]]``).
+    """A long-running process supervised in the sandbox (``[[daemons]]``).
 
     :ivar name: Unique daemon name (see :data:`DAEMON_NAME_PATTERN`).
     :ivar command: Command and arguments, run without a shell.
@@ -372,7 +395,7 @@ HOOK_REQUIRED_DEFAULTS: dict[str, bool] = {"provision": True, "startup": False}
 
 @dataclass(frozen=True)
 class HookConfig:
-    """A project hook (``[msb.hooks]`` ``provision`` or ``startup``).
+    """A project hook (``[hooks]`` ``provision`` or ``startup``).
 
     :ivar name: ``provision`` or ``startup``.
     :ivar script: Inline script, or ``None`` when *file* is set.
@@ -398,7 +421,7 @@ class HookConfig:
 
 @dataclass(frozen=True)
 class HooksConfig:
-    """Project hooks (``[msb.hooks]``).
+    """Project hooks (``[hooks]``).
 
     :ivar provision: Hook run once per sandbox and when its script changes.
     :ivar startup: Hook run once per guest boot.
@@ -496,9 +519,9 @@ class AgentCircusConfig:
     :ivar port_forwards: Guest ports published on the host
         (``[[port_forwards]]``, agent-circus compatible).
     :ivar daemons: Long-running processes supervised in the sandbox
-        (``[[msb.daemons]]``).
-    :ivar hooks: Project hooks (``[msb.hooks]``).
-    :ivar env: Non-secret variables from ``[env]`` and ``[msb.env]``; set at
+        (``[[daemons]]``).
+    :ivar hooks: Project hooks (``[hooks]``).
+    :ivar env: Non-secret variables from ``[env]``; set at
         sandbox creation and passed with every exec, hook and daemon.
     :ivar env_passthrough: Host environment variables to pass into the
         sandbox. Literal names are required to exist on the host; entries
@@ -603,8 +626,8 @@ def warn_unsupported_keys(config: dict[str, Any]) -> None:
 
     Unsupported keys are usually left over from agent-circus 1.x. Each
     key is reported at most once per process, because the function may
-    run more than once per command. The ``ca_certs`` and ``hooks`` keys
-    get a dedicated message that names the 2.x replacement.
+    run more than once per command. The ``ca_certs`` key gets a
+    dedicated message that names the 2.x replacement.
 
     :param config: Merged raw configuration dictionary.
     """
@@ -616,15 +639,6 @@ def warn_unsupported_keys(config: dict[str, Any]) -> None:
                 "agent-circus does not support [ca_certs]; ignoring it. Add the "
                 "certificates to the host CA store and set "
                 "msb.network.trust_host_cas = true instead; see MIGRATING.md."
-            )
-            _WARNED_KEYS.add(key)
-            continue
-        if key == "hooks":
-            if "hooks" in (config.get("msb") or {}):
-                continue
-            logger.warning(
-                "[hooks] is an agent-circus 1.x setting and is not used by "
-                "agent-circus 2.x; see [msb.hooks] in README.md and MIGRATING.md."
             )
             _WARNED_KEYS.add(key)
             continue
@@ -787,7 +801,7 @@ def effective_mounts(
 def resolve_agent_workdir(config: AgentCircusConfig, workspace: Path) -> str:
     """Return the guest working directory for agent commands.
 
-    An explicit ``[msb.agent] workdir`` wins. Otherwise the host path of
+    An explicit ``[agent] workdir`` wins. Otherwise the host path of
     the workspace is used when the git worktree mirror is on, so Git
     records paths that are valid on the host, and ``/workspace`` when
     it is off.
@@ -899,7 +913,7 @@ def docker_volume_name_for_workspace(workspace: Path) -> str:
 
 
 def _parse_image(raw: Any) -> ImageConfig:
-    """Parse the ``[msb.image]`` table.
+    """Parse the ``[image]`` table.
 
     :param raw: Raw table value or ``None``.
     :returns: Parsed image config.
@@ -908,16 +922,17 @@ def _parse_image(raw: Any) -> ImageConfig:
     if raw is None:
         return ImageConfig()
     if not isinstance(raw, dict):
-        raise ConfigurationError("msb.image must be a table")
+        raise ConfigurationError("image must be a table")
+    _reject_unknown_keys(raw, "image", ("tag", "dockerfile", "platform"))
     tag = raw.get("tag", DEFAULT_IMAGE_TAG)
     if not isinstance(tag, str) or not tag:
-        raise ConfigurationError("msb.image.tag must be a non-empty string")
+        raise ConfigurationError("image.tag must be a non-empty string")
     dockerfile = raw.get("dockerfile")
     if dockerfile is not None and not isinstance(dockerfile, str):
-        raise ConfigurationError("msb.image.dockerfile must be a string")
+        raise ConfigurationError("image.dockerfile must be a string")
     platform = raw.get("platform")
     if platform is not None and not isinstance(platform, str):
-        raise ConfigurationError("msb.image.platform must be a string")
+        raise ConfigurationError("image.platform must be a string")
     return ImageConfig(tag=tag, dockerfile=dockerfile, platform=platform)
 
 
@@ -932,6 +947,20 @@ def _parse_sandbox(raw: Any) -> SandboxConfig:
         return SandboxConfig()
     if not isinstance(raw, dict):
         raise ConfigurationError("msb.sandbox must be a table")
+    _reject_unknown_keys(
+        raw,
+        "msb.sandbox",
+        (
+            "memory",
+            "cpus",
+            "root_disk",
+            "docker_disk",
+            "docker_disk_persist",
+            "init",
+            "stop_timeout",
+            "docker_stop_timeout",
+        ),
+    )
     memory = raw.get("memory", DEFAULT_MEMORY)
     if not isinstance(memory, str) or not memory:
         raise ConfigurationError("msb.sandbox.memory must be a non-empty string")
@@ -1012,6 +1041,7 @@ def _parse_network(raw: Any) -> NetworkConfig:
         return NetworkConfig()
     if not isinstance(raw, dict):
         raise ConfigurationError("msb.network must be a table")
+    _reject_unknown_keys(raw, "msb.network", ("mode", "trust_host_cas"))
     mode = raw.get("mode", DEFAULT_NETWORK_MODE)
     if not isinstance(mode, str) or not mode:
         raise ConfigurationError("msb.network.mode must be a non-empty string")
@@ -1022,7 +1052,7 @@ def _parse_network(raw: Any) -> NetworkConfig:
 
 
 def _parse_skills(raw: Any) -> SkillsConfig:
-    """Parse the ``[msb.skills]`` table.
+    """Parse the ``[skills]`` table.
 
     The store path is validated here (absolute after ``~`` expansion),
     so a bad value fails at config load; it is kept unexpanded and
@@ -1035,17 +1065,18 @@ def _parse_skills(raw: Any) -> SkillsConfig:
     if raw is None:
         return SkillsConfig()
     if not isinstance(raw, dict):
-        raise ConfigurationError("msb.skills must be a table")
+        raise ConfigurationError("skills must be a table")
+    _reject_unknown_keys(raw, "skills", ("store",))
     store = raw.get("store")
     if store is not None:
         if not isinstance(store, str) or not store:
-            raise ConfigurationError("msb.skills.store must be a non-empty string")
+            raise ConfigurationError("skills.store must be a non-empty string")
         expand_store_path(store)
     return SkillsConfig(store=store)
 
 
 def _parse_tracing(raw: Any) -> TracingConfig:
-    """Parse the ``[msb.tracing]`` table.
+    """Parse the ``[tracing]`` table.
 
     :param raw: Raw table value or ``None``.
     :returns: Parsed trace settings.
@@ -1054,8 +1085,19 @@ def _parse_tracing(raw: Any) -> TracingConfig:
     if raw is None:
         return TracingConfig()
     if not isinstance(raw, dict):
-        raise ConfigurationError("msb.tracing must be a table")
-
+        raise ConfigurationError("tracing must be a table")
+    _reject_unknown_keys(
+        raw,
+        "tracing",
+        (
+            "enabled",
+            "directory",
+            "sample_interval",
+            "repetition_threshold",
+            "capture_payloads",
+            "max_payload_bytes",
+        ),
+    )
     enabled = raw.get("enabled", False)
     directory = raw.get("directory", ".agent-circus/traces")
     sample_interval = raw.get("sample_interval", 1.0)
@@ -1064,35 +1106,31 @@ def _parse_tracing(raw: Any) -> TracingConfig:
     max_payload_bytes = raw.get("max_payload_bytes", 100 * 1024 * 1024)
 
     if not isinstance(enabled, bool):
-        raise ConfigurationError("msb.tracing.enabled must be a boolean")
+        raise ConfigurationError("tracing.enabled must be a boolean")
     if not isinstance(directory, str) or not directory:
-        raise ConfigurationError("msb.tracing.directory must be a non-empty string")
+        raise ConfigurationError("tracing.directory must be a non-empty string")
     if (
         isinstance(sample_interval, bool)
         or not isinstance(sample_interval, int | float)
         or sample_interval <= 0
     ):
-        raise ConfigurationError(
-            "msb.tracing.sample_interval must be greater than zero"
-        )
+        raise ConfigurationError("tracing.sample_interval must be greater than zero")
     if (
         isinstance(repetition_threshold, bool)
         or not isinstance(repetition_threshold, int)
         or repetition_threshold < 2
     ):
         raise ConfigurationError(
-            "msb.tracing.repetition_threshold must be an integer of at least 2"
+            "tracing.repetition_threshold must be an integer of at least 2"
         )
     if not isinstance(capture_payloads, bool):
-        raise ConfigurationError("msb.tracing.capture_payloads must be a boolean")
+        raise ConfigurationError("tracing.capture_payloads must be a boolean")
     if (
         isinstance(max_payload_bytes, bool)
         or not isinstance(max_payload_bytes, int)
         or max_payload_bytes < 1
     ):
-        raise ConfigurationError(
-            "msb.tracing.max_payload_bytes must be a positive integer"
-        )
+        raise ConfigurationError("tracing.max_payload_bytes must be a positive integer")
     return TracingConfig(
         enabled=enabled,
         directory=directory,
@@ -1173,7 +1211,7 @@ def _parse_port_forwards(raw: Any) -> tuple[PortForward, ...]:
 
 
 def _parse_daemons(raw: Any) -> tuple[DaemonConfig, ...]:
-    """Parse the ``[[msb.daemons]]`` array.
+    """Parse the ``[[daemons]]`` array.
 
     Each entry needs a unique ``name`` matching
     :data:`DAEMON_NAME_PATTERN` and a non-empty ``command`` list. All
@@ -1187,11 +1225,11 @@ def _parse_daemons(raw: Any) -> tuple[DaemonConfig, ...]:
     if raw is None:
         return ()
     if not isinstance(raw, list):
-        raise ConfigurationError("msb.daemons must be a list of tables")
+        raise ConfigurationError("daemons must be a list of tables")
     daemons: list[DaemonConfig] = []
     names: set[str] = set()
     for index, entry in enumerate(raw):
-        label = f"msb.daemons[{index}]"
+        label = f"daemons[{index}]"
         if not isinstance(entry, dict):
             raise ConfigurationError(f"{label} must be a table")
         known_keys = (
@@ -1329,11 +1367,12 @@ def proxy_url(daemon: str, sandbox: str, port: int) -> str:
 
 
 def _parse_hooks(raw: Any) -> HooksConfig:
-    """Parse the ``[msb.hooks]`` table.
+    """Parse the ``[hooks]`` table.
 
     Each hook accepts either a plain string (an inline script) or a table
     with one of ``script`` / ``file`` plus optional settings. Unknown hook
-    names and unknown keys are rejected.
+    names and unknown keys are rejected. The 1.x image-build hook names
+    ``base_root`` and ``base_user`` get a dedicated error.
 
     :param raw: Raw table value or ``None``.
     :returns: Parsed hooks configuration.
@@ -1342,16 +1381,23 @@ def _parse_hooks(raw: Any) -> HooksConfig:
     if raw is None:
         return HooksConfig()
     if not isinstance(raw, dict):
-        raise ConfigurationError("msb.hooks must be a table")
+        raise ConfigurationError("hooks must be a table")
     unknown = sorted(key for key in raw if key not in HOOK_NAMES)
     if unknown:
-        raise ConfigurationError(f"msb.hooks has unknown key(s): {', '.join(unknown)}")
+        for key in unknown:
+            if key in ("base_root", "base_user"):
+                raise ConfigurationError(
+                    f"hooks.{key} is an agent-circus 1.x image-build hook. "
+                    "agent-circus 2.x has the provision and startup hooks "
+                    "instead; see MIGRATING.md"
+                )
+        raise ConfigurationError(f"hooks has unknown key(s): {', '.join(unknown)}")
     hooks: dict[str, HookConfig | None] = {}
     for name in HOOK_NAMES:
         if name not in raw:
             hooks[name] = None
             continue
-        label = f"msb.hooks.{name}"
+        label = f"hooks.{name}"
         value = raw[name]
         if isinstance(value, str):
             if not value.strip():
@@ -1372,7 +1418,7 @@ def _parse_hooks(raw: Any) -> HooksConfig:
 
 
 def _parse_hook_table(name: str, label: str, value: dict[str, Any]) -> HookConfig:
-    """Parse one ``[msb.hooks.<name>]`` table.
+    """Parse one ``[hooks.<name>]`` table.
 
     :param name: Hook name (``provision`` or ``startup``).
     :param label: Config key label used in error messages.
@@ -1459,7 +1505,7 @@ def load_hook_script(hook: HookConfig, workspace: Path) -> str:
     if hook.script is not None:
         return hook.script
     if hook.file is None:
-        raise ConfigurationError(f"msb.hooks.{hook.name} needs script or file")
+        raise ConfigurationError(f"hooks.{hook.name} needs script or file")
     path = Path(hook.file).expanduser()
     if not path.is_absolute():
         path = workspace / path
@@ -1467,25 +1513,25 @@ def load_hook_script(hook: HookConfig, workspace: Path) -> str:
         data = path.read_bytes()
     except OSError as e:
         raise ConfigurationError(
-            f"msb.hooks.{hook.name}.file {str(path)!r} cannot be read: {e}"
+            f"hooks.{hook.name}.file {str(path)!r} cannot be read: {e}"
         ) from e
     if len(data) > MAX_HOOK_SCRIPT_BYTES:
         raise ConfigurationError(
-            f"msb.hooks.{hook.name}.file {str(path)!r} is larger than 64 KiB"
+            f"hooks.{hook.name}.file {str(path)!r} is larger than 64 KiB"
         )
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError as e:
         raise ConfigurationError(
-            f"msb.hooks.{hook.name}.file {str(path)!r} is not UTF-8 text"
+            f"hooks.{hook.name}.file {str(path)!r} is not UTF-8 text"
         ) from e
     if not text.strip():
-        raise ConfigurationError(f"msb.hooks.{hook.name}.file {str(path)!r} is empty")
+        raise ConfigurationError(f"hooks.{hook.name}.file {str(path)!r} is empty")
     return text
 
 
 def _parse_agent(raw: Any) -> AgentConfig:
-    """Parse the ``[msb.agent]`` table.
+    """Parse the ``[agent]`` table.
 
     :param raw: Raw table value or ``None``.
     :returns: Parsed agent config.
@@ -1494,7 +1540,8 @@ def _parse_agent(raw: Any) -> AgentConfig:
     if raw is None:
         return AgentConfig()
     if not isinstance(raw, dict):
-        raise ConfigurationError("msb.agent must be a table")
+        raise ConfigurationError("agent must be a table")
+    _reject_unknown_keys(raw, "agent", ("command", "workdir"))
     command = raw.get("command")
     if command is None:
         command = list(DEFAULT_AGENT_COMMAND)
@@ -1503,12 +1550,10 @@ def _parse_agent(raw: Any) -> AgentConfig:
         or not command
         or not all(isinstance(part, str) and part for part in command)
     ):
-        raise ConfigurationError(
-            "msb.agent.command must be a non-empty list of strings"
-        )
+        raise ConfigurationError("agent.command must be a non-empty list of strings")
     workdir = raw.get("workdir")
     if workdir is not None and (not isinstance(workdir, str) or not workdir):
-        raise ConfigurationError("msb.agent.workdir must be a non-empty string")
+        raise ConfigurationError("agent.workdir must be a non-empty string")
     return AgentConfig(command=tuple(command), workdir=workdir)
 
 
@@ -1516,8 +1561,8 @@ def _parse_git(raw: Any) -> GitConfig | None:
     """Parse the ``[git]`` table.
 
     All three keys are interpreted (``worktree_mirror``, ``config_path``,
-    ``signing_key_path``); unknown keys are logged at debug level and
-    ignored. File existence is checked later and never raises here.
+    ``signing_key_path``); unknown keys raise. File existence is checked
+    later and never raises here.
 
     :param raw: Raw table value or ``None``.
     :returns: Parsed settings, or ``None`` when the table is absent.
@@ -1545,11 +1590,9 @@ def _parse_git(raw: Any) -> GitConfig | None:
             raise ConfigurationError(f"git.{key} must be an absolute path")
         paths[key] = expanded
 
-    for key in raw:
-        if key not in ("worktree_mirror", "config_path", "signing_key_path"):
-            logger.debug(
-                "Unsupported config key 'git.%s' for agent-circus — ignoring", key
-            )
+    _reject_unknown_keys(
+        raw, "git", ("worktree_mirror", "config_path", "signing_key_path")
+    )
     return GitConfig(
         worktree_mirror=worktree_mirror,
         worktree_mirror_explicit=raw_mirror is not None,
@@ -1563,7 +1606,7 @@ def _parse_ssh(raw: Any) -> SshConfig | None:
 
     The table's presence enables SSH agent forwarding, even when empty.
     ``config_path`` and ``known_hosts_path`` are optional; ``~`` is
-    expanded. Other keys are logged at debug level and ignored.
+    expanded. Unknown keys raise.
 
     :param raw: Raw table value or ``None``.
     :returns: Parsed settings, or ``None`` when the table is absent.
@@ -1587,11 +1630,7 @@ def _parse_ssh(raw: Any) -> SshConfig | None:
             raise ConfigurationError(f"ssh.{key} must be an absolute path")
         paths[key] = expanded
 
-    for key in raw:
-        if key not in ("config_path", "known_hosts_path"):
-            logger.debug(
-                "Unsupported config key 'ssh.%s' for agent-circus — ignoring", key
-            )
+    _reject_unknown_keys(raw, "ssh", ("config_path", "known_hosts_path"))
     return SshConfig(
         config_path=paths["config_path"],
         known_hosts_path=paths["known_hosts_path"],
@@ -1603,8 +1642,8 @@ def _parse_hosts(raw: Any) -> HostsConfig | None:
 
     ``patterns`` is a list of non-empty strings; ``re:``-prefixed entries
     must compile as regexes. ``file`` defaults to :data:`DEFAULT_HOSTS_FILE`
-    and must be an absolute host path (``~`` is expanded). Unknown keys are
-    logged at debug level and ignored.
+    and must be an absolute host path (``~`` is expanded). Unknown keys
+    raise.
 
     :param raw: Raw table value or ``None``.
     :returns: Parsed settings, or ``None`` when the table is absent.
@@ -1636,12 +1675,23 @@ def _parse_hosts(raw: Any) -> HostsConfig | None:
     if not os.path.isabs(file):
         raise ConfigurationError("hosts.file must be an absolute path")
 
-    for key in raw:
-        if key not in ("patterns", "file"):
-            logger.debug(
-                "Unsupported config key 'hosts.%s' for agent-circus — ignoring", key
-            )
+    _reject_unknown_keys(raw, "hosts", ("patterns", "file"))
     return HostsConfig(patterns=tuple(patterns), file=file)
+
+
+def _reject_unknown_keys(
+    raw: dict[str, Any], label: str, known: frozenset[str] | tuple[str, ...]
+) -> None:
+    """Raise when *raw* contains a key outside *known*.
+
+    :param raw: Raw table from the configuration.
+    :param label: Config key label used in the error message.
+    :param known: Keys the table accepts.
+    :raises ConfigurationError: If an unknown key is present.
+    """
+    unknown = sorted(key for key in raw if key not in known)
+    if unknown:
+        raise ConfigurationError(f"{label} has unknown key(s): {', '.join(unknown)}")
 
 
 def _parse_string_dict(raw: Any, label: str) -> dict[str, str]:
@@ -1664,31 +1714,27 @@ def _parse_string_dict(raw: Any, label: str) -> dict[str, str]:
     return result
 
 
-def _parse_env_tables(top_raw: Any, msb_raw: Any) -> dict[str, str]:
-    """Merge the top-level ``[env]`` and the ``[msb.env]`` tables.
+def _parse_env(raw: Any) -> dict[str, str]:
+    """Parse the top-level ``[env]`` table.
 
-    ``[msb.env]`` wins for a key set in both. Values are passed through
-    verbatim: values containing ``$`` are guest shell words that expand
-    when a guest shell evaluates them.
+    Values are passed through verbatim: values containing ``$`` are
+    guest shell words that expand when a guest shell evaluates them.
 
-    :param top_raw: Raw ``[env]`` table or ``None``.
-    :param msb_raw: Raw ``[msb.env]`` table or ``None``.
-    :returns: Merged variables.
-    :raises ConfigurationError: If a table is malformed, a name is not a
-        valid environment variable name, or a name starts with ``MSB_``.
+    :param raw: Raw ``[env]`` table or ``None``.
+    :returns: Parsed variables.
+    :raises ConfigurationError: If the table is malformed, a name is not
+        a valid environment variable name, or a name starts with
+        ``MSB_``.
     """
-    top = _parse_string_dict(top_raw, "env")
-    msb = _parse_string_dict(msb_raw, "msb.env")
-    merged = {**top, **msb}
+    merged = _parse_string_dict(raw, "env")
     for key in merged:
-        label = "msb.env" if key in msb else "env"
         if not _ENV_NAME_PATTERN.fullmatch(key):
             raise ConfigurationError(
-                f"{label} key {key!r} is not a valid environment variable name"
+                f"env key {key!r} is not a valid environment variable name"
             )
         if key.startswith("MSB_"):
             raise ConfigurationError(
-                f"{label} key {key!r} uses the MSB_ prefix, which msb reserves"
+                f"env key {key!r} uses the MSB_ prefix, which msb reserves"
             )
     return merged
 
@@ -1720,6 +1766,7 @@ def _parse_logging(raw: Any) -> tuple[str, str | None]:
         return "INFO", None
     if not isinstance(raw, dict):
         raise ConfigurationError("logging must be a table")
+    _reject_unknown_keys(raw, "logging", ("level", "file"))
     level = raw.get("level", "INFO")
     if not isinstance(level, str) or not level:
         raise ConfigurationError("logging.level must be a non-empty string")
@@ -1734,13 +1781,25 @@ def parse_config(config: dict[str, Any]) -> AgentCircusConfig:
 
     :param config: Merged raw configuration dictionary.
     :returns: Validated :class:`AgentCircusConfig`.
-    :raises ConfigurationError: If any supported key is malformed.
+    :raises ConfigurationError: If any supported key is malformed or a
+        key is misplaced.
     """
     warn_unsupported_keys(config)
     msb_raw = config.get("msb")
     if msb_raw is not None and not isinstance(msb_raw, dict):
         raise ConfigurationError("msb must be a table")
     msb_raw = msb_raw or {}
+    for key in msb_raw:
+        if key in MSB_TABLE_KEYS:
+            continue
+        if key in MSB_MOVED_KEYS:
+            raise ConfigurationError(
+                f"msb.{key} is not supported; use {MSB_MOVED_KEYS[key]}"
+            )
+        raise ConfigurationError(
+            f"msb.{key} is not a supported key; allowed: "
+            f"{', '.join(sorted(MSB_TABLE_KEYS))}"
+        )
     binary = msb_raw.get("binary")
     if binary is not None and not isinstance(binary, str):
         raise ConfigurationError("msb.binary must be a string")
@@ -1748,20 +1807,20 @@ def parse_config(config: dict[str, Any]) -> AgentCircusConfig:
     git = _parse_git(config.get("git"))
     return AgentCircusConfig(
         binary=binary,
-        image=_parse_image(msb_raw.get("image")),
+        image=_parse_image(config.get("image")),
         sandbox=_parse_sandbox(msb_raw.get("sandbox")),
         network=_parse_network(msb_raw.get("network")),
-        skills=_parse_skills(msb_raw.get("skills")),
-        agent=_parse_agent(msb_raw.get("agent")),
-        tracing=_parse_tracing(msb_raw.get("tracing")),
+        skills=_parse_skills(config.get("skills")),
+        agent=_parse_agent(config.get("agent")),
+        tracing=_parse_tracing(config.get("tracing")),
         mounts=(
             _parse_string_dict(msb_raw.get("mounts"), "msb.mounts") or DEFAULT_MOUNTS
         ),
         additional_dirs=_parse_additional_dirs(config.get("additional_dirs")),
         port_forwards=_parse_port_forwards(config.get("port_forwards")),
-        daemons=_parse_daemons(msb_raw.get("daemons")),
-        hooks=_parse_hooks(msb_raw.get("hooks")),
-        env=_parse_env_tables(config.get("env"), msb_raw.get("env")),
+        daemons=_parse_daemons(config.get("daemons")),
+        hooks=_parse_hooks(config.get("hooks")),
+        env=_parse_env(config.get("env")),
         env_passthrough=_parse_env_passthrough(config.get("env_passthrough")),
         git_worktree_mirror=(
             git.worktree_mirror if git is not None else DEFAULT_WORKTREE_MIRROR
@@ -1817,13 +1876,14 @@ def apply_worktree_mirror_default(
 def load_user_skills_config(
     environ: dict[str, str] | None = None,
 ) -> SkillsConfig:
-    """Read ``[msb.skills]`` from the user-global config only.
+    """Read ``[skills]`` from the user-global config only.
 
     The system skill store is the same for all projects, so the project
-    config is deliberately not consulted. Config layers merge shallowly
-    (a project ``[msb]`` table replaces the whole user ``msb`` table),
-    so reading ``[msb.skills]`` from the merged layers would lose a
-    user-global store whenever a project sets any ``[msb.*]`` key.
+    config is deliberately not consulted (a ``[skills]`` table there
+    raises; see :func:`_reject_project_skills`). Config layers merge
+    shallowly (a project ``[skills]`` table would replace the whole
+    user table), so reading ``[skills]`` from the merged layers would
+    lose a user-global store whenever a project sets it.
 
     :param environ: Environment mapping for the XDG lookup.
     :returns: Parsed skills settings; the default when there is no user
@@ -1833,19 +1893,20 @@ def load_user_skills_config(
     if not path.is_file():
         return SkillsConfig()
     document = _load_toml(path)
-    msb = document.get("msb")
-    if not isinstance(msb, dict):
-        msb = {}
-    return _parse_skills(msb.get("skills"))
+    return _parse_skills(document.get("skills"))
 
 
-def _warn_on_project_skills(workspace: Path) -> None:
-    """Warn when the project config tries to set ``[msb.skills]``.
+def _reject_project_skills(
+    workspace: Path, environ: dict[str, str] | None = None
+) -> None:
+    """Raise when the project config tries to set ``[skills]``.
 
-    Non-fatal: a malformed user config is reported by the normal load;
-    a malformed project config only skips the warning here.
+    A malformed project config is reported by the normal load, so only
+    a parseable document is checked here.
 
     :param workspace: Workspace directory holding the project config.
+    :param environ: Environment mapping for the XDG lookup.
+    :raises ConfigurationError: If the project config sets ``[skills]``.
     """
     project_path = get_project_config_path(workspace)
     if not project_path.is_file():
@@ -1854,13 +1915,11 @@ def _warn_on_project_skills(workspace: Path) -> None:
         document = _load_toml(project_path)
     except ConfigurationError:
         return
-    msb = document.get("msb")
-    if isinstance(msb, dict) and "skills" in msb:
-        logger.warning(
-            "[msb.skills] in %s is ignored. Set it in the user config %s; "
-            "the system skill store is the same for all projects.",
-            project_path,
-            get_user_config_path(),
+    if "skills" in document:
+        raise ConfigurationError(
+            f"[skills] in {project_path} is not supported. Set it in the "
+            f"user config {get_user_config_path(environ)}; the system skill "
+            "store is the same for all projects."
         )
 
 
@@ -1869,9 +1928,9 @@ def load_config(
 ) -> AgentCircusConfig:
     """Load, merge, and validate agent-circus configuration.
 
-    ``[msb.skills]`` is taken from the user-global config only (see
-    :func:`load_user_skills_config`); a ``[msb.skills]`` table in the
-    project config is ignored with a warning. Shortcoming: the project
+    ``[skills]`` is taken from the user-global config only (see
+    :func:`load_user_skills_config`); a ``[skills]`` table in the
+    project config raises. Shortcoming: the project
     file is read twice per ``load_config`` (here and in
     :func:`read_config_layers`); the files are small.
 
@@ -1880,7 +1939,7 @@ def load_config(
     :returns: Resolved configuration.
     :raises ConfigurationError: If a config file is invalid.
     """
-    _warn_on_project_skills(workspace)
+    _reject_project_skills(workspace, environ)
     warn_legacy_deploy_mode(workspace)
     config = apply_worktree_mirror_default(
         parse_config(read_config_layers(workspace, environ)), workspace

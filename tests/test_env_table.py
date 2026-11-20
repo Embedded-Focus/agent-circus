@@ -69,11 +69,9 @@ def test_parse_config_reads_top_level_env():
     assert config.env == {"A": "1"}
 
 
-def test_parse_config_msb_env_wins_over_top_level_env():
-    config = parse_config(
-        {"env": {"A": "top", "B": "top"}, "msb": {"env": {"A": "msb"}}}
-    )
-    assert config.env == {"A": "msb", "B": "top"}
+def test_parse_config_env_passthrough_alone():
+    config = parse_config({"env": {"A": "1", "B": "2"}})
+    assert config.env == {"A": "1", "B": "2"}
 
 
 def test_parse_config_env_accepts_dollar_values(caplog):
@@ -84,7 +82,7 @@ def test_parse_config_env_accepts_dollar_values(caplog):
     assert not caplog.text
 
 
-@pytest.mark.parametrize("table", ["env", "msb.env"])
+@pytest.mark.parametrize("table", ["env"])
 def test_parse_config_env_rejects_invalid_name(table):
     raw: dict = {"1BAD": "x"}
     config = {"env": {}, "msb": {}}

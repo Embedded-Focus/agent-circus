@@ -134,9 +134,7 @@ def test_launch_workdir_follows_worktree_mirror(tmp_path):
     launch2 = shell_launch_for_workspace(str(workspace2), environ={"HOME": "/home/u"})
     assert launch2.workdir == "/workspace"
     # Explicit agent workdir wins.
-    workspace3 = _write_config(
-        tmp_path / "proj3", b'[msb.agent]\nworkdir = "/srv/work"\n'
-    )
+    workspace3 = _write_config(tmp_path / "proj3", b'[agent]\nworkdir = "/srv/work"\n')
     launch3 = shell_launch_for_workspace(str(workspace3), environ={"HOME": "/home/u"})
     assert launch3.workdir == "/srv/work"
 

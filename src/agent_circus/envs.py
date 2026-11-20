@@ -141,12 +141,12 @@ def merged_env(
 ) -> tuple[dict[str, str], frozenset[str]]:
     """Return the environment of a daemon or hook, plus its shell words.
 
-    In increasing precedence: the ``[env]``/``[msb.env]`` variables, the
+    In increasing precedence: the ``[env]`` variables, the
     top-level ``env_passthrough`` variables, ``SSH_AUTH_SOCK`` (when
     ``[ssh]`` is configured), *env_passthrough*, and *env*.
 
     Values are classified by origin and content: user-authored values
-    (``[env]``/``[msb.env]`` and *env*) containing ``$`` are guest shell
+    (``[env]`` and *env*) containing ``$`` are guest shell
     words whose references expand in the guest; passthrough values stay
     literal even when they contain ``$`` (host secrets), and values
     without ``$`` are literal because quoting them would change nothing.

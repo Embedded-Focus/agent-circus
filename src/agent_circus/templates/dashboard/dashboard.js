@@ -1168,7 +1168,7 @@
         make(
           "div",
           "empty",
-          "No daemons registered. Add [[msb.daemons]] to the workspace " +
+          "No daemons registered. Add [[daemons]] to the workspace " +
             "config and run agent-circus up."
         )
       );

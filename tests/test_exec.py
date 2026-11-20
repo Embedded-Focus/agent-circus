@@ -726,7 +726,7 @@ def test_exec_with_ssh_overrides_passthrough_auth_sock(tmp_path, fake_msb, monke
         config_dir = tmp_path / ".agent-circus"
         config_dir.mkdir()
         (config_dir / "config.toml").write_bytes(
-            b'[ssh]\nenv_passthrough = ["SSH_*"]\n'
+            b'env_passthrough = ["SSH_*"]\n[ssh]\n'
         )
         result = runner.invoke(app, ["exec", "--workspace", str(tmp_path), "--", "pi"])
         assert result.exit_code == 0
@@ -750,7 +750,7 @@ def test_exec_with_ssh_explicit_env_assignment_wins(tmp_path, fake_msb, monkeypa
         config_dir = tmp_path / ".agent-circus"
         config_dir.mkdir()
         (config_dir / "config.toml").write_bytes(
-            b'[ssh]\nenv_passthrough = ["SSH_*"]\n'
+            b'env_passthrough = ["SSH_*"]\n[ssh]\n'
         )
         result = runner.invoke(
             app,

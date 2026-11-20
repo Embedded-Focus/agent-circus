@@ -816,12 +816,12 @@ def test_up_writes_pi_trust_for_mirror_path(tmp_path, fake_msb, monkeypatch):
 
 
 def test_up_keeps_explicit_workdir_with_mirror(tmp_path, fake_msb, monkeypatch):
-    """An explicit [msb.agent] workdir wins over the mirror host path."""
+    """An explicit [agent] workdir wins over the mirror host path."""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     config_dir = tmp_path / ".agent-circus"
     config_dir.mkdir()
     (config_dir / "config.toml").write_bytes(
-        b'[git]\nworktree_mirror = true\n[msb.agent]\nworkdir = "/workspace"\n'
+        b'[git]\nworktree_mirror = true\n[agent]\nworkdir = "/workspace"\n'
     )
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
@@ -1156,7 +1156,7 @@ def test_up_trusts_workspace_guest_path_with_explicit_workdir(tmp_path, fake_msb
     config_dir = tmp_path / ".agent-circus"
     config_dir.mkdir()
     (config_dir / "config.toml").write_bytes(
-        b'[git]\nworktree_mirror = false\n[msb.agent]\nworkdir = "/workspace/repo"\n'
+        b'[git]\nworktree_mirror = false\n[agent]\nworkdir = "/workspace/repo"\n'
     )
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
@@ -1697,7 +1697,7 @@ def _enable_daemons(tmp_path: Path, extra: str = "") -> None:
     config_dir.mkdir(exist_ok=True)
     (config_dir / "config.toml").write_bytes(
         (
-            "[[msb.daemons]]\n"
+            "[[daemons]]\n"
             'name = "web"\n'
             'command = ["python", "-m", "http.server", "4096"]\n'
             "port = 4096\n"
@@ -1814,7 +1814,7 @@ def test_daemon_url_returns_none_for_udp_forward():
 
 
 def test_daemon_envs_defaults_home_to_guest_root():
-    config = parse_config({"msb": {"daemons": [{"name": "web", "command": ["x"]}]}})
+    config = parse_config({"daemons": [{"name": "web", "command": ["x"]}]})
     envs = cli_module._daemon_envs(config)
     assert envs["web"][0]["HOME"] == GUEST_HOME
     # The default is literal; it must not expand as a guest shell word.
@@ -1823,11 +1823,7 @@ def test_daemon_envs_defaults_home_to_guest_root():
 
 def test_daemon_envs_explicit_home_wins_over_default():
     config = parse_config(
-        {
-            "msb": {
-                "daemons": [{"name": "web", "command": ["x"], "env": {"HOME": "/data"}}]
-            }
-        }
+        {"daemons": [{"name": "web", "command": ["x"], "env": {"HOME": "/data"}}]}
     )
     envs = cli_module._daemon_envs(config)
     assert envs["web"][0]["HOME"] == "/data"
@@ -1838,16 +1834,14 @@ def test_daemon_envs_daemon_env_overrides_passthrough(monkeypatch):
     config = parse_config(
         {
             "env_passthrough": ["CIRCUS_TEST_VAR"],
-            "msb": {
-                "daemons": [
-                    {
-                        "name": "web",
-                        "command": ["x"],
-                        "env_passthrough": ["CIRCUS_TEST_VAR"],
-                        "env": {"CIRCUS_TEST_VAR": "from-daemon"},
-                    }
-                ]
-            },
+            "daemons": [
+                {
+                    "name": "web",
+                    "command": ["x"],
+                    "env_passthrough": ["CIRCUS_TEST_VAR"],
+                    "env": {"CIRCUS_TEST_VAR": "from-daemon"},
+                }
+            ],
         }
     )
     envs = cli_module._daemon_envs(config)
@@ -1952,7 +1946,7 @@ def test_up_installs_router_before_daemons(tmp_path, fake_msb):
     config_dir = tmp_path / ".agent-circus"
     config_dir.mkdir()
     (config_dir / "config.toml").write_bytes(
-        b'[[msb.daemons]]\nname = "web"\ncommand = ["sleep", "1"]\nport = 4096\n'
+        b'[[daemons]]\nname = "web"\ncommand = ["sleep", "1"]\nport = 4096\n'
     )
     result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
@@ -1968,7 +1962,7 @@ def test_router_install_failure_does_not_abort_up(tmp_path, fake_msb):
     config_dir = tmp_path / ".agent-circus"
     config_dir.mkdir()
     (config_dir / "config.toml").write_bytes(
-        b'[[msb.daemons]]\nname = "web"\ncommand = ["sleep", "1"]\nport = 4096\n'
+        b'[[daemons]]\nname = "web"\ncommand = ["sleep", "1"]\nport = 4096\n'
     )
     real_run = FakeInvoker.run
 

@@ -29,31 +29,35 @@ not see or remove the 1.x containers.
 ## Config Keys
 
 1.x read a `.agent-circus/config.toml` file. 2.x reads the same file,
-but only supports a subset of the keys. Unsupported top-level keys
-produce a warning and no effect.
+but only supports a subset of the keys. Unsupported 1.x keys produce a
+warning and no effect; unknown or misplaced keys stop the command with
+an error.
 
 | 1.x key | 2.x replacement |
 |---|---|
-| `[hooks]` | `[msb.hooks]` (see below) |
+| `[hooks]` | `[hooks]` (see below) |
 | `[ca_certs]` | `[msb.network] trust_host_cas = true` (see below) |
 | `[env]` | `[env]` still works, but the behavior changes (see below) |
 
-### `[hooks]` to `[msb.hooks]`
+### `[hooks]` in 2.x
 
-1.x ran `base_root`, `base_user`, and `startup` hooks during the image
-build or at container start. 2.x does not read the `[hooks]` table. Its
-hook scripts assume the `node` user and the Docker image of 1.x are
-gone; sandboxes run as root.
+2.x also reads hooks from a top-level `[hooks]` table. It knows the
+`provision` and `startup` hooks. The 1.x image-build hook names
+`base_root` and `base_user` raise an error; agent-circus 2 has no
+image build to run them in. Hook scripts assume the `node` user and
+the Docker image of 1.x are gone; sandboxes run as root.
 
-- Move `base_root` and `base_user` into a `[msb.hooks]` `provision`
-  hook. Everything runs as root, so `/home/node/...` paths become
-  `/usr/local/bin` or `/root/...`.
-- Move `startup` into `startup`.
+- 1.x `base_root` and `base_user` become `[hooks]` `provision`. It
+  runs once at sandbox creation, not at image build. Everything runs
+  as root, so `/home/node/...` paths become `/usr/local/bin` or
+  `/root/...`.
+- 1.x `startup` stays `[hooks]` `startup`.
 - Hook files in `.agent-circus/hooks/` can stay where they are. Point
   `file` at them.
+- For real image-level customization, use a custom `[image] dockerfile`
+  based on the bundled `Dockerfile.msb-agents`.
 
-When `[hooks]` is set and `[msb.hooks]` is not, agent-circus 2 logs a
-hint. See [Hooks](README.md#hooks) in the README.
+See [Hooks](README.md#hooks) in the README.
 
 ### `[ca_certs]` to `[msb.network] trust_host_cas`
 
@@ -93,7 +97,7 @@ for them and ignores them.
   injected the server URLs into every agent's configuration. 2.x runs
   one sandbox per workspace and has no sidecar concept. Run an MCP
   server inside the sandbox yourself, for example as a daemon under
-  `[msb.daemons]`.
+  `[[daemons]]`.
 - `[llama_cpp]`: ran a llama.cpp server as a sidecar for OpenCode. Run
   the server inside the sandbox instead (for example as a daemon).
 - `[claude_mem]`: installed Claude-Mem in the image. Install it in the

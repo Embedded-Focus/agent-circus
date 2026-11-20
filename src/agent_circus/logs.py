@@ -94,7 +94,7 @@ GUEST_LOG_SOURCES: tuple[LogSource, ...] = (
     LogSource(
         name="daemons",
         label_prefix="daemon",
-        description="User daemons ([[msb.daemons]], s6-log managed)",
+        description="User daemons ([[daemons]], s6-log managed)",
         pattern="/var/log/circus-daemons/*/current",
         glob=True,
         per_file=(

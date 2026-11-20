@@ -51,11 +51,11 @@ def fake_msb(tmp_path, monkeypatch):
     config_dir = tmp_path / ".agent-circus"
     config_dir.mkdir()
     (config_dir / "config.toml").write_bytes(
-        b"[[msb.daemons]]\n"
+        b"[[daemons]]\n"
         b'name = "web"\n'
         b'command = ["python", "-m", "http.server", "4096"]\n'
         b"port = 4096\n\n"
-        b"[[msb.daemons]]\n"
+        b"[[daemons]]\n"
         b'name = "db"\n'
         b'command = ["sleep", "infinity"]\n'
         b"autostart = false\n\n"

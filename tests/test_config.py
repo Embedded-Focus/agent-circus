@@ -47,25 +47,25 @@ def test_parse_config_returns_defaults_for_empty_dict():
 def test_parse_config_interprets_supported_keys():
     config = parse_config(
         {
-            "msb": {
-                "binary": "/usr/local/bin/msb",
-                "image": {"tag": "example:1", "platform": "linux/arm64"},
-                "sandbox": {"memory": "8G", "cpus": 4},
-                "network": {"mode": "none"},
-                "agent": {"command": ["opencode", "acp"], "workdir": "/w"},
-                "tracing": {
-                    "enabled": True,
-                    "directory": "diagnostics",
-                    "sample_interval": 0.5,
-                    "repetition_threshold": 20,
-                    "capture_payloads": True,
-                    "max_payload_bytes": 1234,
-                },
-                "mounts": {".": "/workspace", "/data": "/data:ro"},
-                "env": {"FOO": "bar"},
-            },
             "env_passthrough": ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"],
             "logging": {"level": "DEBUG", "file": "/tmp/msbc.log"},
+            "image": {"tag": "example:1", "platform": "linux/arm64"},
+            "agent": {"command": ["opencode", "acp"], "workdir": "/w"},
+            "tracing": {
+                "enabled": True,
+                "directory": "diagnostics",
+                "sample_interval": 0.5,
+                "repetition_threshold": 20,
+                "capture_payloads": True,
+                "max_payload_bytes": 1234,
+            },
+            "env": {"FOO": "bar"},
+            "msb": {
+                "binary": "/usr/local/bin/msb",
+                "sandbox": {"memory": "8G", "cpus": 4},
+                "network": {"mode": "none"},
+                "mounts": {".": "/workspace", "/data": "/data:ro"},
+            },
         }
     )
     assert config.binary == "/usr/local/bin/msb"
@@ -107,22 +107,22 @@ def test_parse_config_warns_on_unsupported_keys(caplog):
     [
         ({"msb": "nope"}, "msb must be a table"),
         ({"msb": {"binary": 1}}, "msb.binary must be a string"),
-        ({"msb": {"image": {"tag": ""}}}, "msb.image.tag must be a non-empty string"),
+        ({"image": {"tag": ""}}, "image.tag must be a non-empty string"),
         ({"msb": {"sandbox": {"memory": ""}}}, "msb.sandbox.memory"),
         ({"msb": {"sandbox": {"cpus": "four"}}}, "msb.sandbox.cpus"),
-        ({"msb": {"agent": {"command": []}}}, "msb.agent.command"),
-        ({"msb": {"tracing": []}}, "msb.tracing must be a table"),
+        ({"agent": {"command": []}}, "agent.command"),
+        ({"tracing": []}, "tracing must be a table"),
         (
-            {"msb": {"tracing": {"sample_interval": 0}}},
-            "msb.tracing.sample_interval",
+            {"tracing": {"sample_interval": 0}},
+            "tracing.sample_interval",
         ),
         (
-            {"msb": {"tracing": {"repetition_threshold": 1}}},
-            "msb.tracing.repetition_threshold",
+            {"tracing": {"repetition_threshold": 1}},
+            "tracing.repetition_threshold",
         ),
         (
-            {"msb": {"tracing": {"max_payload_bytes": 0}}},
-            "msb.tracing.max_payload_bytes",
+            {"tracing": {"max_payload_bytes": 0}},
+            "tracing.max_payload_bytes",
         ),
         ({"msb": {"mounts": {"a": 1}}}, "msb.mounts.a must be a string"),
         ({"env_passthrough": "KEY"}, "env_passthrough must be a list"),
@@ -144,28 +144,28 @@ def test_parse_config_skills_store_defaults_to_none():
 
 
 def test_parse_config_reads_skills_store():
-    config = parse_config({"msb": {"skills": {"store": "/x"}}})
+    config = parse_config({"skills": {"store": "/x"}})
     assert config.skills.store == "/x"
 
 
 def test_parse_config_rejects_non_table_skills():
-    with pytest.raises(ConfigurationError, match=r"msb\.skills must be a table"):
-        parse_config({"msb": {"skills": "/x"}})
+    with pytest.raises(ConfigurationError, match=r"skills must be a table"):
+        parse_config({"skills": "/x"})
 
 
 def test_parse_config_rejects_empty_skills_store():
     with pytest.raises(ConfigurationError, match="non-empty string"):
-        parse_config({"msb": {"skills": {"store": ""}}})
+        parse_config({"skills": {"store": ""}})
 
 
 @pytest.mark.parametrize("store", ["rel/path", "~no-such-user-agent-circus/x"])
 def test_parse_config_rejects_invalid_skills_store(store):
-    with pytest.raises(ConfigurationError, match=r"msb\.skills\.store"):
-        parse_config({"msb": {"skills": {"store": store}}})
+    with pytest.raises(ConfigurationError, match=r"skills\.store"):
+        parse_config({"skills": {"store": store}})
 
 
 def test_parse_config_accepts_tilde_skills_store():
-    config = parse_config({"msb": {"skills": {"store": "~/skills"}}})
+    config = parse_config({"skills": {"store": "~/skills"}})
     assert config.skills.store == "~/skills"
 
 
@@ -409,9 +409,11 @@ def test_parse_ssh_rejects_non_table():
         parse_config({"ssh": "yes"})
 
 
-def test_parse_ssh_ignores_unknown_keys():
-    config = parse_config({"ssh": {"unknown_key": 1}})
-    assert config.ssh == SshConfig()
+def test_parse_ssh_rejects_unknown_keys():
+    with pytest.raises(
+        ConfigurationError, match=r"ssh has unknown key\(s\): unknown_key"
+    ):
+        parse_config({"ssh": {"unknown_key": 1}})
 
 
 def test_parse_hosts_absent_disables_forwarding():
@@ -450,7 +452,7 @@ def test_parse_hosts_expands_home_in_file(monkeypatch):
 
 
 def test_parse_config_agent_table_without_command_uses_default():
-    config = parse_config({"msb": {"agent": {"workdir": "/w"}}})
+    config = parse_config({"agent": {"workdir": "/w"}})
     assert config.agent.command == ("pi",)
     assert config.agent.workdir == "/w"
 
@@ -460,7 +462,7 @@ def test_load_config_reads_skills_store_from_user_config_only(tmp_path):
     user_dir = tmp_path / "userconfig"
     (user_dir / "agent-circus").mkdir(parents=True)
     (user_dir / "agent-circus" / "config.toml").write_bytes(
-        b'[msb.skills]\nstore = "/user-store"\n'
+        b'[skills]\nstore = "/user-store"\n'
     )
     project_dir = tmp_path / "project"
     (project_dir / ".agent-circus").mkdir(parents=True)
@@ -473,24 +475,22 @@ def test_load_config_reads_skills_store_from_user_config_only(tmp_path):
     assert config.skills.store == "/user-store"
 
 
-def test_load_config_ignores_project_skills_store_and_warns(tmp_path, caplog):
-    """A project [msb.skills] store does not win; a warning is logged."""
+def test_load_config_rejects_project_skills_store(tmp_path):
+    """A project [skills] store raises and names the user config path."""
     user_dir = tmp_path / "userconfig"
     (user_dir / "agent-circus").mkdir(parents=True)
     (user_dir / "agent-circus" / "config.toml").write_bytes(
-        b'[msb.skills]\nstore = "/user-store"\n'
+        b'[skills]\nstore = "/user-store"\n'
     )
     project_dir = tmp_path / "project"
     (project_dir / ".agent-circus").mkdir(parents=True)
     (project_dir / ".agent-circus" / "config.toml").write_bytes(
-        b'[msb.skills]\nstore = "/project-store"\n'
+        b'[skills]\nstore = "/project-store"\n'
     )
     environ = {"XDG_CONFIG_HOME": str(user_dir)}
-    with caplog.at_level(logging.WARNING):
-        config = load_config(project_dir, environ)
-    assert config.skills.store == "/user-store"
-    assert "[msb.skills]" in caplog.text
-    assert "is ignored" in caplog.text
+    with pytest.raises(ConfigurationError, match="user config") as excinfo:
+        load_config(project_dir, environ)
+    assert str(user_dir / "agent-circus" / "config.toml") in str(excinfo.value)
 
 
 def test_load_config_gives_no_skills_store_without_user_config(tmp_path):
@@ -500,3 +500,79 @@ def test_load_config_gives_no_skills_store_without_user_config(tmp_path):
     environ = {"XDG_CONFIG_HOME": str(tmp_path / "no-user-config")}
     config = load_config(project_dir, environ)
     assert config.skills.store is None
+
+
+@pytest.mark.parametrize(
+    ("key", "table"),
+    [
+        ("image", r"\[image\]"),
+        ("agent", r"\[agent\]"),
+        ("tracing", r"\[tracing\]"),
+        ("skills", r"\[skills\]"),
+        ("daemons", r"\[\[daemons\]\]"),
+        ("hooks", r"\[hooks\]"),
+        ("env", r"\[env\]"),
+    ],
+)
+def test_parse_config_rejects_moved_msb_keys(key, table):
+    """A moved key under [msb] raises and names the new table."""
+    with pytest.raises(
+        ConfigurationError, match=f"msb.{key} is not supported; use {table}"
+    ):
+        parse_config({"msb": {key: {}}})
+
+
+def test_parse_config_rejects_unknown_msb_key():
+    with pytest.raises(ConfigurationError, match=r"msb\.foo is not a supported key"):
+        parse_config({"msb": {"foo": 1}})
+
+
+def test_parse_config_still_accepts_direct_msb_keys():
+    config = parse_config(
+        {
+            "msb": {
+                "binary": "/bin/msb",
+                "sandbox": {"memory": "2G"},
+                "network": {"trust_host_cas": True},
+                "mounts": {".": "/workspace"},
+            }
+        }
+    )
+    assert config.binary == "/bin/msb"
+    assert config.sandbox.memory == "2G"
+    assert config.network.trust_host_cas is True
+    assert config.mounts == {".": "/workspace"}
+
+
+@pytest.mark.parametrize(
+    ("table", "raw"),
+    [
+        ("image", {"bogus": 1}),
+        ("agent", {"bogus": 1}),
+        ("tracing", {"bogus": 1}),
+        ("skills", {"bogus": 1}),
+        ("msb.sandbox", {"bogus": 1}),
+        ("msb.network", {"bogus": 1}),
+        ("logging", {"bogus": 1}),
+        ("git", {"bogus": 1}),
+        ("ssh", {"bogus": 1}),
+        ("hosts", {"bogus": 1}),
+    ],
+)
+def test_parse_config_rejects_unknown_subtable_keys(table, raw):
+    """Every strict table rejects unknown keys (D19)."""
+    top_key = table.split(".")[-1]
+    raw_config = {"msb": {top_key: raw}} if "." in table else {top_key: raw}
+    with pytest.raises(ConfigurationError, match=f"{table} has unknown key"):
+        parse_config(raw_config)
+
+
+def test_parse_config_1x_key_still_warns_only(caplog):
+    """A 1.x top-level key keeps the C7 warning instead of raising."""
+    from agent_circus.config import _WARNED_KEYS
+
+    _WARNED_KEYS.clear()
+    with caplog.at_level(logging.WARNING, logger="agent_circus.config"):
+        config = parse_config({"mcp_servers": [{"name": "x"}]})
+    assert config.daemons == ()
+    assert any("mcp_servers" in r.getMessage() for r in caplog.records)
