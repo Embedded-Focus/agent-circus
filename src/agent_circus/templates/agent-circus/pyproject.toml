@@ -7,7 +7,7 @@ requires-python = "==3.14.*"
 dependencies = [
     "gitpython >= 3.1.59",
     # https://github.com/mistralai/mistral-vibe
-    "mistral-vibe>=3.1.3",
+    "mistral-vibe>=3.1.1",
 ]
 
 [tool.uv]
@@ -17,8 +17,13 @@ override-dependencies = [
     "gitpython>=3.1.59",
     # work around critical CWEs 266, 269, 295, and 297
     "anyio>=4.14.2",
-    # work around critical CWEs 400 and 1333
-    "soupsieve>=2.9.0",
+    # GHSA-mmhr-3c5m-f64f (CVE-2026-126190) and critical CWEs 400 and 1333;
+    # mistral-vibe pins soupsieve==3.0.4, override to the fixed 4.x line
+    "soupsieve>=4.0.0",
+    # GHSA-9m75-vc3g-4x39, GHSA-mm57-4v3p-rchx, GHSA-fm9c-5rcf-2q5p,
+    # GHSA-2qm8-x737-gmw5 (CVE-2026-119194..119197); mistral-vibe pins
+    # pyasn1==0.6.4
+    "pyasn1>=0.6.5",
     # work around critical security issues
     "pyjwt>=2.15.0",
     "urllib3>=2.8.0",
@@ -29,8 +34,4 @@ override-dependencies = [
     "certifi>=2026.10.19",
     # GHSA-xcq7-p3pf-p88h; pinned by mistral-vibe
     "opentelemetry-api>=1.45.1",
-    # GHSA-9m75-vc3g-4x39, GHSA-mm57-4v3p-rchx, GHSA-fm9c-5rcf-2q5p,
-    # GHSA-2qm8-x737-gmw5 (CVE-2026-119194..119197); mistral-vibe pins
-    # pyasn1==0.6.4
-    "pyasn1>=0.6.5",
 ]

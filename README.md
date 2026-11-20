@@ -29,6 +29,18 @@
 
 </div>
 
+> [!NOTE]
+> Support for [microsandbox](https://microsandbox.dev/) is work in progress.
+> Development continues in the
+> [`microsandbox` branch](https://github.com/Embedded-Focus/agent-circus/tree/microsandbox)
+> until it is merged into the
+> [`develop` branch](https://github.com/Embedded-Focus/agent-circus/tree/develop)
+> and later into the
+> [`main` branch](https://github.com/Embedded-Focus/agent-circus/tree/main).
+> The `develop` and `main` branches are in maintenance mode. They receive
+> dependency updates only. Agent Circus checks these dependencies for
+> known vulnerabilities and updates them as needed.
+
 Run AI coding agents in sandboxed containers with full control over
 what they can see, reach, and inherit from your host environment.
 

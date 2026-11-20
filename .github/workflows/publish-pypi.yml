@@ -11,16 +11,18 @@ jobs:
   build:
     name: Build and verify distributions
     runs-on: ubuntu-latest
+    if: ${{ !github.event.release.prerelease }}
 
     steps:
       - name: Check out release tag
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v10.3.0
+        uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: false
           version: latest-known
@@ -32,8 +34,17 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Release tag must be a stable vMAJOR.MINOR.PATCH tag: $RELEASE_TAG" >&2
+          if [[ ! "$RELEASE_TAG" =~ ^v([2-9]|[1-9][0-9]+)\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must be a stable v2 or later tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+
+      - name: Validate release branch
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if ! git merge-base --is-ancestor "$RELEASE_TAG" origin/main; then
+            echo "Release tag $RELEASE_TAG is not on the main branch" >&2
             exit 1
           fi
 
@@ -88,7 +99,7 @@ jobs:
 
     steps:
       - name: Set up uv
-        uses: astral-sh/setup-uv@v10.3.0
+        uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: false
           version: latest-known
@@ -100,7 +111,7 @@ jobs:
           path: dist/
 
       - name: Generate PEP 740 attestations
-        uses: astral-sh/attest-action@v0.0.6
+        uses: astral-sh/attest-action@v0.0.7
 
       - name: Publish to PyPI
         run: uv publish

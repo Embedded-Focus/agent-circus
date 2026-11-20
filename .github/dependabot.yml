@@ -69,6 +69,74 @@ updates:
         patterns:
           - "*"
 
+  - package-ecosystem: uv
+    directory: /
+    target-branch: v1
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Europe/Vienna
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      python-dependencies-v1:
+        applies-to: version-updates
+        patterns:
+          - "*"
+
+  - package-ecosystem: uv
+    directory: /src/agent_circus/templates/agent-circus
+    target-branch: v1
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:15"
+      timezone: Europe/Vienna
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      template-python-dependencies-v1:
+        applies-to: version-updates
+        patterns:
+          - "*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: v1
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:30"
+      timezone: Europe/Vienna
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      github-actions-v1:
+        applies-to: version-updates
+        patterns:
+          - "*"
+
+  - package-ecosystem: docker
+    directory: /src/agent_circus/templates/agent-circus
+    target-branch: v1
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:45"
+      timezone: Europe/Vienna
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      docker-images-v1:
+        applies-to: version-updates
+        patterns:
+          - "*"
+
   # Entries without target-branch customize security updates on the default branch.
   # A zero version-update limit keeps these entries security-only.
   - package-ecosystem: uv
