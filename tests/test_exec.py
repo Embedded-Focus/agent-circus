@@ -595,11 +595,14 @@ def test_exec_acp_status_messages_go_to_log_file(tmp_path, fake_msb):
     assert "reusing it" in log_file.read_text()
 
 
-def test_exec_acp_config_warnings_go_to_log_file(tmp_path, fake_msb):
-    # Reproduces the reported failure mode: unsupported config keys must
-    # not reach stderr in ACP mode (acp.el treats stderr as API errors).
-    # They are logged at debug level, so request --log-level debug to
-    # observe the message in the log file.
+def test_exec_acp_config_warnings_go_to_log_file(tmp_path, fake_msb, monkeypatch):
+    # Reproduces the reported failure mode: warnings about config keys
+    # must not reach stderr in ACP mode (acp.el treats stderr as API
+    # errors). They are logged, so request --log-file to observe the
+    # message in the log file.
+    from agent_circus.config import _WARNED_KEYS
+
+    _WARNED_KEYS.clear()
     config_dir = tmp_path / ".agent-circus"
     config_dir.mkdir()
     (config_dir / "config.toml").write_bytes(b'runtime = "podman"\n')
@@ -622,7 +625,7 @@ def test_exec_acp_config_warnings_go_to_log_file(tmp_path, fake_msb):
     assert result.exit_code == 0
     for handler in _file_handlers():
         handler.flush()
-    assert "Unsupported config key 'runtime'" in log_file.read_text()
+    assert "Config key [runtime] is from agent-circus 1.x" in log_file.read_text()
 
 
 # A fake msb that mimics the real binary's stdin behavior: every piped

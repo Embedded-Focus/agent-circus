@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from agent_circus.config import (
+    _WARNED_KEYS,
     SshConfig,
     effective_mounts,
     get_user_config_path,
@@ -88,15 +89,17 @@ def test_parse_config_interprets_supported_keys():
     assert config.logging_file == "/tmp/msbc.log"
 
 
-def test_parse_config_logs_unsupported_keys_at_debug(caplog):
-    # Unsupported keys are shared agent-circus config; expecting them is
-    # normal, so they only surface at debug level.
-    with caplog.at_level(logging.DEBUG):
+def test_parse_config_warns_on_unsupported_keys(caplog):
+    # Unsupported keys are usually leftovers from agent-circus 1.x, so
+    # they surface as a once-per-process warning that names MIGRATING.md.
+    _WARNED_KEYS.clear()
+    with caplog.at_level(logging.WARNING):
         parse_config({"services": ["pi"], "runtime": {"engine": "docker"}})
     messages = [record.getMessage() for record in caplog.records]
     assert any("services" in message for message in messages)
     assert any("runtime" in message for message in messages)
-    assert all(record.levelno == logging.DEBUG for record in caplog.records)
+    assert all(record.levelno == logging.WARNING for record in caplog.records)
+    assert all("MIGRATING.md" in message for message in messages)
 
 
 @pytest.mark.parametrize(
@@ -177,12 +180,13 @@ def test_parse_config_rejects_non_bool_trust_host_cas():
         parse_config({"msb": {"network": {"trust_host_cas": "yes"}}})
 
 
-def test_parse_config_logs_info_for_ca_certs(caplog):
-    with caplog.at_level(logging.INFO, logger="agent_circus.config"):
+def test_parse_config_warns_for_ca_certs(caplog):
+    _WARNED_KEYS.clear()
+    with caplog.at_level(logging.WARNING, logger="agent_circus.config"):
         parse_config({"ca_certs": {"patterns": ["x.crt"]}})
     records = [r for r in caplog.records if "trust_host_cas" in r.getMessage()]
     assert len(records) == 1
-    assert records[0].levelno == logging.INFO
+    assert records[0].levelno == logging.WARNING
 
 
 def test_parse_config_accepts_sandbox_init_values():

@@ -277,18 +277,24 @@ def test_load_hook_script_empty_file_raises(tmp_path):
 
 
 def test_parse_config_agent_circus_hooks_logs_hint(caplog):
-    with caplog.at_level(logging.INFO):
+    from agent_circus.config import _WARNED_KEYS
+
+    _WARNED_KEYS.clear()
+    with caplog.at_level(logging.WARNING):
         parse_config({"hooks": {"startup": "x"}})
     assert any(
-        "[hooks] is an agent-circus setting" in record.message
+        "[hooks] is an agent-circus 1.x setting" in record.message
         for record in caplog.records
     )
 
 
 def test_parse_config_hooks_hint_not_logged_with_msb_hooks(caplog):
-    with caplog.at_level(logging.INFO):
+    from agent_circus.config import _WARNED_KEYS
+
+    _WARNED_KEYS.clear()
+    with caplog.at_level(logging.WARNING):
         parse_config({"hooks": {"startup": "x"}, "msb": {"hooks": {"startup": "y"}}})
     assert not any(
-        "[hooks] is an agent-circus setting" in record.message
+        "[hooks] is an agent-circus 1.x setting" in record.message
         for record in caplog.records
     )

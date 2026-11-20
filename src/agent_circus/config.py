@@ -23,6 +23,12 @@ from .system_skills import expand_store_path
 
 logger = logging.getLogger(__name__)
 
+#: Keys already reported by :func:`warn_unsupported_keys` in this process.
+_WARNED_KEYS: set[str] = set()
+
+#: Whether the 1.x deploy-mode warning was already shown in this process.
+_DEPLOY_MODE_WARNED = False
+
 CONFIG_DIR_NAME = ".agent-circus"
 CONFIG_FILE_NAME = "config.toml"
 
@@ -590,25 +596,62 @@ def read_config_layers(
 
 
 def warn_unsupported_keys(config: dict[str, Any]) -> None:
-    """Log a debug message for every unsupported top-level config key.
+    """Log a warning for every unsupported top-level config key.
 
-    Agent-circus and agent-circus share a config file, so unsupported keys
-    are expected and not worth a warning on every invocation. The
-    ``ca_certs`` key is logged at INFO level instead, because users may
-    expect it to work here as it does in agent-circus.
+    Unsupported keys are usually left over from agent-circus 1.x. Each
+    key is reported at most once per process, because the function may
+    run more than once per command. The ``ca_certs`` and ``hooks`` keys
+    get a dedicated message that names the 2.x replacement.
 
     :param config: Merged raw configuration dictionary.
     """
     for key in config:
+        if key in _WARNED_KEYS:
+            continue
         if key == "ca_certs":
-            logger.info(
+            logger.warning(
                 "agent-circus does not support [ca_certs]; ignoring it. Add the "
                 "certificates to the host CA store and set "
-                "msb.network.trust_host_cas = true instead."
+                "msb.network.trust_host_cas = true instead; see MIGRATING.md."
             )
+            _WARNED_KEYS.add(key)
+            continue
+        if key == "hooks":
+            if "hooks" in (config.get("msb") or {}):
+                continue
+            logger.warning(
+                "[hooks] is an agent-circus 1.x setting and is not used by "
+                "agent-circus 2.x; see [msb.hooks] in README.md and MIGRATING.md."
+            )
+            _WARNED_KEYS.add(key)
             continue
         if key not in SUPPORTED_TOP_LEVEL_KEYS:
-            logger.debug("Unsupported config key %r for agent-circus — ignoring", key)
+            logger.warning(
+                "Config key [%s] is from agent-circus 1.x and has no effect "
+                "in 2.x; see MIGRATING.md",
+                key,
+            )
+            _WARNED_KEYS.add(key)
+
+
+def warn_legacy_deploy_mode(workspace: Path) -> None:
+    """Warn once per process about 1.x deploy-mode files.
+
+    agent-circus 1.x deploy mode copied templates into
+    ``.agent-circus/``; 2.x ignores them. This check looks at files
+    only; it never calls Docker.
+
+    :param workspace: Workspace directory.
+    """
+    global _DEPLOY_MODE_WARNED
+    if _DEPLOY_MODE_WARNED:
+        return
+    if (workspace / ".agent-circus" / "compose.yaml").is_file():
+        logger.warning(
+            "This workspace has files from agent-circus 1.x deploy mode "
+            "(.agent-circus/compose.yaml); 2.x ignores them. See MIGRATING.md"
+        )
+        _DEPLOY_MODE_WARNED = True
 
 
 def sanitize_project_name(name: str) -> str:
@@ -1693,11 +1736,6 @@ def parse_config(config: dict[str, Any]) -> MsbConfig:
     if msb_raw is not None and not isinstance(msb_raw, dict):
         raise ConfigurationError("msb must be a table")
     msb_raw = msb_raw or {}
-    if "hooks" in config and "hooks" not in msb_raw:
-        logger.info(
-            "[hooks] is an agent-circus setting and is not used by agent-circus; "
-            "see [msb.hooks] in README.md."
-        )
     binary = msb_raw.get("binary")
     if binary is not None and not isinstance(binary, str):
         raise ConfigurationError("msb.binary must be a string")
@@ -1834,6 +1872,7 @@ def load_config(workspace: Path, environ: dict[str, str] | None = None) -> MsbCo
     :raises ConfigurationError: If a config file is invalid.
     """
     _warn_on_project_skills(workspace)
+    warn_legacy_deploy_mode(workspace)
     config = apply_worktree_mirror_default(
         parse_config(read_config_layers(workspace, environ)), workspace
     )
