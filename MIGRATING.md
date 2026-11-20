@@ -35,25 +35,17 @@ an error.
 
 ### Where Settings Live in 2.x
 
-The table moved compared to earlier 2.0 development versions. The
-fields inside the tables do not change; only the table name moves.
-Update your config by hand:
+2.x reads these tables from `.agent-circus/config.toml`:
 
-| Old place (error now) | New place |
-|---|---|
-| `msb.binary` | stays |
-| `[msb.sandbox]` | stays |
-| `[msb.network]` | stays |
-| `[msb.mounts]` | stays |
-| `[msb.image]` | `[image]` |
-| `[msb.agent]` | `[agent]` |
-| `[msb.tracing]` | `[tracing]` |
-| `[msb.skills]` | `[skills]` (user config only) |
-| `[[msb.daemons]]` | `[[daemons]]` |
-| `[msb.hooks]` | `[hooks]` |
-| `[msb.env]` | removed — use `[env]` |
+- `[msb]` with `binary`, and the sub-tables `[msb.sandbox]`,
+  `[msb.network]`, `[msb.mounts]` (settings that map directly to the
+  msb binary);
+- the top-level tables `[image]`, `[agent]`, `[tracing]`, `[skills]`,
+  `[[daemons]`, `[hooks]`, `[env]`, `[logging]`, `[git]`, `[ssh]`,
+  `[hosts]`, plus `env_passthrough`, `[[additional_dirs]]` and
+  `[[port_forwards]]`.
 
-The stricter rules behind this layout:
+The stricter rules:
 
 - Unknown or misplaced keys now **fail the command** (they were warned
   about or ignored before).
@@ -62,6 +54,10 @@ The stricter rules behind this layout:
 - Unknown keys inside any table (`[image]`, `[git]`, `[ssh]`, ...) fail.
 - `[skills]` may only be set in the user config
   (`~/.config/agent-circus/config.toml`), not in the project config.
+- The user config and the project config merge key by key: tables
+  merge recursively and the project value wins; arrays (for example
+  `[[daemons]]` or `env_passthrough`) are replaced as a whole by the
+  project value.
 
 ### Keys From 1.x
 
@@ -76,8 +72,8 @@ The stricter rules behind this layout:
 2.x also reads hooks from a top-level `[hooks]` table. It knows the
 `provision` and `startup` hooks. The 1.x image-build hook names
 `base_root` and `base_user` raise an error; agent-circus 2 has no
-image build to run them in. Hook scripts assume the `node` user and
-the Docker image of 1.x are gone; sandboxes run as root.
+image build to run them in. 1.x hook scripts often assume the `node`
+user and the 1.x image. Both are gone in 2.x: sandboxes run as root.
 
 - 1.x `base_root` and `base_user` become `[hooks]` `provision`. It
   runs once at sandbox creation, not at image build. Everything runs

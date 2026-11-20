@@ -43,9 +43,12 @@ The Docker engine runs inside the sandbox, so agents can build and run
 containers in their own workspace. The Docker or Podman installation on your
 host only builds the sandbox image. It never runs agent workloads.
 
-agent-circus reads the project file `.agent-circus/config.toml` and a
-user-global config. It applies the keys it supports and logs a warning
-for every other key.
+agent-circus reads `.agent-circus/config.toml` in your project and
+`~/.config/agent-circus/config.toml`. The two files merge key by key:
+tables merge recursively and the project value wins; arrays (for
+example `[[daemons]]` or `env_passthrough`) are replaced as a whole by
+the project value. Known 1.x keys log a warning; any other unknown key
+stops the command with an error.
 
 The supported agent harnesses come preinstalled in the image:
 
@@ -82,6 +85,11 @@ package bundles the `msb` binary, and agent-circus finds it there.
 
 ### Installing agent-circus
 
+Until `2.0.0` is released, `uv tool install agent-circus` installs the
+1.x Docker/Podman version. To install a 2.x release candidate, use the
+pre-release command from [Installing a
+Pre-release](#installing-a-pre-release).
+
 To install agent-circus from a checkout, run this command in the
 repository root:
 
@@ -106,14 +114,13 @@ change between releases.
 
 ### Installing a Pre-release
 
-Pre-releases (for example `2.0.0rc1`) are published to
-[TestPyPI](https://testpypi.org/project/agent-circus/) only. The install
-command is still being tested. Until then, download the wheel from
-<https://test.pypi.org/project/agent-circus/#files> and install it from
-the download:
+Pre-releases (for example `2.0.0rc1`) are on PyPI. `uv`, `pip`, and
+`pipx` do not install them unless you ask for the exact version, so a
+normal upgrade keeps you on the latest stable version:
 
 ``` shell
-uv tool install ./agent_circus-<version>-py3-none-any.whl
+uv tool install agent-circus==2.0.0rc1
+uvx agent-circus@2.0.0rc1 version
 ```
 
 ## How It Works
@@ -441,14 +448,17 @@ agent-circus up
 
 ## Configuration
 
-agent-circus reads `.agent-circus/config.toml` in your project, plus a
-user-global file from
-`$XDG_CONFIG_HOME/agent-circus/config.toml`. The
-project file wins.
+agent-circus reads `.agent-circus/config.toml` in your project and
+`~/.config/agent-circus/config.toml` (`$XDG_CONFIG_HOME` respected).
+The two files merge key by key: tables merge recursively and the
+project value wins; arrays (for example `[[daemons]]` or
+`env_passthrough`) are replaced as a whole by the project value.
 
-agent-circus applies its own `[msb]` table, plus the `logging`,
-`env_passthrough`, `additional_dirs`, `git` (only `worktree_mirror`), and
-`port_forwards` keys. Every other key produces a warning.
+agent-circus applies its own `[msb]` table, plus the top-level tables
+`[image]`, `[agent]`, `[tracing]`, `[skills]`, `[[daemons]`, `[hooks]`,
+`[env]`, `logging`, `env_passthrough`, `additional_dirs`, `git`, `ssh`,
+`hosts`, and `port_forwards`. Known 1.x keys log a warning; any other
+unknown key stops the command with an error.
 
 agent-circus logs to stderr. Set the level and an optional log file either on
 the command line or in the config; the command line wins.
@@ -628,6 +638,9 @@ guest process. If only VM CPU rises, inspect `msb-system.jsonl` and
 `collector-errors.log` for a runtime or collector failure.
 
 ## Configuration Reference
+
+Tables merge key by key with the project file winning; arrays are
+replaced as a whole (see [Configuration](#configuration)).
 
 The `[[additional_dirs]]` array mounts extra host directories into the
 sandbox under `/workspaces/<name>`, next to the project at `/workspace`.

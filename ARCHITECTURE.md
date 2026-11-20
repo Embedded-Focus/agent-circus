@@ -413,12 +413,13 @@ Implemented; see `plan-msb-s6.md`.
 | Branch | Content | Versions | Tags | Published to |
 |---|---|---|---|---|
 | `v1` | Docker/Podman implementation, security updates only | `1.0.x` | `v1.0.x` | PyPI |
-| `develop` | microsandbox implementation, new and not yet battle-tested | `2.Y.ZaN`, `bN`, `rcN` | `v2.0.0rc1`, ... | TestPyPI only |
+| `develop` | microsandbox implementation, new and not yet battle-tested | `2.Y.ZaN`, `bN`, `rcN` | `v2.0.0rc1`, ... | PyPI, as pre-release |
 | `main` | microsandbox implementation, battle-tested | `2.Y.Z` | `v2.Y.Z` | PyPI |
 
 A fix raises `PATCH`, a backward-compatible feature raises `MINOR`, a
-breaking change raises `MAJOR`. Pre-releases come from `develop` and go
-to TestPyPI only; PyPI gets stable releases only. Fixes for both lines
-are cherry-picked by hand; nothing merges between `v1` and `develop`.
+breaking change raises `MAJOR`. Pre-releases come from `develop` and
+go to PyPI as pre-releases; stable releases come from `main`; TestPyPI
+is a manual dry run only. Fixes for both lines are cherry-picked by
+hand; nothing merges between `v1` and `develop`.
 `develop` is merged into `main` when a release candidate has been in
 daily use for about two weeks without blocking bugs.
