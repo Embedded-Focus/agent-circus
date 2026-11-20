@@ -1,29 +1,34 @@
-"""Custom exceptions for Agent Circus CLI."""
+"""Exceptions for agent-circus."""
+
+from __future__ import annotations
 
 
 class AgentCircusError(Exception):
-    """Base exception for all Agent Circus errors."""
-
-
-class DockerConnectionError(AgentCircusError):
-    """Raised when connection to Docker daemon fails."""
+    """Base class for all agent-circus errors."""
 
 
 class ConfigurationError(AgentCircusError):
-    """Raised when configuration is invalid or missing."""
+    """Raised when configuration is missing, malformed, or contradictory."""
 
 
-class ContainerNotFoundError(AgentCircusError):
-    """Raised when a required container is not found."""
+class MsbNotFoundError(AgentCircusError):
+    """Raised when no usable ``msb`` binary can be located."""
 
 
-class ContainerOperationError(AgentCircusError):
-    """Raised when a container operation fails."""
+class MsbCommandError(AgentCircusError):
+    """Raised when an ``msb`` invocation fails.
 
+    :ivar returncode: Exit status of the failed process.
+    :ivar stderr: Captured stderr, if any.
+    """
 
-class BuildError(AgentCircusError):
-    """Raised when building container images fails."""
+    def __init__(self, message: str, *, returncode: int, stderr: str = "") -> None:
+        """Initialize the error.
 
-
-class ComposeError(AgentCircusError):
-    """Raised when Docker Compose operations fail."""
+        :param message: Human-readable error description.
+        :param returncode: Exit status of the failed process.
+        :param stderr: Captured stderr, if any.
+        """
+        super().__init__(message)
+        self.returncode = returncode
+        self.stderr = stderr

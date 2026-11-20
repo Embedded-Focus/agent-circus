@@ -1,16 +1,18 @@
----
 repos:
 - repo: https://github.com/astral-sh/ruff-pre-commit
-  rev: v0.15.0
+  rev: v0.17.3
   hooks:
   - id: ruff-check
-    args: [--fix]
+    args:
+    - --fix
+    exclude: ^src/agent_circus/templates/dashboard/vendor/
   - id: ruff-format
+    exclude: ^src/agent_circus/templates/dashboard/vendor/
 - repo: https://github.com/astral-sh/ty-pre-commit
-  # ty version.
-  rev: v0.0.58
+  rev: v0.0.95
   hooks:
   - id: ty
+    exclude: ^src/agent_circus/templates/dashboard/vendor/
 - repo: local
   hooks:
   - id: pytest

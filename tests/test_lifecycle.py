@@ -1,0 +1,1983 @@
+"""Tests for the agent-circus lifecycle commands: up, stop, start, destroy."""
+
+import contextlib
+import json
+import logging
+import socket
+from itertools import pairwise
+from pathlib import Path
+from types import SimpleNamespace
+from typing import ClassVar
+
+import pytest
+from typer.testing import CliRunner
+
+import agent_circus.cli as cli_module
+from agent_circus.cli import _format_capacity, app
+from agent_circus.config import GUEST_HOME, parse_config, sandbox_name_for_workspace
+from agent_circus.exceptions import MsbCommandError
+from agent_circus.gitconfig import (
+    GIT_GUEST_DIR,
+    GIT_GUEST_HOST_CONFIG,
+    GIT_GUEST_MANAGED_CONFIG,
+    GIT_GUEST_SIGNING_KEY,
+)
+from agent_circus.gitworktree import GIT_WRAPPER_GUEST_PATH
+from agent_circus.ssh_agent import agent_link_path
+
+runner = CliRunner()
+
+
+@contextlib.contextmanager
+def capture_cli_debug_records():
+    """Capture log records from the ``agent_circus.cli`` logger at DEBUG level.
+
+    Attaches a handler directly to the CLI logger because
+    ``setup_logging(force=True)`` replaces root handlers during the
+    command run, which would lose a caplog-attached handler.
+
+    :yields: List that collects the emitted :class:`logging.LogRecord`.
+    """
+    cli_logger = logging.getLogger("agent_circus.cli")
+    records: list[logging.LogRecord] = []
+
+    class CaptureHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = CaptureHandler(level=logging.DEBUG)
+    cli_logger.addHandler(handler)
+    old_level = cli_logger.level
+    cli_logger.setLevel(logging.DEBUG)
+    try:
+        yield records
+    finally:
+        cli_logger.removeHandler(handler)
+        cli_logger.setLevel(old_level)
+
+
+def debug_messages(records: list[logging.LogRecord]) -> list[str]:
+    """Return the messages of DEBUG-level records as strings.
+
+    :param records: Records collected by :func:`capture_cli_debug_records`.
+    :returns: Message texts of the records logged at DEBUG level.
+    """
+    return [
+        record.getMessage() for record in records if record.levelno == logging.DEBUG
+    ]
+
+
+class FakeInvoker:
+    """Records invocations; scripted per-subcommand behavior."""
+
+    behavior: ClassVar[dict] = {}
+
+    def __init__(self, binary: Path) -> None:
+        self.binary = binary
+
+    def run(self, args, **kwargs):
+        self.behavior.setdefault("calls", []).append(args)
+        if args[:2] == ["volume", "list"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=self.behavior.get("volume_list", "[]"),
+                stderr="",
+            )
+        if args[0] == "run" and self.behavior.get("run_stderr"):
+            raise MsbCommandError(
+                "msb run failed", returncode=1, stderr=self.behavior["run_stderr"]
+            )
+        if args[:2] == ["image", "inspect"]:
+            return SimpleNamespace(
+                returncode=self.behavior.get("inspect_rc", 1),
+                stdout="",
+                stderr="",
+            )
+        if args[0] == "inspect":
+            return SimpleNamespace(
+                returncode=0,
+                stdout=self.behavior.get("inspect_json", "{}"),
+                stderr="",
+            )
+        if args[0] == "list":
+            return SimpleNamespace(
+                returncode=0,
+                stdout=self.behavior.get("list_output", json.dumps([])),
+                stderr="",
+            )
+        if args[0] == "exec" and args[-2:] == ["cat", "/proc/1/comm"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=self.behavior.get("pid1", "init.krun\n"),
+                stderr="",
+            )
+        if args[0] == "exec" and args[-3:] == ["sh", "-c", "kill -TERM 1"]:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if args[0] == "list":
+            list_outputs = self.behavior.get("list_outputs")
+            if list_outputs:
+                if len(list_outputs) > 1:
+                    return SimpleNamespace(
+                        returncode=0, stdout=list_outputs.pop(0), stderr=""
+                    )
+                return SimpleNamespace(returncode=0, stdout=list_outputs[0], stderr="")
+            return SimpleNamespace(
+                returncode=0,
+                stdout=self.behavior.get("list_output", json.dumps([])),
+                stderr="",
+            )
+        if args[0] == "exec" and args[-2:] == ["docker", "info"]:
+            # dockerd probe: succeed only when enabled
+            if not self.behavior.get("dockerd_ready", True):
+                return SimpleNamespace(
+                    returncode=1, stdout="", stderr="permission denied"
+                )
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if args[0] == "exec" and "ssh-add" in args:
+            # SSH agent probe: exit code scripted via ssh_add_rcs (one per
+            # call, last one repeats) or ssh_add_rc
+            rcs = self.behavior.get("ssh_add_rcs")
+            rc = rcs.pop(0) if rcs and len(rcs) > 1 else (rcs or [None])[0]
+            if rc is None:
+                rc = self.behavior.get("ssh_add_rc", 0)
+            return SimpleNamespace(returncode=rc, stdout="", stderr="")
+        if args[0] == "exec" and any("BEGIN agent-circus hosts" in a for a in args):
+            # hosts block write: exit code scripted via hosts_rc
+            return SimpleNamespace(
+                returncode=self.behavior.get("hosts_rc", 0), stdout="", stderr=""
+            )
+        if args[0] == "exec" and "trust.json" in args[-1]:
+            if self.behavior.get("trust_fail"):
+                return SimpleNamespace(returncode=1, stdout="", stderr="denied")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if args[0] == "exec" and any("host-cas.pem" in a for a in args):
+            return SimpleNamespace(
+                returncode=0,
+                stdout=self.behavior.get("host_cas_stdout", ""),
+                stderr="",
+            )
+        if args[0] == "exec" and any(GIT_GUEST_MANAGED_CONFIG in a for a in args):
+            # managed git config write: exit code scripted via gitconfig_rc
+            return SimpleNamespace(
+                returncode=self.behavior.get("gitconfig_rc", 0),
+                stdout="",
+                stderr="",
+            )
+        if args[0] == "exec" and GIT_WRAPPER_GUEST_PATH in args:
+            # git wrapper install: exit code scripted via git_wrapper_rc
+            return SimpleNamespace(
+                returncode=self.behavior.get("git_wrapper_rc", 0), stdout="", stderr=""
+            )
+        if args[0] == "load" and self.behavior.get("load_fail"):
+            raise MsbCommandError("msb load failed", returncode=1)
+        return SimpleNamespace(returncode=0, stdout="[]", stderr="")
+
+
+@pytest.fixture
+def fake_msb(monkeypatch):
+    """Patch the CLI invoker, config loading, and host subprocess calls."""
+    FakeInvoker.behavior = {}
+    host_calls: list[list[str]] = []
+
+    def fake_host_run(args, **kwargs):
+        host_calls.append(list(args))
+        if "--output" in args:
+            Path(args[args.index("--output") + 1]).touch()
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(cli_module, "resolve_msb_binary", lambda b: Path("/fake"))
+    monkeypatch.setattr(cli_module, "check_version", lambda binary: "0.7.12")
+    monkeypatch.setattr(cli_module, "MsbInvoker", FakeInvoker)
+    monkeypatch.setattr(cli_module.subprocess, "run", fake_host_run)
+    monkeypatch.setattr(cli_module, "DOCKERD_PROBE_ATTEMPTS", 1)
+    monkeypatch.setattr(cli_module, "SSH_AGENT_PROBE_DELAY", 0)
+    monkeypatch.setattr(cli_module, "STOP_POLL_INTERVAL", 0)
+    FakeInvoker.behavior["host_calls"] = host_calls
+    FakeInvoker.behavior["inspect_rc"] = 0  # image cached by default
+    return FakeInvoker.behavior
+
+
+def test_up_errors_when_image_missing_without_build(tmp_path, fake_msb):
+    fake_msb["inspect_rc"] = 1
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "agent-circus build" in result.output
+
+
+def test_up_boots_fresh_sandbox_with_documented_workflow(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    _enable_docker(tmp_path)
+    with capture_cli_debug_records() as records:
+        result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    assert len(run_calls) == 1
+    args = run_calls[0]
+    assert args[args.index("--name") + 1] == name
+    assert args[args.index("--memory") + 1] == "4G"
+    assert args[args.index("--volume") + 1] == f"{tmp_path}:/workspace"
+    assert args[args.index("--net") + 1] == "public,private"
+    assert args[args.index("--workdir") + 1] == "/workspace"
+    assert args[args.index("--mount-owned") + 1] == (
+        "/var/lib/docker:kind=disk,size=10G"
+    )
+    assert args[args.index("--init") + 1] == "auto"
+    assert args[args.index("--env") + 1] == "CIRCUS_DOCKERD_SHUTDOWN_TIMEOUT=20"
+    assert "--detach" in args
+    assert args[-1] == "docker.io/library/msb-agents:26"
+    assert any("dockerd is ready" in message for message in debug_messages(records))
+
+
+def _enable_docker(tmp_path: Path, size: str = "10G") -> None:
+    """Write a config that opts into docker via a dedicated disk.
+
+    Keeps the git worktree mirror off so the tests stay independent of
+    the ``worktree_mirror`` default.
+    """
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir(exist_ok=True)
+    (config_dir / "config.toml").write_bytes(
+        f'[msb.sandbox]\ndocker_disk = "{size}"\n'
+        "[git]\nworktree_mirror = false\n".encode()
+    )
+
+
+def _enable_persistent_docker(tmp_path: Path, size: str = "10G") -> None:
+    """Write a config that opts into a persistent docker volume."""
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir(exist_ok=True)
+    (config_dir / "config.toml").write_bytes(
+        f'[msb.sandbox]\ndocker_disk = "{size}"\ndocker_disk_persist = true\n'.encode()
+    )
+
+
+def test_up_skips_dockerd_probe_when_docker_is_disabled(tmp_path, fake_msb):
+    """No disk config means no usable docker: no probe, only a debug note."""
+    with capture_cli_debug_records() as records:
+        result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    probe_calls = [
+        c for c in fake_msb["calls"] if c[0] == "exec" and c[-2:] == ["docker", "info"]
+    ]
+    assert probe_calls == []
+    assert not any("dockerd is ready" in message for message in debug_messages(records))
+    enabled = [r for r in records if "docker is not enabled" in r.getMessage()]
+    assert enabled and all(r.levelno == logging.DEBUG for r in enabled)
+    debug_notes = "\n".join(debug_messages(records))
+    assert "docker_disk" in debug_notes  # the fix is actionable
+
+
+def test_up_warns_docker_disabled_when_reusing_running_sandbox(tmp_path, fake_msb):
+    """The reuse path must note docker unavailability, not silently skip."""
+    name = sandbox_name_for_workspace(tmp_path)
+    fake_msb["list_output"] = json.dumps(
+        [{"name": name, "status": "Running", "id": "abc"}]
+    )
+    with capture_cli_debug_records() as records:
+        result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert not [c for c in fake_msb["calls"] if c[0] == "run"]
+    enabled = [r for r in records if "docker is not enabled" in r.getMessage()]
+    assert enabled and all(r.levelno == logging.DEBUG for r in enabled)
+
+
+def test_up_reuses_running_sandbox(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "already running" in result.output
+    assert not [c for c in fake_msb["calls"] if c[0] in ("run", "start")]
+
+
+def test_up_starts_stopped_sandbox(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Stopped"}])
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert ["start", name] in fake_msb["calls"]
+    assert not [c for c in fake_msb["calls"] if c[0] == "run"]
+
+
+def test_up_passes_trust_host_cas_when_configured(tmp_path, fake_msb):
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b"[msb.network]\ntrust_host_cas = true\n")
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    assert len(run_calls) == 1
+    assert "--trust-host-cas" in run_calls[0]
+
+
+def test_up_warns_on_trust_host_cas_drift_when_enabled_but_absent(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b"[msb.network]\ntrust_host_cas = true\n")
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["host_cas_stdout"] = "absent\n"
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "trust_host_cas" in result.output
+    assert "re-create" in result.output
+    assert not [c for c in fake_msb["calls"] if c[0] == "run"]
+
+
+def test_up_warns_on_trust_host_cas_drift_when_disabled_but_present(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["host_cas_stdout"] = "present\n"
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "trust_host_cas" in result.output
+    assert "re-create" in result.output
+
+
+def test_up_does_not_warn_when_trust_host_cas_matches(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b"[msb.network]\ntrust_host_cas = true\n")
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["host_cas_stdout"] = "present\n"
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "trust_host_cas" not in result.output
+
+
+def test_up_ignores_trust_host_cas_probe_without_answer(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b"[msb.network]\ntrust_host_cas = true\n")
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "trust_host_cas" not in result.output
+
+
+def test_start_warns_on_trust_host_cas_drift(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    fake_msb["host_cas_stdout"] = "present\n"
+    result = runner.invoke(app, ["start", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert ["start", name] in fake_msb["calls"]
+    assert "trust_host_cas" in result.output
+    assert "re-create" in result.output
+
+
+def _enable_git(tmp_path: Path, extra: str = "") -> str:
+    """Write a config with a [git] table; return the fake host HOME path."""
+    home = tmp_path / "git-home"
+    home.mkdir(exist_ok=True)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir(exist_ok=True)
+    (config_dir / "config.toml").write_bytes(f"[git]\n{extra}".encode())
+    return str(home)
+
+
+def test_up_forwards_git_config_when_git_table_present(tmp_path, fake_msb, monkeypatch):
+    home = _enable_git(tmp_path)
+    monkeypatch.setenv("HOME", home)
+    host_gitconfig = Path(home) / ".gitconfig"
+    host_gitconfig.write_text("[user]\n\temail = host@example.com\n")
+    name = sandbox_name_for_workspace(tmp_path)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    writes = [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "exec" and any(GIT_GUEST_DIR in a for a in c)
+    ]
+    assert writes, "expected the managed gitconfig exec"
+    copies = [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "copy" and c[3] == f"{name}:{GIT_GUEST_HOST_CONFIG}"
+    ]
+    assert copies == [
+        ["copy", "-q", str(host_gitconfig), f"{name}:{GIT_GUEST_HOST_CONFIG}"]
+    ]
+
+
+def test_up_skips_git_forwarding_without_git_table(tmp_path, fake_msb, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert not [c for c in fake_msb["calls"] if any(GIT_GUEST_DIR in a for a in c)]
+
+
+def test_up_warns_when_explicit_git_config_missing(tmp_path, fake_msb, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    _enable_git(tmp_path, 'config_path = "/nonexistent/gitconfig"\n')
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "not found on the host" in result.output
+    name = sandbox_name_for_workspace(tmp_path)
+    assert not [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "copy" and c[-1] == f"{name}:{GIT_GUEST_HOST_CONFIG}"
+    ]
+
+
+def test_up_copies_valid_signing_key(tmp_path, fake_msb, monkeypatch, ssh_environ):
+    home = _enable_git(
+        tmp_path,
+        'signing_key_path = "~/.ssh/id_ed25519.pub"\n[ssh]\n',
+    )
+    monkeypatch.setenv("HOME", home)
+    key = Path(home) / ".ssh" / "id_ed25519.pub"
+    key.parent.mkdir()
+    key.write_text("ssh-ed25519 AAAAExample user@host\n")
+    name = sandbox_name_for_workspace(tmp_path)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    copies = [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "copy" and c[3] == f"{name}:{GIT_GUEST_SIGNING_KEY}"
+    ]
+    assert copies == [["copy", "-q", str(key), f"{name}:{GIT_GUEST_SIGNING_KEY}"]]
+
+
+def test_up_refuses_private_signing_key(tmp_path, fake_msb, monkeypatch, ssh_environ):
+    home = _enable_git(
+        tmp_path,
+        'signing_key_path = "~/.ssh/id_ed25519"\n[ssh]\n',
+    )
+    monkeypatch.setenv("HOME", home)
+    (Path(home) / ".gitconfig").write_text("[user]\n\temail = host@example.com\n")
+    key = Path(home) / ".ssh" / "id_ed25519"
+    key.parent.mkdir()
+    key.write_text("-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END-----\n")
+    name = sandbox_name_for_workspace(tmp_path)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "signing key" in result.output
+    assert not [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "copy" and c[3] == f"{name}:{GIT_GUEST_SIGNING_KEY}"
+    ]
+    writes = [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "exec" and any(GIT_GUEST_DIR in a for a in c)
+    ]
+    assert writes
+    assert "signingkey" not in writes[0][-4]
+
+
+def test_up_warns_when_signing_key_without_ssh(tmp_path, fake_msb, monkeypatch):
+    home = _enable_git(tmp_path, 'signing_key_path = "~/.ssh/id_ed25519.pub"\n')
+    monkeypatch.setenv("HOME", home)
+    key = Path(home) / ".ssh" / "id_ed25519.pub"
+    key.parent.mkdir()
+    key.write_text("ssh-ed25519 AAAAExample user@host\n")
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "[ssh] is not configured" in result.output
+
+
+def test_up_continues_when_gitconfig_script_fails(tmp_path, fake_msb, monkeypatch):
+    home = _enable_git(tmp_path)
+    monkeypatch.setenv("HOME", home)
+    (Path(home) / ".gitconfig").write_text("[user]\n\temail = host@example.com\n")
+    fake_msb["gitconfig_rc"] = 1
+    name = sandbox_name_for_workspace(tmp_path)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "Could not write the git config" in result.output
+    assert not [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "copy" and c[-1] == f"{name}:{GIT_GUEST_HOST_CONFIG}"
+    ]
+
+
+def test_start_refreshes_git_config(tmp_path, fake_msb, monkeypatch):
+    home = _enable_git(tmp_path)
+    monkeypatch.setenv("HOME", home)
+    host_gitconfig = Path(home) / ".gitconfig"
+    host_gitconfig.write_text("[user]\n\temail = host@example.com\n")
+    name = sandbox_name_for_workspace(tmp_path)
+    result = runner.invoke(app, ["start", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert ["start", name] in fake_msb["calls"]
+    writes = [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "exec" and any(GIT_GUEST_DIR in a for a in c)
+    ]
+    assert len(writes) == 1
+    copies = [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "copy" and c[3] == f"{name}:{GIT_GUEST_HOST_CONFIG}"
+    ]
+    assert copies == [
+        ["copy", "-q", str(host_gitconfig), f"{name}:{GIT_GUEST_HOST_CONFIG}"]
+    ]
+
+
+def test_start_reapplies_claude_trust_after_config_copy(
+    tmp_path, fake_msb, monkeypatch
+):
+    """The start command merges trust after copying ~/.claude.json."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".claude.json").write_text("{}")
+    name = sandbox_name_for_workspace(tmp_path)
+    result = runner.invoke(app, ["start", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert ["start", name] in fake_msb["calls"]
+    calls = fake_msb["calls"]
+    copy_index = next(
+        i
+        for i, c in enumerate(calls)
+        if c[0] == "copy" and c[-1] == f"{name}:/root/.claude.json"
+    )
+    trust_index = next(
+        i
+        for i, c in enumerate(calls)
+        if c[0] == "exec" and any("hasTrustDialogAccepted" in a for a in c)
+    )
+    assert copy_index < trust_index
+
+
+def test_up_copies_symlinked_gitconfig_target(tmp_path, fake_msb, monkeypatch):
+    home = _enable_git(tmp_path)
+    monkeypatch.setenv("HOME", home)
+    target = Path(home) / "store" / "gitconfig"
+    target.parent.mkdir(parents=True)
+    target.write_text("[user]\n\temail = host@example.com\n")
+    (Path(home) / ".gitconfig").symlink_to(target)
+    name = sandbox_name_for_workspace(tmp_path)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    copies = [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "copy" and c[3] == f"{name}:{GIT_GUEST_HOST_CONFIG}"
+    ]
+    assert copies == [
+        ["copy", "-q", str(target.resolve()), f"{name}:{GIT_GUEST_HOST_CONFIG}"]
+    ]
+
+
+def test_up_publishes_configured_port_forwards(tmp_path, fake_msb):
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b"[[port_forwards]]\n"
+        b"container_port = 8000\n\n"
+        b"[[port_forwards]]\n"
+        b'guest_port = 8080\nhost_port = 18080\nhost = "0.0.0.0"\nprotocol = "udp"\n'
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    assert len(run_calls) == 1
+    args = run_calls[0]
+    assert args[args.index("--port") + 1] == "127.0.0.1:8000:8000"
+    assert args[args.index("--port", args.index("--port") + 1) + 1] == (
+        "0.0.0.0:18080:8080/udp"
+    )
+
+
+def test_up_fails_when_configured_port_is_already_bound(tmp_path, fake_msb):
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b"[[port_forwards]]\ncontainer_port = 8000\n"
+    )
+    blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    blocker.bind(("127.0.0.1", 0))
+    blocker.listen(1)
+    try:
+        host_port = blocker.getsockname()[1]
+        (config_dir / "config.toml").write_bytes(
+            f"[[port_forwards]]\ncontainer_port = 8000\nhost_port = {host_port}\n".encode()
+        )
+        result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "already bound" in result.stderr
+        assert not [c for c in fake_msb["calls"] if c[0] == "run"]
+    finally:
+        blocker.close()
+
+
+def test_up_skips_port_check_when_reusing_running_sandbox(tmp_path, fake_msb):
+    """A running sandbox holds its own forwarded ports; the probe must not fail."""
+    name = sandbox_name_for_workspace(tmp_path)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    blocker.bind(("127.0.0.1", 0))
+    blocker.listen(1)
+    try:
+        host_port = blocker.getsockname()[1]
+        (config_dir / "config.toml").write_bytes(
+            f"[[port_forwards]]\ncontainer_port = 8000\nhost_port = {host_port}\n".encode()
+        )
+        fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+        result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+        assert result.exit_code == 0
+    finally:
+        blocker.close()
+
+
+def test_up_warns_on_port_drift_for_existing_sandbox(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b"[[port_forwards]]\ncontainer_port = 8000\n"
+    )
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    # The sandbox was created with a different mapping than configured now.
+    fake_msb["inspect_json"] = json.dumps(
+        {
+            "config": {
+                "network": {
+                    "ports": [
+                        {
+                            "guest_port": 9000,
+                            "host_bind": "127.0.0.1",
+                            "host_port": 9000,
+                            "protocol": "tcp",
+                        }
+                    ]
+                }
+            }
+        }
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "Port forwards" in result.output
+    assert "differ" in result.output
+    assert not [c for c in fake_msb["calls"] if c[0] == "run"]
+
+
+def test_up_does_not_warn_when_port_forwards_match(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b"[[port_forwards]]\ncontainer_port = 8000\n"
+    )
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["inspect_json"] = json.dumps(
+        {
+            "config": {
+                "network": {
+                    "ports": [
+                        {
+                            "guest_port": 8000,
+                            "host_bind": "127.0.0.1",
+                            "host_port": 8000,
+                            "protocol": "tcp",
+                        }
+                    ]
+                }
+            }
+        }
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "differ" not in result.output
+
+
+DISK_INSPECT_MATCHING = json.dumps(
+    {
+        "config": {
+            "spec": {
+                "root_disk": {"kind": "managed", "size_mib": 4096},
+                "mounts": [
+                    {
+                        "type": "Owned",
+                        "guest": "/var/lib/docker",
+                        "storage": {"kind": "disk", "capacity_mib": 10240},
+                        "options": {"readonly": False, "noexec": False},
+                    }
+                ],
+            }
+        }
+    }
+)
+
+
+def test_up_warns_on_disk_drift_for_existing_sandbox(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    _enable_docker(tmp_path, size="20G")
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    # The sandbox was created with a 10G docker disk; the config now asks
+    # for 20G. Disks are creation-time only, so this must warn.
+    fake_msb["inspect_json"] = DISK_INSPECT_MATCHING
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "Disk settings" in result.output
+    assert "differ" in result.output
+    assert not [c for c in fake_msb["calls"] if c[0] == "run"]
+
+
+def test_up_does_not_warn_when_disk_settings_match(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    _enable_docker(tmp_path)
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["inspect_json"] = DISK_INSPECT_MATCHING
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "differ" not in result.output
+
+
+def test_up_does_not_warn_when_disk_schema_is_unrecognized(tmp_path, fake_msb):
+    """An unreadable inspect output must not produce a false warning."""
+    name = sandbox_name_for_workspace(tmp_path)
+    _enable_docker(tmp_path)
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["inspect_json"] = json.dumps({"config": {"unrelated": 1}})
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "differ" not in result.output
+
+
+def test_up_builds_when_requested(tmp_path, fake_msb):
+    fake_msb["inspect_rc"] = 1  # force the build path
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path), "--build"])
+    assert result.exit_code == 0
+    # host build + save happened, then boot
+    assert fake_msb["host_calls"][0][:2] == ["podman", "build"]
+    assert fake_msb["host_calls"][1][:2] == ["podman", "save"]
+    assert [c[0] for c in fake_msb["calls"] if c[0] == "run"] == ["run"]
+
+
+def test_up_boots_with_git_worktree_mirror_mount(tmp_path, fake_msb, monkeypatch):
+    """The mirror adds a second --volume of the workspace at its host path."""
+    # Hermetic $HOME so existing agent config directories on the host
+    # (~/.claude, ~/.codex) cannot add volumes to the assertion below.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    name = sandbox_name_for_workspace(tmp_path)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b"[git]\nworktree_mirror = true\n")
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    assert len(run_calls) == 1
+    volumes = [
+        run_calls[0][i + 1] for i, arg in enumerate(run_calls[0]) if arg == "--volume"
+    ]
+    assert volumes == [
+        f"{tmp_path}:/workspace",
+        f"{tmp_path}:{tmp_path}",
+        (
+            f"{tmp_path / 'xdg-data/agent-circus/system-skills/.agents/skills'}:"
+            "/root/.agents/skills:ro"
+        ),
+        (
+            f"{tmp_path / 'xdg-data/agent-circus/system-skills/.agents/skills'}:"
+            "/etc/claude-code/.claude/skills:ro"
+        ),
+    ]
+    assert run_calls[0][run_calls[0].index("--name") + 1] == name
+
+
+def test_up_uses_host_path_workdir_with_mirror(tmp_path, fake_msb, monkeypatch):
+    """With the mirror on, the agent starts at the workspace host path."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b"[git]\nworktree_mirror = true\n")
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_call = next(c for c in fake_msb["calls"] if c[0] == "run")
+    assert run_call[run_call.index("--workdir") + 1] == str(tmp_path)
+
+
+def test_up_writes_pi_trust_for_mirror_path(tmp_path, fake_msb, monkeypatch):
+    """With the mirror on, /workspace and the host path are both pre-trusted."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b"[git]\nworktree_mirror = true\n")
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    trust_calls = [
+        c for c in fake_msb["calls"] if c[0] == "exec" and "trust.json" in c[-1]
+    ]
+    assert len(trust_calls) == 1
+    script = trust_calls[0][-1]
+    # /workspace stays trusted: ACP clients pass it as the session cwd.
+    assert f'{{"/workspace": true, "{tmp_path}": true}}' in script
+
+
+def test_up_keeps_explicit_workdir_with_mirror(tmp_path, fake_msb, monkeypatch):
+    """An explicit [agent] workdir wins over the mirror host path."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b'[git]\nworktree_mirror = true\n[agent]\nworkdir = "/workspace"\n'
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_call = next(c for c in fake_msb["calls"] if c[0] == "run")
+    assert run_call[run_call.index("--workdir") + 1] == "/workspace"
+
+
+def test_up_warns_on_mount_drift_for_existing_sandbox(tmp_path, fake_msb):
+    """Flag enabled after creation: the mount is missing and must warn."""
+    name = sandbox_name_for_workspace(tmp_path)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b"[git]\nworktree_mirror = true\n")
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    # Persisted config has no bind mount at the host path.
+    fake_msb["inspect_json"] = json.dumps({"config": {"unrelated": 1}})
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "worktree_mirror" in result.output
+    assert "rm -f" in result.output
+    assert not [c for c in fake_msb["calls"] if c[0] == "run"]
+
+
+def test_up_does_not_warn_on_mount_drift_when_mirror_mounted(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b"[git]\nworktree_mirror = true\n")
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["inspect_json"] = json.dumps(
+        {
+            "config": {
+                "volumes": [
+                    {
+                        "type": "Bind",
+                        "host": str(tmp_path),
+                        "guest": str(tmp_path),
+                    }
+                ]
+            }
+        }
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "worktree_mirror" not in result.output
+
+
+def test_up_mounts_additional_dirs(tmp_path, fake_msb):
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (tmp_path / "shared-libs").mkdir()
+    (tmp_path / "other-project").mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b"[[additional_dirs]]\n"
+        b'path = "'
+        + str(tmp_path / "shared-libs").encode()
+        + b'"\nreadonly = true\n\n[[additional_dirs]]\n'
+        b'path = "' + str(tmp_path / "other-project").encode() + b'"\nname = "other"\n'
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_call = next(c for c in fake_msb["calls"] if c[0] == "run")
+    mount_dirs = [run_call[i + 1] for i, a in enumerate(run_call) if a == "--volume"]
+    assert f"{tmp_path / 'shared-libs'}:/workspaces/shared-libs:ro" in mount_dirs
+    assert f"{tmp_path / 'other-project'}:/workspaces/other" in mount_dirs
+
+
+def test_up_fails_when_additional_dir_does_not_exist(tmp_path, fake_msb):
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b'[[additional_dirs]]\npath = "' + str(tmp_path / "missing").encode() + b'"\n'
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "does not exist on the host" in result.output
+    assert not [c for c in FakeInvoker.behavior.get("calls", []) if c[0] == "run"]
+
+
+def test_up_fails_when_additional_dir_is_a_file(tmp_path, fake_msb):
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (tmp_path / "afile").write_text("x")
+    (config_dir / "config.toml").write_bytes(
+        b'[[additional_dirs]]\npath = "' + str(tmp_path / "afile").encode() + b'"\n'
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "exists but is not a directory" in result.output
+
+
+def test_up_reports_mount_collision_as_clean_error(tmp_path, fake_msb):
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b'[msb.mounts]\n"/srv/data" = "/workspaces/shared-libs"\n'
+        b'[[additional_dirs]]\npath = "/home/user/shared-libs"\n'
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "conflicts with the existing mount" in result.output
+    assert not [c for c in FakeInvoker.behavior.get("calls", []) if c[0] == "run"]
+
+
+def test_up_probes_dockerd_when_reusing_running_sandbox(tmp_path, fake_msb):
+    """The reuse path probes dockerd when docker is enabled."""
+    name = sandbox_name_for_workspace(tmp_path)
+    _enable_docker(tmp_path)
+    fake_msb["list_output"] = json.dumps(
+        [{"name": name, "status": "Running", "id": "abc"}]
+    )
+    with capture_cli_debug_records() as records:
+        result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    probe_calls = [
+        c for c in fake_msb["calls"] if c[0] == "exec" and c[-2:] == ["docker", "info"]
+    ]
+    assert probe_calls == [["exec", name, "--", "docker", "info"]]
+    assert any("dockerd is ready" in message for message in debug_messages(records))
+
+
+def test_up_logs_debug_when_dockerd_never_becomes_ready(tmp_path, fake_msb):
+    """The dockerd-not-ready failure is a debug log, not user output."""
+    _enable_docker(tmp_path)
+    fake_msb["dockerd_ready"] = False
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "dockerd did not become ready" not in result.output
+
+    with capture_cli_debug_records() as records:
+        result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    messages = debug_messages(records)
+    assert any("dockerd did not become ready" in message for message in messages)
+    assert any("permission denied" in message for message in messages)
+
+
+def test_dockerd_probe_uses_plain_exec_without_no_tty(tmp_path, fake_msb):
+    """The probe matches the manually verified invocation (no --no-tty)."""
+    _enable_docker(tmp_path)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    probe_calls = [
+        c for c in fake_msb["calls"] if c[0] == "exec" and c[-2:] == ["docker", "info"]
+    ]
+    assert probe_calls == [
+        ["exec", sandbox_name_for_workspace(tmp_path), "--", "docker", "info"]
+    ]
+
+
+def test_stop_and_start_use_workspace_sandbox(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    assert runner.invoke(app, ["stop", "--workspace", str(tmp_path)]).exit_code == 0
+    assert ["stop", name] in fake_msb["calls"]
+    assert runner.invoke(app, ["start", "--workspace", str(tmp_path)]).exit_code == 0
+    assert ["start", name] in fake_msb["calls"]
+
+
+def test_up_boots_without_init_when_none(tmp_path, fake_msb):
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b'[msb.sandbox]\ninit = "none"\n')
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    assert run_calls and "--init" not in run_calls[0]
+
+
+def test_up_passes_docker_stop_timeout_env(tmp_path, fake_msb):
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b"[msb.sandbox]\nstop_timeout = 60\ndocker_stop_timeout = 30\n"
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    assert run_calls
+    assert "CIRCUS_DOCKERD_SHUTDOWN_TIMEOUT=30" in run_calls[0]
+
+
+def test_stop_shuts_down_s6_sandbox_via_init(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    fake_msb["pid1"] = "s6-svscan\n"
+    fake_msb["list_outputs"] = [
+        json.dumps([{"name": name, "status": "Running"}]),
+        json.dumps([{"name": name, "status": "Stopped"}]),
+    ]
+    result = runner.invoke(app, ["stop", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert f"✓ Stopped {name}" in result.output
+    assert [c for c in fake_msb["calls"] if c[-3:] == ["sh", "-c", "kill -TERM 1"]]
+    assert not [c for c in fake_msb["calls"] if c[0] == "stop"]
+
+
+def test_stop_forces_when_s6_shutdown_times_out(tmp_path, fake_msb, monkeypatch):
+    name = sandbox_name_for_workspace(tmp_path)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b"[msb.sandbox]\nstop_timeout = 2\ndocker_stop_timeout = 1\n"
+    )
+    fake_msb["pid1"] = "s6-svscan\n"
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    clock = {"now": 0.0}
+
+    def fake_monotonic():
+        clock["now"] += 1.0
+        return clock["now"]
+
+    monkeypatch.setattr(cli_module, "_monotonic", fake_monotonic)
+    result = runner.invoke(app, ["stop", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert ["stop", "--force", name] in fake_msb["calls"]
+    assert "did not stop within" in result.output
+
+
+def test_stop_uses_plain_msb_stop_without_s6(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    result = runner.invoke(app, ["stop", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert ["stop", name] in fake_msb["calls"]
+    assert not [c for c in fake_msb["calls"] if c[-3:] == ["sh", "-c", "kill -TERM 1"]]
+
+
+def test_stop_skips_probe_when_init_none(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b'[msb.sandbox]\ninit = "none"\n')
+    result = runner.invoke(app, ["stop", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert ["stop", name] in fake_msb["calls"]
+    assert not [c for c in fake_msb["calls"] if c[-2:] == ["cat", "/proc/1/comm"]]
+
+
+def test_destroy_forces_removal_with_confirmation(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    result = runner.invoke(app, ["destroy", "--workspace", str(tmp_path)], input="y\n")
+    assert result.exit_code == 0
+    assert ["remove", "--force", name] in fake_msb["calls"]
+    assert f"✓ Destroyed {name}" in result.output
+
+
+def test_destroy_aborts_without_confirmation(tmp_path, fake_msb):
+    result = runner.invoke(app, ["destroy", "--workspace", str(tmp_path)], input="n\n")
+    assert result.exit_code == 0
+    assert "Aborted." in result.output
+    assert "calls" not in fake_msb or not [
+        c for c in fake_msb["calls"] if c[0] == "remove"
+    ]
+
+
+def test_destroy_force_skips_prompt(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    result = runner.invoke(app, ["destroy", "-f", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert ["remove", "--force", name] in fake_msb["calls"]
+
+
+def test_destroy_keeps_docker_volume_by_default(tmp_path, fake_msb):
+    vol = sandbox_name_for_workspace(tmp_path) + "-docker"
+    fake_msb["volume_list"] = json.dumps(
+        [{"name": vol, "kind": "disk", "capacity_bytes": 10737418240}]
+    )
+    result = runner.invoke(app, ["destroy", "-f", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "Kept docker volume" in result.output
+    assert "10G" in result.output
+    assert not [c for c in fake_msb["calls"] if c[:2] == ["volume", "remove"]]
+
+
+def test_destroy_volumes_deletes_docker_volume(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    vol = name + "-docker"
+    fake_msb["volume_list"] = json.dumps(
+        [{"name": vol, "kind": "disk", "capacity_bytes": 10737418240}]
+    )
+    result = runner.invoke(
+        app, ["destroy", "-f", "--volumes", "--workspace", str(tmp_path)]
+    )
+    assert result.exit_code == 0
+    assert ["volume", "remove", vol] in fake_msb["calls"]
+    assert "✓ Deleted docker volume" in result.output
+    calls = fake_msb["calls"]
+    assert calls.index(["remove", "--force", name]) < calls.index(
+        ["volume", "remove", vol]
+    )
+
+
+def test_destroy_volumes_prompt_names_volume(tmp_path, fake_msb):
+    vol = sandbox_name_for_workspace(tmp_path) + "-docker"
+    fake_msb["volume_list"] = json.dumps(
+        [{"name": vol, "kind": "disk", "capacity_bytes": 10737418240}]
+    )
+    result = runner.invoke(
+        app, ["destroy", "--volumes", "--workspace", str(tmp_path)], input="n\n"
+    )
+    assert result.exit_code == 0
+    assert "delete docker volume" in result.output
+    assert not [c for c in fake_msb["calls"] if c[0] == "remove"]
+
+
+def test_destroy_without_docker_volume_prints_nothing_extra(tmp_path, fake_msb):
+    fake_msb["volume_list"] = "[]"
+    result = runner.invoke(app, ["destroy", "-f", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "docker volume" not in result.output
+
+
+def test_up_writes_pi_trust_for_workdir_and_additional_dirs(tmp_path, fake_msb):
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (tmp_path / "shared-libs").mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b"[git]\nworktree_mirror = false\n"
+        b"[[additional_dirs]]\n"
+        b'path = "' + str(tmp_path / "shared-libs").encode() + b'"\n'
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    trust_calls = [
+        c for c in fake_msb["calls"] if c[0] == "exec" and "trust.json" in c[-1]
+    ]
+    assert len(trust_calls) == 1
+    script = trust_calls[0][-1]
+    assert '{"/workspace": true, "/workspaces/shared-libs": true}' in script
+
+
+def test_up_trusts_workspace_guest_path_with_explicit_workdir(tmp_path, fake_msb):
+    """ACP clients use the workspace guest path even with a custom workdir."""
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b'[git]\nworktree_mirror = false\n[agent]\nworkdir = "/workspace/repo"\n'
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    trust_calls = [
+        c for c in fake_msb["calls"] if c[0] == "exec" and "trust.json" in c[-1]
+    ]
+    assert len(trust_calls) == 1
+    script = trust_calls[0][-1]
+    assert '{"/workspace": true, "/workspace/repo": true}' in script
+
+
+def test_up_writes_pi_trust_when_reusing_running_sandbox(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert [c for c in fake_msb["calls"] if c[0] == "exec" and "trust.json" in c[-1]]
+
+
+def test_up_survives_pi_trust_write_failure(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["trust_fail"] = True
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "pre-trust" in result.output
+
+
+def _enable_ssh(tmp_path: Path, extra: str = "") -> None:
+    """Write a config that opts into SSH agent forwarding."""
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir(exist_ok=True)
+    (config_dir / "config.toml").write_bytes(f"[ssh]\n{extra}".encode())
+
+
+@pytest.fixture
+def ssh_environ(monkeypatch):
+    """Provide a real host agent socket and short runtime dir; return the socket."""
+    import os as _os
+    import tempfile as _tempfile
+
+    sock_dir = _tempfile.mkdtemp(prefix="msbc-sock-")
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.bind(_os.path.join(sock_dir, "agent.sock"))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", _tempfile.mkdtemp(prefix="msbc-rt-"))
+    monkeypatch.setenv("SSH_AUTH_SOCK", _os.path.join(sock_dir, "agent.sock"))
+    yield sock
+    sock.close()
+
+
+def test_up_with_ssh_boots_with_vsock_route_and_env(tmp_path, fake_msb, ssh_environ):
+    _enable_ssh(tmp_path)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    assert len(run_calls) == 1
+    args = run_calls[0]
+    link = agent_link_path()
+    assert args[args.index("--vsock") + 1] == f"{link}:22022"
+    assert args[args.index("--env") + 1] == "CIRCUS_DOCKERD_SHUTDOWN_TIMEOUT=20"
+    assert args[args.index("--env", args.index("--env") + 1) + 1] == (
+        "SSH_AUTH_SOCK=/run/ssh-agent.sock"
+    )
+    ssh_sock_idx = args.index("SSH_AUTH_SOCK=/run/ssh-agent.sock")
+    assert args[args.index("--env", ssh_sock_idx) + 1] == (
+        "CIRCUS_SSH_AGENT_VSOCK_PORT=22022"
+    )
+    # msb rejects --env values with the reserved MSB_ prefix.
+    env_values = [v for k, v in pairwise(args) if k == "--env"]
+    assert not any(v.startswith("MSB_") for v in env_values)
+
+
+def test_up_with_ssh_fails_without_agent(tmp_path, fake_msb, monkeypatch):
+    _enable_ssh(tmp_path)
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "SSH_AUTH_SOCK" in result.output
+    assert not [c for c in fake_msb.get("calls", []) if c[0] == "run"]
+
+
+def test_up_without_ssh_has_no_vsock_route(tmp_path, fake_msb, ssh_environ):
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    assert len(run_calls) == 1
+    args = run_calls[0]
+    assert "--vsock" not in args
+    assert "CIRCUS_SSH_AGENT_VSOCK_PORT" not in args
+
+
+def test_up_with_ssh_warns_when_agent_unreachable(tmp_path, fake_msb, ssh_environ):
+    _enable_ssh(tmp_path)
+    fake_msb["ssh_add_rc"] = 2
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "Cannot reach the forwarded SSH agent" in result.output
+    assert "re-create it" in result.output
+
+
+def test_up_with_ssh_retries_until_bridge_is_up(tmp_path, fake_msb, ssh_environ):
+    _enable_ssh(tmp_path)
+    fake_msb["ssh_add_rcs"] = [2, 2, 0]
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "Cannot reach the forwarded SSH agent" not in result.output
+    probes = [c for c in fake_msb["calls"] if c[0] == "exec" and "ssh-add" in c]
+    assert len(probes) == 3
+
+
+def test_up_with_ssh_gives_up_after_probe_budget(
+    tmp_path, fake_msb, ssh_environ, monkeypatch
+):
+    monkeypatch.setattr(cli_module, "SSH_AGENT_PROBE_ATTEMPTS", 3)
+    _enable_ssh(tmp_path)
+    fake_msb["ssh_add_rc"] = 2
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert "Cannot reach the forwarded SSH agent" in result.output
+    probes = [c for c in fake_msb["calls"] if c[0] == "exec" and "ssh-add" in c]
+    assert len(probes) == 3
+
+
+def test_up_with_ssh_does_not_retry_when_agent_has_no_keys(
+    tmp_path, fake_msb, ssh_environ
+):
+    _enable_ssh(tmp_path)
+    fake_msb["ssh_add_rc"] = 1
+    runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    probes = [c for c in fake_msb["calls"] if c[0] == "exec" and "ssh-add" in c]
+    assert len(probes) == 1
+
+
+def test_up_with_ssh_logs_debug_when_agent_has_no_keys(
+    tmp_path, fake_msb, ssh_environ, monkeypatch
+):
+    _enable_ssh(tmp_path)
+    fake_msb["ssh_add_rc"] = 1
+
+    class _RecordingLogger:
+        """Captures (level, message) pairs for every log call."""
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def _log(self, level: str, msg: str, *args: object) -> None:
+            self.calls.append((level, msg % args if args else msg))
+
+        def debug(self, msg: str, *args: object) -> None:
+            self._log("DEBUG", msg, *args)
+
+        def info(self, msg: str, *args: object) -> None:
+            self._log("INFO", msg, *args)
+
+        def warning(self, msg: str, *args: object) -> None:
+            self._log("WARNING", msg, *args)
+
+        def error(self, msg: str, *args: object) -> None:
+            self._log("ERROR", msg, *args)
+
+    recorder = _RecordingLogger()
+    monkeypatch.setattr(cli_module, "logger", recorder)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "has no keys" not in result.output
+    expected = (
+        "The forwarded SSH agent in "
+        f"{sandbox_name_for_workspace(tmp_path)} has no keys; add one "
+        "on the host with: ssh-add"
+    )
+    assert ("DEBUG", expected) in recorder.calls
+
+
+def test_up_with_ssh_copies_config_files(tmp_path, fake_msb, ssh_environ):
+    ssh_dir = tmp_path / "host-ssh"
+    ssh_dir.mkdir()
+    config_file = ssh_dir / "config"
+    config_file.write_text("Host github.com\n")
+    _enable_ssh(tmp_path, extra=f'config_path = "{config_file}"\n')
+    name = sandbox_name_for_workspace(tmp_path)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    copy_calls = [
+        c for c in fake_msb["calls"] if c[0] == "copy" and "/root/.ssh/" in c[-1]
+    ]
+    assert [f"{name}:/root/.ssh/config"] == [c[-1] for c in copy_calls]
+    chmod_calls = [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "exec" and c[-3:] == ["chmod", "600", "/root/.ssh/config"]
+    ]
+    assert chmod_calls
+
+
+def test_up_with_ssh_skips_missing_config_file(tmp_path, fake_msb, ssh_environ):
+    _enable_ssh(tmp_path, extra=f'config_path = "{tmp_path}/missing"')
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert not [
+        c for c in fake_msb["calls"] if c[0] == "copy" and "/root/.ssh/" in c[-1]
+    ]
+
+
+def test_up_with_ssh_copies_symlinked_config_target(tmp_path, fake_msb, ssh_environ):
+    ssh_dir = tmp_path / "host-ssh"
+    ssh_dir.mkdir()
+    target = tmp_path / "store" / "ssh-config"
+    target.parent.mkdir(parents=True)
+    target.write_text("Host github.com\n")
+    link = ssh_dir / "config"
+    link.symlink_to(target)
+    _enable_ssh(tmp_path, extra=f'config_path = "{link}"\n')
+    name = sandbox_name_for_workspace(tmp_path)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    copy_calls = [
+        c for c in fake_msb["calls"] if c[0] == "copy" and "/root/.ssh/" in c[-1]
+    ]
+    assert [f"{name}:/root/.ssh/config"] == [c[-1] for c in copy_calls]
+    assert copy_calls[0][2] == str(target.resolve())
+
+
+def _enable_hosts(tmp_path: Path, hosts_text: str = "") -> Path:
+    """Write a hosts file and a config forwarding selected entries from it.
+
+    :returns: The hosts file path.
+    """
+    hosts_file = tmp_path / "test-hosts"
+    hosts_file.write_text(hosts_text)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir(exist_ok=True)
+    (config_dir / "config.toml").write_bytes(
+        f'[hosts]\npatterns = ["*.test.local"]\nfile = "{hosts_file}"\n'.encode()
+    )
+    return hosts_file
+
+
+HOSTS_TEXT = (
+    "127.0.0.1 localhost\n"
+    "10.1.2.3 myserver.test.local alias.test.local\n"
+    "10.1.2.4 other.corp.internal\n"
+)
+
+
+def test_up_with_hosts_writes_matching_entries(tmp_path, fake_msb):
+    _enable_hosts(tmp_path, HOSTS_TEXT)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    execs = [c for c in fake_msb["calls"] if c[0] == "exec"]
+    writes = [c for c in execs if "BEGIN agent-circus hosts" in c[-3]]
+    assert len(writes) == 1
+    assert "10.1.2.3 myserver.test.local alias.test.local" in writes[0][-1]
+    assert "10.1.2.4 other.corp.internal" not in writes[0][-1]
+
+
+def test_up_without_hosts_does_not_touch_etc_hosts(tmp_path, fake_msb):
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert not [
+        c for c in fake_msb["calls"] if any("BEGIN agent-circus hosts" in a for a in c)
+    ]
+
+
+def test_up_with_hosts_warns_on_write_failure(tmp_path, fake_msb):
+    _enable_hosts(tmp_path, HOSTS_TEXT)
+    fake_msb["hosts_rc"] = 1
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "Could not update /etc/hosts" in result.output
+
+
+def test_start_refreshes_host_entries(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    _enable_hosts(tmp_path, HOSTS_TEXT)
+    result = runner.invoke(app, ["start", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    writes = [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "exec" and "BEGIN agent-circus hosts" in c[-3]
+    ]
+    assert ["start", name] in fake_msb["calls"]
+    assert len(writes) == 1
+    assert "10.1.2.3 myserver.test.local" in writes[0][-1]
+
+
+def test_up_warns_about_missing_worktrees(tmp_path, fake_msb):
+    (tmp_path / ".git" / "worktrees" / "feature").mkdir(parents=True)
+    (tmp_path / ".git" / "worktrees" / "feature" / "gitdir").write_text(
+        f"{tmp_path / 'feature' / '.git'}\n"
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "do not exist on the host" in result.output
+    assert str(tmp_path / "feature") in result.output
+
+
+def test_up_does_not_warn_without_missing_worktrees(tmp_path, fake_msb):
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "do not exist on the host" not in result.output
+
+
+def test_destroy_warns_about_missing_worktrees_before_prompt(tmp_path, fake_msb):
+    (tmp_path / ".git" / "worktrees" / "feature").mkdir(parents=True)
+    (tmp_path / ".git" / "worktrees" / "feature" / "gitdir").write_text(
+        f"{tmp_path / 'feature' / '.git'}\n"
+    )
+    result = runner.invoke(app, ["destroy", "--workspace", str(tmp_path)], input="n\n")
+    assert result.exit_code == 0
+    assert "lost with the sandbox" in result.output
+    assert not [c for c in fake_msb.get("calls", []) if c[0] == "remove"]
+
+
+def test_up_creates_sandbox_worktrees_dir(tmp_path, fake_msb):
+    (tmp_path / ".git").mkdir()
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert (tmp_path / ".agent-circus" / "worktrees" / ".gitignore").exists()
+
+
+def test_up_warns_when_sandbox_worktrees_exist_without_mirror(tmp_path, fake_msb):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".agent-circus" / "worktrees" / "x").mkdir(parents=True)
+    config_dir = tmp_path / ".agent-circus"
+    (config_dir / "config.toml").write_text("[git]\nworktree_mirror = false\n")
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "worktree_mirror is off" in result.output
+
+
+def test_up_does_not_warn_about_sandbox_worktrees_with_mirror(tmp_path, fake_msb):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".agent-circus" / "worktrees" / "x").mkdir(parents=True)
+    config_dir = tmp_path / ".agent-circus"
+    (config_dir / "config.toml").write_text("[git]\nworktree_mirror = true\n")
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "worktree_mirror is off" not in result.output
+
+
+def test_up_installs_git_wrapper(tmp_path, fake_msb):
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    installs = [
+        c for c in fake_msb["calls"] if c[0] == "exec" and GIT_WRAPPER_GUEST_PATH in c
+    ]
+    assert len(installs) == 1
+
+
+def test_start_installs_git_wrapper(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    result = runner.invoke(app, ["start", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert ["start", name] in fake_msb["calls"]
+    installs = [
+        c for c in fake_msb["calls"] if c[0] == "exec" and GIT_WRAPPER_GUEST_PATH in c
+    ]
+    assert len(installs) == 1
+
+
+def test_up_continues_when_git_wrapper_install_fails(tmp_path, fake_msb):
+    fake_msb["git_wrapper_rc"] = 1
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "git wrapper" in result.output
+
+
+def _installed_git_wrapper(calls: list[list[str]]) -> str:
+    """Return the script content of the single git wrapper install call."""
+    (install,) = [c for c in calls if c[0] == "exec" and GIT_WRAPPER_GUEST_PATH in c]
+    return install[install.index(GIT_WRAPPER_GUEST_PATH) - 1]
+
+
+def test_up_installs_git_wrapper_with_mirror_root(tmp_path, fake_msb, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b"[git]\nworktree_mirror = true\n")
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    script = _installed_git_wrapper(fake_msb["calls"])
+    assert "AGENT_CIRCUS_GUEST_ROOT-/workspace}" in script
+    assert f"AGENT_CIRCUS_MIRROR_ROOT-{tmp_path}}}" in script
+
+
+def test_up_installs_git_wrapper_without_mirror_root(tmp_path, fake_msb):
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_text("[git]\nworktree_mirror = false\n")
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    script = _installed_git_wrapper(fake_msb["calls"])
+    assert "AGENT_CIRCUS_GUEST_ROOT-/workspace}" in script
+    assert "AGENT_CIRCUS_MIRROR_ROOT-''}" in script
+
+
+def test_format_capacity_gib_and_mib():
+    assert _format_capacity(5368709120) == "5G"
+    assert _format_capacity(536870912) == "512M"
+
+
+def test_up_boots_with_persistent_docker_volume(tmp_path, fake_msb):
+    vol = sandbox_name_for_workspace(tmp_path) + "-docker"
+    _enable_persistent_docker(tmp_path)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    assert len(run_calls) == 1
+    args = run_calls[0]
+    idx = args.index("--mount-named")
+    assert args[idx + 1] == f"{vol}:/var/lib/docker:kind=disk,size=10G"
+    assert "--mount-owned" not in args
+
+
+def test_up_reuses_matching_docker_volume(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    vol = name + "-docker"
+    _enable_persistent_docker(tmp_path)
+    fake_msb["volume_list"] = json.dumps(
+        [{"name": vol, "kind": "disk", "capacity_bytes": 10737418240}]
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert len([c for c in fake_msb["calls"] if c[0] == "run"]) == 1
+
+
+def test_up_fails_on_docker_volume_size_mismatch(tmp_path, fake_msb):
+    vol = sandbox_name_for_workspace(tmp_path) + "-docker"
+    _enable_persistent_docker(tmp_path)
+    fake_msb["volume_list"] = json.dumps(
+        [{"name": vol, "kind": "disk", "capacity_bytes": 5368709120}]
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 1
+    assert 'docker_disk = "5G"' in result.output
+    assert "msb volume rm" in result.output
+    assert not [c for c in fake_msb["calls"] if c[0] == "run"]
+
+
+def test_up_fails_on_docker_volume_kind_mismatch(tmp_path, fake_msb):
+    vol = sandbox_name_for_workspace(tmp_path) + "-docker"
+    _enable_persistent_docker(tmp_path)
+    fake_msb["volume_list"] = json.dumps(
+        [{"name": vol, "kind": "dir", "capacity_bytes": None}]
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 1
+    assert not [c for c in fake_msb["calls"] if c[0] == "run"]
+
+
+def test_up_removes_leftover_sandbox_when_docker_volume_in_use(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    _enable_persistent_docker(tmp_path)
+    fake_msb["run_stderr"] = (
+        'error: invalid config: volume "x" is already attached with '
+        "an incompatible disk mode"
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "in use by another" in result.output
+    assert ["remove", "--force", name] in fake_msb["calls"]
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    assert run_calls and "--mount-named" in run_calls[0]
+
+
+def test_up_without_persist_still_uses_mount_owned(tmp_path, fake_msb):
+    _enable_docker(tmp_path)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    assert len(run_calls) == 1
+    assert "--mount-owned" in run_calls[0]
+    assert "--mount-named" not in run_calls[0]
+    assert ["volume", "list", "--format", "json"] not in fake_msb["calls"]
+
+
+NAMED_DOCKER_MOUNT = {
+    "type": "Named",
+    "guest": "/var/lib/docker",
+    "options": {"readonly": False, "noexec": False},
+}
+
+
+def _inspect_with_named_docker_volume(vol: str) -> str:
+    return json.dumps(
+        {
+            "config": {
+                "spec": {
+                    "mounts": [
+                        {**NAMED_DOCKER_MOUNT, "name": vol},
+                    ]
+                }
+            }
+        }
+    )
+
+
+def test_up_warns_when_persist_enabled_but_sandbox_has_private_disk(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    _enable_persistent_docker(tmp_path)
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["inspect_json"] = DISK_INSPECT_MATCHING
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "differ" in result.output
+    assert "private disk" in result.output
+
+
+def test_up_warns_when_sandbox_has_volume_but_persist_disabled(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    vol = name + "-docker"
+    _enable_docker(tmp_path)
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["inspect_json"] = _inspect_with_named_docker_volume(vol)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "docker_disk_persist is not set" in result.output
+
+
+def test_up_does_not_warn_when_docker_volume_matches(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    vol = name + "-docker"
+    _enable_persistent_docker(tmp_path)
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["inspect_json"] = _inspect_with_named_docker_volume(vol)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "differ" not in result.output
+
+
+def _enable_daemons(tmp_path: Path, extra: str = "") -> None:
+    """Write a config with one daemon (port 4096) and a matching port forward.
+
+    :param tmp_path: Workspace directory to place ``.agent-circus`` in.
+    :param extra: Extra TOML appended to the generated config.
+    """
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir(exist_ok=True)
+    (config_dir / "config.toml").write_bytes(
+        (
+            "[[daemons]]\n"
+            'name = "web"\n'
+            'command = ["python", "-m", "http.server", "4096"]\n'
+            "port = 4096\n"
+            'env = { A = "1" }\n'
+            "[[port_forwards]]\n"
+            "container_port = 4096\n"
+            "host_port = 14096\n" + extra
+        ).encode()
+    )
+
+
+def _install_calls(fake_msb: dict) -> list[list[str]]:
+    """Return the daemon-install exec calls recorded by the fake invoker.
+
+    :param fake_msb: Behavior dict of the ``fake_msb`` fixture.
+    :returns: Exec argv lists that install the ``web`` daemon.
+    """
+    return [
+        c
+        for c in fake_msb["calls"]
+        if c[0] == "exec"
+        and any("circus-daemon-web" in a for a in c)
+        and "s6-svscanctl" in c[-1]
+    ]
+
+
+def test_up_registers_daemons_on_new_sandbox(tmp_path, fake_msb):
+    _enable_daemons(tmp_path)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    installs = _install_calls(fake_msb)
+    assert len(installs) == 1
+    envs = [installs[0][i + 1] for i, a in enumerate(installs[0]) if a == "--env"]
+    assert any(v.startswith("CIRCUS_DAEMON_ENV_WEB=") for v in envs)
+    waits = [
+        c for c in fake_msb["calls"] if c[0] == "exec" and "TCP:127.0.0.1:4096" in c[-1]
+    ]
+    assert len(waits) == 1
+
+
+def test_up_without_daemons_does_not_touch_s6_services(tmp_path, fake_msb):
+    """Without daemons only the router service (always installed) is touched."""
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert not [
+        c for c in fake_msb["calls"] if c[0] == "exec" and "CIRCUS_DAEMON_ENV_" in c[-1]
+    ]
+
+
+def test_up_registers_daemons_in_already_running_sandbox(tmp_path, fake_msb):
+    _enable_daemons(tmp_path)
+    name = sandbox_name_for_workspace(tmp_path)
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert not [c for c in fake_msb["calls"] if c[0] in ("run", "start")]
+    assert len(_install_calls(fake_msb)) == 1
+
+
+def test_exec_does_not_register_daemons(tmp_path, fake_msb):
+    _enable_daemons(tmp_path)
+    name = sandbox_name_for_workspace(tmp_path)
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    result = runner.invoke(app, ["exec", "--workspace", str(tmp_path), "--", "true"])
+    assert result.exit_code == 0
+    assert not _install_calls(fake_msb)
+
+
+def test_stop_stops_daemons_before_init_shutdown(tmp_path, fake_msb):
+    _enable_daemons(tmp_path)
+    name = sandbox_name_for_workspace(tmp_path)
+    fake_msb["pid1"] = "s6-svscan\n"
+    fake_msb["list_outputs"] = [
+        json.dumps([{"name": name, "status": "Running"}]),
+        json.dumps([{"name": name, "status": "Stopped"}]),
+    ]
+    result = runner.invoke(app, ["stop", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    calls = fake_msb["calls"]
+    stop_all = [
+        i
+        for i, c in enumerate(calls)
+        if c[0] == "exec" and "s6-svc -wD" in c[-1] and "kill -TERM 1" not in c[-1]
+    ]
+    kill = [i for i, c in enumerate(calls) if c[-3:] == ["sh", "-c", "kill -TERM 1"]]
+    assert stop_all and kill
+    assert stop_all[0] < kill[0]
+
+
+def test_daemon_url_maps_wildcard_host_to_loopback():
+    config = parse_config(
+        {"port_forwards": [{"guest_port": 4096, "host_port": 14096, "host": "0.0.0.0"}]}
+    )
+    assert cli_module._daemon_url(config, 4096) == "http://127.0.0.1:14096"
+
+
+def test_daemon_url_wraps_ipv6_host_in_brackets():
+    config = parse_config(
+        {"port_forwards": [{"guest_port": 4096, "host_port": 14096, "host": "::1"}]}
+    )
+    assert cli_module._daemon_url(config, 4096) == "http://[::1]:14096"
+
+
+def test_daemon_url_returns_none_without_matching_forward():
+    config = parse_config({})
+    assert cli_module._daemon_url(config, 4096) is None
+
+
+def test_daemon_url_returns_none_for_udp_forward():
+    config = parse_config(
+        {"port_forwards": [{"guest_port": 4096, "host_port": 14096, "protocol": "udp"}]}
+    )
+    assert cli_module._daemon_url(config, 4096) is None
+
+
+def test_daemon_envs_defaults_home_to_guest_root():
+    config = parse_config({"daemons": [{"name": "web", "command": ["x"]}]})
+    envs = cli_module._daemon_envs(config)
+    assert envs["web"][0]["HOME"] == GUEST_HOME
+    # The default is literal; it must not expand as a guest shell word.
+    assert "HOME" not in envs["web"][1]
+
+
+def test_daemon_envs_explicit_home_wins_over_default():
+    config = parse_config(
+        {"daemons": [{"name": "web", "command": ["x"], "env": {"HOME": "/data"}}]}
+    )
+    envs = cli_module._daemon_envs(config)
+    assert envs["web"][0]["HOME"] == "/data"
+
+
+def test_daemon_envs_daemon_env_overrides_passthrough(monkeypatch):
+    monkeypatch.setenv("CIRCUS_TEST_VAR", "from-host")
+    config = parse_config(
+        {
+            "env_passthrough": ["CIRCUS_TEST_VAR"],
+            "daemons": [
+                {
+                    "name": "web",
+                    "command": ["x"],
+                    "env_passthrough": ["CIRCUS_TEST_VAR"],
+                    "env": {"CIRCUS_TEST_VAR": "from-daemon"},
+                }
+            ],
+        }
+    )
+    envs = cli_module._daemon_envs(config)
+    assert envs["web"][0]["CIRCUS_TEST_VAR"] == "from-daemon"
+    # The daemon's own env entry wins, but has no $ -> literal.
+    assert envs["web"][1] == set()
+
+
+def test_up_boot_adds_router_port_forward(tmp_path, fake_msb, monkeypatch):
+    """The boot adds one extra forward to the guest router port."""
+    monkeypatch.setattr(cli_module, "pick_free_port", lambda: 51234)
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    assert len(run_calls) == 1
+    ports = [run_calls[0][i + 1] for i, a in enumerate(run_calls[0]) if a == "--port"]
+    assert "127.0.0.1:51234:7780" in ports
+
+
+def test_up_boot_without_init_has_no_router_forward(tmp_path, fake_msb):
+    """Without s6 the router cannot run, so no forward is published."""
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b'[msb.sandbox]\ninit = "none"\n')
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    ports = [run_calls[0][i + 1] for i, a in enumerate(run_calls[0]) if a == "--port"]
+    assert not any(p.endswith(":7780") for p in ports)
+
+
+def test_port_drift_ignores_router_forward(tmp_path, fake_msb):
+    name = sandbox_name_for_workspace(tmp_path)
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b"[[port_forwards]]\ncontainer_port = 8000\n"
+    )
+    fake_msb["list_output"] = json.dumps([{"name": name, "status": "Running"}])
+    fake_msb["inspect_json"] = json.dumps(
+        {
+            "config": {
+                "network": {
+                    "ports": [
+                        {
+                            "guest_port": 8000,
+                            "host_bind": "127.0.0.1",
+                            "host_port": 8000,
+                            "protocol": "tcp",
+                        },
+                        {
+                            "guest_port": 7780,
+                            "host_bind": "127.0.0.1",
+                            "host_port": 51234,
+                            "protocol": "tcp",
+                        },
+                    ]
+                }
+            }
+        }
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "differ" not in result.output
+
+
+def test_start_warns_when_router_port_is_taken(tmp_path, fake_msb):
+    # The running-only probe (fake ignores --running) sees no sandbox, so
+    # the start path treats it as stopped and checks the router port.
+    fake_msb["list_output"] = json.dumps([])
+    blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    blocker.bind(("127.0.0.1", 0))
+    blocker.listen(1)
+    try:
+        host_port = blocker.getsockname()[1]
+        fake_msb["inspect_json"] = json.dumps(
+            {
+                "config": {
+                    "network": {
+                        "ports": [
+                            {
+                                "guest_port": 7780,
+                                "host_bind": "127.0.0.1",
+                                "host_port": host_port,
+                                "protocol": "tcp",
+                            }
+                        ]
+                    }
+                }
+            }
+        )
+        result = runner.invoke(app, ["start", "--workspace", str(tmp_path)])
+        assert result.exit_code == 0
+        assert "Router port" in result.output
+        assert "re-created" in result.output
+    finally:
+        blocker.close()
+
+
+def test_up_installs_router_before_daemons(tmp_path, fake_msb):
+    """The router install exec runs before the daemon install exec."""
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b'[[daemons]]\nname = "web"\ncommand = ["sleep", "1"]\nport = 4096\n'
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    execs = [c for c in fake_msb["calls"] if c[0] == "exec" and len(c) >= 4]
+    router_indexes = [i for i, c in enumerate(execs) if "circus-router" in c[-1]]
+    daemon_indexes = [i for i, c in enumerate(execs) if "CIRCUS_DAEMON_ENV_" in c[-1]]
+    assert router_indexes and daemon_indexes
+    assert router_indexes[0] < daemon_indexes[0]
+
+
+def test_router_install_failure_does_not_abort_up(tmp_path, fake_msb):
+    """A failed router install only warns; up still registers daemons."""
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b'[[daemons]]\nname = "web"\ncommand = ["sleep", "1"]\nport = 4096\n'
+    )
+    real_run = FakeInvoker.run
+
+    def run_with_router_failure(self, args, **kwargs):
+        if args[0] == "exec" and "circus-router" in args[-1]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="boom")
+        return real_run(self, args, **kwargs)
+
+    FakeInvoker.run = run_with_router_failure
+    try:
+        result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    finally:
+        FakeInvoker.run = real_run
+    assert result.exit_code == 0
+    assert "Router" in result.output or "router" in result.output
+    assert [
+        c for c in fake_msb["calls"] if c[0] == "exec" and "CIRCUS_DAEMON_ENV_" in c[-1]
+    ]

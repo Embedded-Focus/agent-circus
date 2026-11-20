@@ -1,0 +1,550 @@
+{
+  "generated_at": 1763380000.0,
+  "refresh_error": null,
+  "proxy": {
+    "port": 7700,
+    "started_at": 1763379000.0,
+    "version": "0.1.0",
+    "url_pattern": "http://<daemon>.<sandbox>.localhost:7700/",
+    "shell": {
+      "enabled": true,
+      "sessions": []
+    }
+  },
+  "sandboxes": [
+    {
+      "name": "agents-foo",
+      "status": "Running",
+      "running": true,
+      "managed": true,
+      "created_at": 1763371800.0,
+      "workspace": "/home/u/src/foo",
+      "router": {
+        "state": "ok",
+        "address": "127.0.0.1:56263",
+        "started_at": 1763373600.0
+      },
+      "ports": [
+        {
+          "host": "127.0.0.1",
+          "host_port": 8000,
+          "guest_port": 8000,
+          "protocol": "tcp"
+        }
+      ],
+      "daemons": [
+        {
+          "name": "opencode-web",
+          "port": 4096,
+          "exposed": true,
+          "url": "http://opencode-web.agents-foo.localhost:7700/",
+          "state": "running",
+          "pid": 312,
+          "uptime_s": 5400,
+          "reachable": true
+        },
+        {
+          "name": "worker",
+          "port": null,
+          "exposed": false,
+          "url": null,
+          "state": "running",
+          "pid": 401,
+          "uptime_s": 5380,
+          "reachable": null
+        }
+      ],
+      "hints": []
+    },
+    {
+      "name": "agents-bar",
+      "status": "Running",
+      "running": true,
+      "managed": true,
+      "created_at": 1763292600.0,
+      "workspace": "/home/u/src/bar",
+      "router": {
+        "state": "ok",
+        "address": "127.0.0.1:56264",
+        "started_at": 1763378500.0
+      },
+      "ports": [],
+      "daemons": [
+        {
+          "name": "opencode-web",
+          "port": 4096,
+          "exposed": true,
+          "url": "http://opencode-web.agents-bar.localhost:7700/",
+          "state": "failed",
+          "pid": null,
+          "uptime_s": 120,
+          "reachable": false
+        }
+      ],
+      "hints": [
+        {
+          "level": "error",
+          "text": "Daemon opencode-web failed (crash limit reached).",
+          "command": "cd /home/u/src/bar && agent-circus daemon restart opencode-web"
+        }
+      ]
+    },
+    {
+      "name": "agents-baz",
+      "status": "Stopped",
+      "running": false,
+      "managed": true,
+      "created_at": 1763206200.0,
+      "workspace": "/home/u/src/baz",
+      "router": {
+        "state": "stopped",
+        "address": "127.0.0.1:56265",
+        "started_at": null
+      },
+      "ports": [],
+      "daemons": [],
+      "hints": [
+        {
+          "level": "info",
+          "text": "Sandbox is stopped.",
+          "command": "cd /home/u/src/baz && agent-circus up"
+        }
+      ]
+    }
+  ],
+  "traffic": {
+    "active": [
+      {
+        "id": 17,
+        "started_at": 1763379990.0,
+        "ended_at": null,
+        "duration_s": 3.2,
+        "client": "127.0.0.1:53427",
+        "host": "opencode-web.agents-foo.localhost:7700",
+        "sandbox": "agents-foo",
+        "daemon": "opencode-web",
+        "method": "GET",
+        "path": "/api/session",
+        "status": null,
+        "outcome": "open",
+        "error": null,
+        "bytes_up": 812,
+        "bytes_down": 20480
+      }
+    ],
+    "recent": [
+      {
+        "id": 15,
+        "started_at": 1763379800.0,
+        "ended_at": 1763379803.4,
+        "duration_s": 3.4,
+        "client": "127.0.0.1:53425",
+        "host": "opencode-web.agents-foo.localhost:7700",
+        "sandbox": "agents-foo",
+        "daemon": "opencode-web",
+        "method": "GET",
+        "path": "/api/session",
+        "status": 200,
+        "outcome": "closed",
+        "error": null,
+        "bytes_up": 812,
+        "bytes_down": 20480
+      },
+      {
+        "id": 14,
+        "started_at": 1763379700.0,
+        "ended_at": 1763379700.5,
+        "duration_s": 0.5,
+        "client": "127.0.0.1:53424",
+        "host": "opencode-web.agents-foo.localhost:7700",
+        "sandbox": "agents-foo",
+        "daemon": "opencode-web",
+        "method": "GET",
+        "path": "/",
+        "status": 200,
+        "outcome": "closed",
+        "error": null,
+        "bytes_up": 300,
+        "bytes_down": 5100
+      }
+    ],
+    "routes": [
+      {
+        "sandbox": "agents-foo",
+        "daemon": "opencode-web",
+        "active": 1,
+        "total": 42,
+        "errors": 0,
+        "bytes_up": 12000,
+        "bytes_down": 3400000,
+        "last_at": 1763379990.0
+      }
+    ],
+    "series": {
+      "bucket_s": 10,
+      "buckets": [
+        {
+          "t": 1763378410.0,
+          "connections": 3,
+          "errors": 0,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378420.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378430.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378440.0,
+          "connections": 1,
+          "errors": 0,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378450.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378460.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378470.0,
+          "connections": 1,
+          "errors": 0,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378480.0,
+          "connections": 3,
+          "errors": 0,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378490.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378500.0,
+          "connections": 1,
+          "errors": 0,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378510.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378520.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378530.0,
+          "connections": 1,
+          "errors": 0,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378540.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378550.0,
+          "connections": 3,
+          "errors": 0,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378560.0,
+          "connections": 1,
+          "errors": 0,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378570.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378580.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378590.0,
+          "connections": 1,
+          "errors": 0,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378600.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378610.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378620.0,
+          "connections": 3,
+          "errors": 0,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378630.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378640.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378650.0,
+          "connections": 1,
+          "errors": 0,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378660.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378670.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378680.0,
+          "connections": 1,
+          "errors": 0,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378690.0,
+          "connections": 3,
+          "errors": 0,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378700.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378710.0,
+          "connections": 1,
+          "errors": 0,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378720.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378730.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378740.0,
+          "connections": 1,
+          "errors": 0,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378750.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378760.0,
+          "connections": 3,
+          "errors": 1,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378770.0,
+          "connections": 1,
+          "errors": 0,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378780.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378790.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378800.0,
+          "connections": 1,
+          "errors": 0,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378810.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378820.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378830.0,
+          "connections": 3,
+          "errors": 0,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378840.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378850.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378860.0,
+          "connections": 1,
+          "errors": 0,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378870.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378880.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378890.0,
+          "connections": 1,
+          "errors": 0,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378900.0,
+          "connections": 3,
+          "errors": 0,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378910.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378920.0,
+          "connections": 1,
+          "errors": 0,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378930.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378940.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378950.0,
+          "connections": 1,
+          "errors": 0,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378960.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763378970.0,
+          "connections": 3,
+          "errors": 0,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378980.0,
+          "connections": 1,
+          "errors": 0,
+          "bytes": 51200
+        },
+        {
+          "t": 1763378990.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        },
+        {
+          "t": 1763379000.0,
+          "connections": 0,
+          "errors": 0,
+          "bytes": 0
+        }
+      ]
+    }
+  },
+  "scope": "agents-foo"
+}

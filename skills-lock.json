@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "skills": {
+    "delegate-to-local-agent": {
+      "source": "honeytreelabs/delegate-to-local-agent",
+      "sourceType": "github",
+      "skillPath": "skills/delegate-to-local-agent/SKILL.md",
+      "computedHash": "6740a26544a53fc45892051024dd403919f24e1815f9398fb5d659c5ed82bf48"
+    },
+    "simple-english": {
+      "source": "AminBlg/SimpleEnglish",
+      "sourceType": "github",
+      "skillPath": "skills/simple-english/SKILL.md",
+      "computedHash": "6e790385d3462e7d02270ca86db479a22d69f8a87fa16afeb85343ff42ff18af"
+    }
+  }
+}

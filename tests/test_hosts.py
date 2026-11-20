@@ -1,136 +1,185 @@
-"""Tests for /etc/hosts filtering and compose override."""
+"""Tests for the host entry parser, filter, and rendering."""
 
-import json
-import textwrap
-from pathlib import Path
+import logging
 
-from agent_circus.config import (
-    AVAILABLE_SERVICES,
-    build_hosts_override,
-    filter_hosts,
-    parse_hosts_file,
+from agent_circus.exec_ import (
+    GUEST_HOSTS_FILE,
+    HOSTS_BLOCK_BEGIN,
+    HOSTS_BLOCK_END,
+    build_write_hosts_args,
+)
+from agent_circus.hosts import (
+    HostLine,
+    loopback_names,
+    parse_hosts_text,
+    read_hosts_file,
+    render_host_block,
+    select_host_lines,
+    validate_host_lines,
 )
 
-# ---------------------------------------------------------------------------
-# parse_hosts_file
-# ---------------------------------------------------------------------------
+
+def test_parse_hosts_text_skips_comments_and_blank_lines():
+    text = "# comment\n127.0.0.1 localhost\n\n   \n10.0.0.1 myserver\n"
+    assert parse_hosts_text(text) == [
+        ("127.0.0.1", ("localhost",)),
+        ("10.0.0.1", ("myserver",)),
+    ]
 
 
-def test_parse_hosts_file_skips_comments(tmp_path: Path) -> None:
+def test_parse_hosts_text_strips_inline_comments():
+    assert parse_hosts_text("10.0.0.2 server # inline comment\n") == [
+        ("10.0.0.2", ("server",))
+    ]
+
+
+def test_parse_hosts_text_skips_lines_without_names():
+    assert parse_hosts_text("10.0.0.3\njusttext\n") == []
+
+
+def test_select_host_lines_matches_glob_case_insensitively():
+    lines: list[HostLine] = [
+        ("10.0.0.1", ("MyServer.Corp.Internal",)),
+        ("10.0.0.2", ("other.example.com",)),
+    ]
+    assert select_host_lines(lines, ["*.corp.internal"]) == lines[:1]
+
+
+def test_select_host_lines_matches_regex_unanchored():
+    lines: list[HostLine] = [
+        ("10.0.0.1", ("my.vpn.example.com",)),
+        ("10.0.0.2", ("example.org",)),
+    ]
+    assert select_host_lines(lines, [r"re:\.vpn\.example\.com$"]) == lines[:1]
+
+
+def test_select_host_lines_keeps_all_aliases_of_matching_line():
+    lines: list[HostLine] = [("10.0.0.1", ("db.corp.internal", "db"))]
+    assert select_host_lines(lines, ["db"]) == lines
+
+
+def test_select_host_lines_drops_duplicate_lines():
+    lines: list[HostLine] = [
+        ("10.0.0.1", ("myserver",)),
+        ("10.0.0.1", ("myserver",)),
+    ]
+    assert select_host_lines(lines, ["myserver"]) == lines[:1]
+
+
+def test_select_host_lines_returns_nothing_without_patterns():
+    lines: list[HostLine] = [("10.0.0.1", ("myserver",))]
+    assert select_host_lines(lines, []) == []
+
+
+def test_read_hosts_file_warns_and_returns_empty_on_missing_file(tmp_path, caplog):
+    with caplog.at_level(logging.WARNING):
+        assert read_hosts_file(str(tmp_path / "missing")) == []
+    assert "Cannot read hosts file" in caplog.text
+
+
+def test_validate_host_lines_drops_invalid_ip(caplog):
+    with caplog.at_level(logging.WARNING):
+        result = validate_host_lines([("999.1.2.3", ("myserver",))])
+    assert result == []
+    assert "invalid IP address" in caplog.text
+
+
+def test_validate_host_lines_drops_invalid_name(caplog):
+    with caplog.at_level(logging.WARNING):
+        result = validate_host_lines([("10.0.0.1", ("my server",))])
+    assert result == []
+    assert "invalid name(s)" in caplog.text
+
+
+def test_loopback_names_lists_ipv4_and_ipv6_loopback():
+    lines: list[HostLine] = [
+        ("127.0.0.1", ("myapp.local", "app")),
+        ("10.0.0.1", ("real.corp.internal",)),
+        ("::1", ("v6local",)),
+    ]
+    assert loopback_names(lines) == ["myapp.local", "app", "v6local"]
+
+
+def test_render_host_block_formats_one_line_per_entry():
+    lines: list[HostLine] = [
+        ("10.0.0.1", ("db.corp.internal", "db")),
+        ("10.0.0.2", ("server",)),
+    ]
+    assert render_host_block(lines) == ("10.0.0.1 db.corp.internal db\n10.0.0.2 server")
+
+
+def test_build_write_hosts_args_passes_block_as_argument():
+    args = build_write_hosts_args("agents-x", "10.0.0.1 myserver")
+    assert args[0] == "exec"
+    assert args[3:5] == ["sh", "-c"]
+    script = args[5]
+    assert HOSTS_BLOCK_BEGIN in script
+    assert "10.0.0.1 myserver" not in script  # block is the argument, not the script
+    assert args[-2:] == ["sh", "10.0.0.1 myserver"]
+
+
+def test_hosts_script_appends_block_to_existing_file(tmp_path):
+    hosts = tmp_path / "hosts"
+    hosts.write_text("127.0.0.1 localhost\n")
+    _run_hosts_script(hosts, "10.0.0.1 myserver")
+    content = hosts.read_text()
+    assert HOSTS_BLOCK_BEGIN in content and HOSTS_BLOCK_END in content
+    assert "10.0.0.1 myserver" in content
+    assert content.startswith("127.0.0.1 localhost\n")
+
+
+def test_hosts_script_replaces_existing_block_idempotently(tmp_path):
+    hosts = tmp_path / "hosts"
+    hosts.write_text("127.0.0.1 localhost\n")
+    _run_hosts_script(hosts, "10.0.0.1 oldserver")
+    _run_hosts_script(hosts, "10.0.0.2 newserver")
+    content = hosts.read_text()
+    assert content.count(HOSTS_BLOCK_BEGIN) == 1
+    assert "10.0.0.2 newserver" in content
+    assert "10.0.0.1 oldserver" not in content
+    assert content.splitlines()[0] == "127.0.0.1 localhost"
+
+
+def test_hosts_script_removes_block_when_empty(tmp_path):
+    hosts = tmp_path / "hosts"
+    hosts.write_text("127.0.0.1 localhost\n")
+    _run_hosts_script(hosts, "10.0.0.1 myserver")
+    _run_hosts_script(hosts, "")
+    content = hosts.read_text()
+    assert HOSTS_BLOCK_BEGIN not in content
+    assert "10.0.0.1 myserver" not in content
+    assert content == "127.0.0.1 localhost\n"
+
+
+def test_hosts_script_preserves_lines_outside_markers(tmp_path):
     hosts = tmp_path / "hosts"
     hosts.write_text(
-        textwrap.dedent("""\
-            # This is a comment
-            127.0.0.1  localhost
-
-            # Another comment
-            10.0.0.1  myserver
-        """)
+        "127.0.0.1 localhost\n"
+        f"{HOSTS_BLOCK_BEGIN}\n10.0.0.9 stale\n{HOSTS_BLOCK_END}\n"
+        "192.168.1.1 gateway\n"
     )
-    entries = parse_hosts_file(str(hosts))
-    assert len(entries) == 2
-    assert entries[0] == ("127.0.0.1", ["localhost"])
-    assert entries[1] == ("10.0.0.1", ["myserver"])
+    _run_hosts_script(hosts, "10.0.0.1 myserver")
+    content = hosts.read_text()
+    assert "127.0.0.1 localhost" in content
+    assert "192.168.1.1 gateway" in content
+    assert "10.0.0.9 stale" not in content
+    assert "10.0.0.1 myserver" in content
 
 
-def test_parse_hosts_file_includes_aliases(tmp_path: Path) -> None:
-    hosts = tmp_path / "hosts"
-    hosts.write_text("10.0.0.5  myserver myserver.corp.internal\n")
-    entries = parse_hosts_file(str(hosts))
-    assert entries == [("10.0.0.5", ["myserver", "myserver.corp.internal"])]
+def _run_hosts_script(hosts_path, block: str) -> None:
+    """Run the guest hosts script locally against *hosts_path*.
 
+    The script is plain POSIX sh, so it runs on the test host with the
+    guest file path replaced by a temporary file. ``GUEST_HOSTS_FILE`` is
+    replaced textually, mirroring what the builder bakes in for the real
+    guest path.
 
-def test_parse_hosts_file_strips_inline_comments(tmp_path: Path) -> None:
-    hosts = tmp_path / "hosts"
-    hosts.write_text("10.0.0.2  server  # inline comment\n")
-    entries = parse_hosts_file(str(hosts))
-    assert entries == [("10.0.0.2", ["server"])]
+    :param hosts_path: File the script treats as the guest hosts file.
+    :param block: Rendered host lines passed as the script argument.
+    """
+    import subprocess
 
+    from agent_circus.exec_ import _hosts_script
 
-def test_parse_hosts_file_missing_file_returns_empty() -> None:
-    entries = parse_hosts_file("/nonexistent/hosts")
-    assert entries == []
-
-
-# ---------------------------------------------------------------------------
-# filter_hosts
-# ---------------------------------------------------------------------------
-
-
-def test_filter_hosts_glob_match() -> None:
-    entries = [("10.0.0.1", ["foo.corp"])]
-    result = filter_hosts(entries, ["*.corp"])
-    assert "foo.corp:10.0.0.1" in result
-
-
-def test_filter_hosts_glob_no_match() -> None:
-    entries = [("10.0.0.1", ["foo.example.com"])]
-    result = filter_hosts(entries, ["*.corp"])
-    assert result == []
-
-
-def test_filter_hosts_regex_prefix() -> None:
-    entries = [("10.0.0.2", ["myhost.local"])]
-    result = filter_hosts(entries, ["re:\\.local$"])
-    assert "myhost.local:10.0.0.2" in result
-
-
-def test_filter_hosts_regex_no_match() -> None:
-    entries = [("10.0.0.2", ["myhost.example"])]
-    result = filter_hosts(entries, ["re:\\.local$"])
-    assert result == []
-
-
-def test_filter_hosts_alias_match_forwards_all_names() -> None:
-    entries = [("10.0.0.5", ["myserver", "myserver.corp.internal"])]
-    result = filter_hosts(entries, ["*.corp.internal"])
-    assert "myserver.corp.internal:10.0.0.5" in result
-    assert "myserver:10.0.0.5" in result
-
-
-def test_filter_hosts_empty_patterns_returns_nothing() -> None:
-    entries = [("10.0.0.1", ["foo.corp"])]
-    result = filter_hosts(entries, [])
-    assert result == []
-
-
-def test_filter_hosts_case_insensitive() -> None:
-    entries = [("10.0.0.1", ["MyServer.Corp"])]
-    result = filter_hosts(entries, ["*.corp"])
-    assert len(result) == 1
-
-
-def test_filter_hosts_deduplicates() -> None:
-    entries = [("10.0.0.1", ["foo"]), ("10.0.0.1", ["foo"])]
-    result = filter_hosts(entries, ["foo"])
-    assert result.count("foo:10.0.0.1") == 1
-
-
-# ---------------------------------------------------------------------------
-# build_hosts_override
-# ---------------------------------------------------------------------------
-
-
-def test_build_hosts_override_structure() -> None:
-    extra_hosts = ["myserver:10.0.0.1"]
-    result = json.loads(build_hosts_override(extra_hosts))
-    assert "services" in result
-    for svc in AVAILABLE_SERVICES:
-        assert "extra_hosts" in result["services"][svc]
-        assert "myserver:10.0.0.1" in result["services"][svc]["extra_hosts"]
-
-
-def test_build_hosts_override_all_services() -> None:
-    result = json.loads(build_hosts_override(["h:1.2.3.4"]))
-    assert set(result["services"].keys()) == set(AVAILABLE_SERVICES)
-
-
-def test_build_hosts_override_additional_services() -> None:
-    result = json.loads(build_hosts_override(["h:1.2.3.4"], ["mcp-filesystem"]))
-    assert result["services"]["mcp-filesystem"]["extra_hosts"] == ["h:1.2.3.4"]
-
-
-def test_build_hosts_override_returns_valid_json() -> None:
-    output = build_hosts_override(["a:1.1.1.1", "b:2.2.2.2"])
-    parsed = json.loads(output)
-    assert isinstance(parsed, dict)
+    script = _hosts_script(GUEST_HOSTS_FILE).replace(GUEST_HOSTS_FILE, str(hosts_path))
+    subprocess.run(["sh", "-c", script, "sh", block], check=True)

@@ -1,293 +1,578 @@
-"""Tests for configuration loading."""
+"""Tests for agent-circus configuration loading."""
 
+import logging
 from pathlib import Path
 
 import pytest
 
 from agent_circus.config import (
-    AVAILABLE_SERVICES,
-    build_env_profile_script,
-    find_project_root,
-    get_companion_services,
-    get_project_config_path,
+    _WARNED_KEYS,
+    SshConfig,
+    effective_mounts,
     get_user_config_path,
     load_config,
-    load_user_config,
-    validate_services,
+    parse_config,
+    sandbox_name_for_workspace,
+    sanitize_project_name,
 )
 from agent_circus.exceptions import ConfigurationError
 
 
-def test_get_user_config_path_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
-    path = get_user_config_path()
-    assert path == Path.home() / ".config" / "agent-circus" / "config.toml"
+def test_parse_config_returns_defaults_for_empty_dict():
+    config = parse_config({})
+    assert config.binary is None
+    assert config.image.tag == "docker.io/library/msb-agents:26"
+    assert config.image.dockerfile is None
+    assert config.sandbox.memory == "4G"
+    assert config.sandbox.cpus is None
+    assert config.sandbox.init == "auto"
+    assert config.sandbox.stop_timeout == 45
+    assert config.sandbox.docker_stop_timeout == 20
+    assert config.network.mode == "public,private"
+    assert config.agent.command == ("pi",)
+    assert config.agent.workdir is None
+    assert config.tracing.enabled is False
+    assert config.tracing.directory == ".agent-circus/traces"
+    assert config.tracing.sample_interval == pytest.approx(1.0)
+    assert config.tracing.repetition_threshold == 64
+    assert config.tracing.capture_payloads is False
+    assert config.tracing.max_payload_bytes == 100 * 1024 * 1024
+    assert config.mounts == {".": "/workspace"}
+    assert config.env == {}
+    assert config.env_passthrough == ()
+    assert config.logging_level == "INFO"
+    assert config.logging_file is None
 
 
-def test_get_user_config_path_xdg_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("XDG_CONFIG_HOME", "/tmp/xdg-test")
-    path = get_user_config_path()
-    assert path == Path("/tmp/xdg-test/agent-circus/config.toml")
-
-
-def test_get_project_config_path(tmp_path: Path) -> None:
-    path = get_project_config_path(tmp_path)
-    assert path == tmp_path / ".agent-circus" / "config.toml"
-
-
-def test_load_config_no_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Point XDG to a directory with no config file.
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-    config = load_config(tmp_path)
-    assert config == {
-        "shadow": [],
-        "mcp_servers": [],
-        "env": {},
-        "additional_dirs": [],
-        "data_stores": [],
-        "port_forwards": [],
-        "ssh": None,
-        "git": None,
-        "hosts": None,
-        "ca_certs": None,
-        "env_passthrough": [],
-        "hooks": None,
-        "logging": {"level": "INFO", "file": None},
-        "runtime": None,
-        "llama_cpp": None,
-        "claude_mem": None,
-        "host_credentials": None,
-    }
-
-
-def test_load_user_config_returns_empty_when_absent(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-    assert load_user_config() == {}
-
-
-def test_load_user_config_reads_file(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    xdg_dir = tmp_path / "xdg" / "agent-circus"
-    xdg_dir.mkdir(parents=True)
-    (xdg_dir / "config.toml").write_text('[logging]\nlevel = "DEBUG"\n')
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-    config = load_user_config()
-    assert config == {"logging": {"level": "DEBUG"}}
-
-
-def test_load_config_user_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    xdg_dir = tmp_path / "xdg" / "agent-circus"
-    xdg_dir.mkdir(parents=True)
-    (xdg_dir / "config.toml").write_text('shadow = [".env"]\n')
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-
-    config = load_config(tmp_path)
-    assert config["shadow"] == [".env"]
-
-
-def test_load_config_project_only(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-    project_dir = tmp_path / ".agent-circus"
-    project_dir.mkdir()
-    (project_dir / "config.toml").write_text('shadow = [".env.local"]\n')
-
-    config = load_config(tmp_path)
-    assert config["shadow"] == [".env.local"]
-
-
-def test_load_config_project_overrides_user(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    xdg_dir = tmp_path / "xdg" / "agent-circus"
-    xdg_dir.mkdir(parents=True)
-    (xdg_dir / "config.toml").write_text('shadow = [".env"]\n')
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-
-    project_dir = tmp_path / ".agent-circus"
-    project_dir.mkdir()
-    (project_dir / "config.toml").write_text('shadow = [".env.local"]\n')
-
-    config = load_config(tmp_path)
-    assert config["shadow"] == [".env.local"]
-
-
-def test_load_config_invalid_toml(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-    project_dir = tmp_path / ".agent-circus"
-    project_dir.mkdir()
-    (project_dir / "config.toml").write_text("this is not valid toml [[[")
-
-    with pytest.raises(ConfigurationError, match="Invalid TOML"):
-        load_config(tmp_path)
-
-
-# ---------------------------------------------------------------------------
-# find_project_root
-# ---------------------------------------------------------------------------
-
-
-def test_find_project_root_git_marker(tmp_path: Path) -> None:
-    (tmp_path / ".git").mkdir()
-    assert find_project_root(tmp_path) == tmp_path
-
-
-def test_find_project_root_pyproject_marker(tmp_path: Path) -> None:
-    (tmp_path / "pyproject.toml").touch()
-    assert find_project_root(tmp_path) == tmp_path
-
-
-def test_find_project_root_projectile_marker(tmp_path: Path) -> None:
-    (tmp_path / ".projectile").touch()
-    assert find_project_root(tmp_path) == tmp_path
-
-
-def test_find_project_root_walks_up(tmp_path: Path) -> None:
-    (tmp_path / ".git").mkdir()
-    subdir = tmp_path / "src" / "pkg"
-    subdir.mkdir(parents=True)
-    assert find_project_root(subdir) == tmp_path
-
-
-def test_find_project_root_stops_at_nearest(tmp_path: Path) -> None:
-    # Marker at two levels; inner (nearest to start) should win.
-    (tmp_path / ".git").mkdir()
-    inner = tmp_path / "sub"
-    inner.mkdir()
-    (inner / "pyproject.toml").touch()
-    assert find_project_root(inner) == inner
-
-
-def test_find_project_root_no_marker_falls_back(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Patch Path.exists to always return False so no marker is ever detected,
-    # forcing the walk to reach the filesystem root and fall back to start.
-    monkeypatch.setattr(Path, "exists", lambda self: False)
-    result = find_project_root(tmp_path)
-    assert result == tmp_path
-
-
-# ---------------------------------------------------------------------------
-# build_env_profile_script
-# ---------------------------------------------------------------------------
-
-
-def test_build_env_profile_script_shebang() -> None:
-    script = build_env_profile_script({"GOPATH": "/home/node/gopath"})
-    assert script.startswith("#!/bin/sh\n")
-
-
-def test_build_env_profile_script_exports_vars() -> None:
-    script = build_env_profile_script(
-        {"PATH": "${PATH}:/home/node/go/bin", "GOPATH": "${HOME}/gopath"}
+def test_parse_config_interprets_supported_keys():
+    config = parse_config(
+        {
+            "env_passthrough": ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"],
+            "logging": {"level": "DEBUG", "file": "/tmp/msbc.log"},
+            "image": {"tag": "example:1", "platform": "linux/arm64"},
+            "agent": {"command": ["opencode", "acp"], "workdir": "/w"},
+            "tracing": {
+                "enabled": True,
+                "directory": "diagnostics",
+                "sample_interval": 0.5,
+                "repetition_threshold": 20,
+                "capture_payloads": True,
+                "max_payload_bytes": 1234,
+            },
+            "env": {"FOO": "bar"},
+            "msb": {
+                "binary": "/usr/local/bin/msb",
+                "sandbox": {"memory": "8G", "cpus": 4},
+                "network": {"mode": "none"},
+                "mounts": {".": "/workspace", "/data": "/data:ro"},
+            },
+        }
     )
-    assert 'export PATH="${PATH}:/home/node/go/bin"' in script
-    assert 'export GOPATH="${HOME}/gopath"' in script
+    assert config.binary == "/usr/local/bin/msb"
+    assert config.image.tag == "example:1"
+    assert config.image.platform == "linux/arm64"
+    assert config.sandbox.memory == "8G"
+    assert config.sandbox.cpus == 4
+    assert config.network.mode == "none"
+    assert config.agent.command == ("opencode", "acp")
+    assert config.agent.workdir == "/w"
+    assert config.tracing.enabled is True
+    assert config.tracing.directory == "diagnostics"
+    assert config.tracing.sample_interval == pytest.approx(0.5)
+    assert config.tracing.repetition_threshold == 20
+    assert config.tracing.capture_payloads is True
+    assert config.tracing.max_payload_bytes == 1234
+    assert config.mounts == {".": "/workspace", "/data": "/data:ro"}
+    assert config.env == {"FOO": "bar"}
+    assert config.env_passthrough == ("OPENAI_API_KEY", "ANTHROPIC_API_KEY")
+    assert config.logging_level == "DEBUG"
+    assert config.logging_file == "/tmp/msbc.log"
 
 
-def test_build_env_profile_script_escapes_double_quotes() -> None:
-    script = build_env_profile_script({"VAR": 'value with "quotes"'})
-    assert 'export VAR="value with \\"quotes\\""' in script
+def test_parse_config_warns_on_unsupported_keys(caplog):
+    # Unsupported keys are usually leftovers from agent-circus 1.x, so
+    # they surface as a once-per-process warning that names MIGRATING.md.
+    _WARNED_KEYS.clear()
+    with caplog.at_level(logging.WARNING):
+        parse_config({"services": ["pi"], "runtime": {"engine": "docker"}})
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("services" in message for message in messages)
+    assert any("runtime" in message for message in messages)
+    assert all(record.levelno == logging.WARNING for record in caplog.records)
+    assert all("MIGRATING.md" in message for message in messages)
 
 
-def test_build_env_profile_script_ends_with_newline() -> None:
-    script = build_env_profile_script({"X": "y"})
-    assert script.endswith("\n")
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        ({"msb": "nope"}, "msb must be a table"),
+        ({"msb": {"binary": 1}}, "msb.binary must be a string"),
+        ({"image": {"tag": ""}}, "image.tag must be a non-empty string"),
+        ({"msb": {"sandbox": {"memory": ""}}}, "msb.sandbox.memory"),
+        ({"msb": {"sandbox": {"cpus": "four"}}}, "msb.sandbox.cpus"),
+        ({"agent": {"command": []}}, "agent.command"),
+        ({"tracing": []}, "tracing must be a table"),
+        (
+            {"tracing": {"sample_interval": 0}},
+            "tracing.sample_interval",
+        ),
+        (
+            {"tracing": {"repetition_threshold": 1}},
+            "tracing.repetition_threshold",
+        ),
+        (
+            {"tracing": {"max_payload_bytes": 0}},
+            "tracing.max_payload_bytes",
+        ),
+        ({"msb": {"mounts": {"a": 1}}}, "msb.mounts.a must be a string"),
+        ({"env_passthrough": "KEY"}, "env_passthrough must be a list"),
+        ({"env_passthrough": [1]}, "env_passthrough must be a list"),
+        ({"logging": {"level": ""}}, "logging.level"),
+    ],
+)
+def test_parse_config_rejects_malformed_values(raw, message):
+    with pytest.raises(ConfigurationError, match=message):
+        parse_config(raw)
 
 
-# ---------------------------------------------------------------------------
-# get_companion_services
-# ---------------------------------------------------------------------------
+def test_parse_config_trust_host_cas_defaults_to_false():
+    assert parse_config({}).network.trust_host_cas is False
 
 
-def test_get_companion_services_empty_config() -> None:
-    assert get_companion_services({}) == []
+def test_parse_config_skills_store_defaults_to_none():
+    assert parse_config({}).skills.store is None
 
 
-def test_get_companion_services_mcp_only() -> None:
-    config = {
-        "mcp_servers": [
-            {"name": "fs", "image": "mcp/fs:latest"},
-            {"name": "db", "image": "mcp/db:latest"},
-        ]
-    }
-    assert get_companion_services(config) == ["mcp-fs", "mcp-db"]
+def test_parse_config_reads_skills_store():
+    config = parse_config({"skills": {"store": "/x"}})
+    assert config.skills.store == "/x"
 
 
-def test_get_companion_services_external_mcp_excluded() -> None:
-    config = {
-        "mcp_servers": [
-            {"name": "managed", "image": "mcp/managed:latest"},
-            {"name": "existing", "url": "https://mcp.example.com/mcp"},
-        ]
-    }
-    assert get_companion_services(config) == ["mcp-managed"]
+def test_parse_config_rejects_non_table_skills():
+    with pytest.raises(ConfigurationError, match=r"skills must be a table"):
+        parse_config({"skills": "/x"})
 
 
-def test_get_companion_services_stdio_mcp_excluded() -> None:
-    config = {
-        "mcp_servers": [
+def test_parse_config_rejects_empty_skills_store():
+    with pytest.raises(ConfigurationError, match="non-empty string"):
+        parse_config({"skills": {"store": ""}})
+
+
+@pytest.mark.parametrize("store", ["rel/path", "~no-such-user-agent-circus/x"])
+def test_parse_config_rejects_invalid_skills_store(store):
+    with pytest.raises(ConfigurationError, match=r"skills\.store"):
+        parse_config({"skills": {"store": store}})
+
+
+def test_parse_config_accepts_tilde_skills_store():
+    config = parse_config({"skills": {"store": "~/skills"}})
+    assert config.skills.store == "~/skills"
+
+
+def test_parse_config_reads_trust_host_cas():
+    config = parse_config({"msb": {"network": {"trust_host_cas": True}}})
+    assert config.network.trust_host_cas is True
+    assert config.network.mode == "public,private"
+
+
+def test_parse_config_rejects_non_bool_trust_host_cas():
+    with pytest.raises(ConfigurationError, match="trust_host_cas"):
+        parse_config({"msb": {"network": {"trust_host_cas": "yes"}}})
+
+
+def test_parse_config_warns_for_ca_certs(caplog):
+    _WARNED_KEYS.clear()
+    with caplog.at_level(logging.WARNING, logger="agent_circus.config"):
+        parse_config({"ca_certs": {"patterns": ["x.crt"]}})
+    records = [r for r in caplog.records if "trust_host_cas" in r.getMessage()]
+    assert len(records) == 1
+    assert records[0].levelno == logging.WARNING
+
+
+def test_parse_config_accepts_sandbox_init_values():
+    assert parse_config({"msb": {"sandbox": {"init": "none"}}}).sandbox.init == "none"
+    config = parse_config({"msb": {"sandbox": {"init": "/sbin/init"}}})
+    assert config.sandbox.init == "/sbin/init"
+
+
+@pytest.mark.parametrize("value", ["systemd", "", "relative/init"])
+def test_parse_config_rejects_bad_sandbox_init(value):
+    with pytest.raises(ConfigurationError, match=r"msb\.sandbox\.init"):
+        parse_config({"msb": {"sandbox": {"init": value}}})
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["stop_timeout", "docker_stop_timeout"],
+)
+@pytest.mark.parametrize("value", [0, -1, "45", True])
+def test_parse_config_rejects_bad_sandbox_timeouts(key, value):
+    with pytest.raises(
+        ConfigurationError, match=f"msb.sandbox.{key} must be a positive"
+    ):
+        parse_config({"msb": {"sandbox": {key: value}}})
+
+
+def test_parse_config_rejects_stop_timeout_not_greater_than_docker():
+    with pytest.raises(
+        ConfigurationError,
+        match=r"must be greater than msb\.sandbox\.docker_stop_timeout",
+    ):
+        parse_config(
+            {"msb": {"sandbox": {"stop_timeout": 20, "docker_stop_timeout": 20}}}
+        )
+
+
+def test_parse_config_accepts_valid_sandbox_timeouts():
+    config = parse_config(
+        {"msb": {"sandbox": {"stop_timeout": 60, "docker_stop_timeout": 30}}}
+    )
+    assert config.sandbox.stop_timeout == 60
+    assert config.sandbox.docker_stop_timeout == 30
+
+
+def test_load_config_merges_user_global_and_project_layers(tmp_path, monkeypatch):
+    user_dir = tmp_path / "userconfig"
+    user_dir.mkdir()
+    (user_dir / "agent-circus").mkdir()
+    (user_dir / "agent-circus" / "config.toml").write_bytes(
+        b'env_passthrough = ["GLOBAL"]\n[msb]\nbinary = "/global/msb"\n'
+        b'[msb.sandbox]\nmemory = "2G"\n'
+    )
+    project_dir = tmp_path / "project"
+    (project_dir / ".agent-circus").mkdir(parents=True)
+    (project_dir / ".agent-circus" / "config.toml").write_bytes(
+        b'env_passthrough = ["A", "B"]\n[msb.sandbox]\nmemory = "8G"\n'
+    )
+    environ = {"XDG_CONFIG_HOME": str(user_dir)}
+    config = load_config(project_dir, environ)
+    # Shallow top-level merge (agent-circus semantics): the project's [msb]
+    # table and env_passthrough list replace the user-global ones wholesale.
+    assert config.binary is None
+    assert config.sandbox.memory == "8G"
+    assert config.env_passthrough == ("A", "B")
+
+
+def test_get_user_config_path_defaults_to_xdg_home():
+    assert get_user_config_path({"XDG_CONFIG_HOME": "/cfg"}) == Path(
+        "/cfg/agent-circus/config.toml"
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("My Project", "my-project"),
+        ("agent_circus.dev", "agent-circus-dev"),
+        ("--Weird__Name--", "weird-name"),
+        ("...", ""),
+    ],
+)
+def test_sanitize_project_name(raw, expected):
+    assert sanitize_project_name(raw) == expected
+
+
+def test_sandbox_name_for_workspace(tmp_path):
+    assert sandbox_name_for_workspace(tmp_path / "My Repo") == "agents-my-repo"
+
+
+def test_sandbox_name_for_workspace_rejects_empty_project(tmp_path):
+    with pytest.raises(ConfigurationError, match="Cannot derive a sandbox name"):
+        sandbox_name_for_workspace(tmp_path / "...")
+
+
+def test_parse_additional_dirs_with_defaults_and_explicit_fields():
+    config = parse_config(
+        {
+            "additional_dirs": [
+                {"path": "/home/user/shared-libs", "readonly": True},
+                {"path": "/home/user/other-project", "name": "other"},
+            ]
+        }
+    )
+    assert config.additional_dirs[0].path == "/home/user/shared-libs"
+    assert config.additional_dirs[0].name == "shared-libs"  # basename default
+    assert config.additional_dirs[0].readonly is True
+    assert config.additional_dirs[1].name == "other"
+    assert config.additional_dirs[1].readonly is False
+
+
+def test_additional_dirs_is_supported_and_does_not_warn(caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        parse_config({"additional_dirs": [{"path": "/data"}]})
+    assert not [r for r in caplog.records if "additional_dirs" in r.getMessage()]
+
+
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        ({"additional_dirs": "nope"}, "must be an array of tables"),
+        ({"additional_dirs": [{}]}, "path must be a non-empty string"),
+        ({"additional_dirs": [{"path": "relative/dir"}]}, "absolute path"),
+        ({"additional_dirs": [{"path": "/d", "readonly": "yes"}]}, "boolean"),
+        (
+            {"additional_dirs": [{"path": "/d", "name": ""}]},
+            "name must be a non-empty string",
+        ),
+        (
             {
-                "name": "local",
-                "transport": "stdio",
-                "command": "local-mcp",
+                "additional_dirs": [
+                    {"path": "/a", "name": "x"},
+                    {"path": "/b", "name": "x"},
+                ]
+            },
+            "duplicates an earlier entry",
+        ),
+        (
+            {
+                "additional_dirs": [
+                    {"path": "/a"},
+                    {"path": "/a"},
+                ]
+            },
+            "duplicates an earlier entry",
+        ),
+    ],
+)
+def test_parse_additional_dirs_rejects_malformed_entries(raw, message):
+    with pytest.raises(ConfigurationError, match=message):
+        parse_config(raw)
+
+
+def test_effective_mounts_appends_additional_dirs(tmp_path):
+    config = parse_config(
+        {
+            "git": {"worktree_mirror": False},
+            "additional_dirs": [
+                {"path": "/home/user/shared-libs", "readonly": True},
+                {"path": "/home/user/other-project", "name": "other"},
+            ],
+        }
+    )
+    mounts = effective_mounts(config, tmp_path)
+    assert mounts == [
+        (str(tmp_path), "/workspace"),
+        ("/home/user/shared-libs", "/workspaces/shared-libs:ro"),
+        ("/home/user/other-project", "/workspaces/other"),
+    ]
+
+
+def test_effective_mounts_rejects_guest_target_collision(tmp_path):
+    config = parse_config(
+        {
+            "msb": {"mounts": {"/srv/data": "/workspaces/shared-libs"}},
+            "additional_dirs": [{"path": "/home/user/shared-libs"}],
+        }
+    )
+    with pytest.raises(ConfigurationError, match="conflicts with the existing mount"):
+        effective_mounts(config, tmp_path)
+
+
+def test_parse_ssh_absent_disables_forwarding():
+    assert parse_config({}).ssh is None
+
+
+def test_parse_ssh_empty_table_enables_forwarding():
+    config = parse_config({"ssh": {}})
+    assert config.ssh == SshConfig()
+
+
+def test_parse_ssh_expands_home_in_paths(monkeypatch):
+    monkeypatch.setenv("HOME", "/home/tester")
+    config = parse_config(
+        {
+            "ssh": {
+                "config_path": "~/.ssh/config",
+                "known_hosts_path": "~/.ssh/known_hosts",
             }
-        ]
-    }
-    assert get_companion_services(config) == []
+        }
+    )
+    assert config.ssh is not None
+    assert config.ssh.config_path == "/home/tester/.ssh/config"
+    assert config.ssh.known_hosts_path == "/home/tester/.ssh/known_hosts"
 
 
-def test_get_companion_services_llama_cpp_only() -> None:
-    assert get_companion_services({"llama_cpp": {}}) == ["llama-cpp"]
+def test_parse_ssh_rejects_relative_path():
+    with pytest.raises(ConfigurationError, match="must be an absolute path"):
+        parse_config({"ssh": {"config_path": "relative/config"}})
 
 
-def test_get_companion_services_both() -> None:
-    config = {
-        "mcp_servers": [{"name": "fs", "image": "mcp/fs:latest"}],
-        "llama_cpp": {},
-    }
-    assert get_companion_services(config) == ["mcp-fs", "llama-cpp"]
+def test_parse_ssh_rejects_non_string_path():
+    with pytest.raises(ConfigurationError, match="must be a non-empty string"):
+        parse_config({"ssh": {"known_hosts_path": 42}})
 
 
-def test_get_companion_services_llama_cpp_none_excluded() -> None:
-    assert get_companion_services({"llama_cpp": None}) == []
+def test_parse_ssh_rejects_non_table():
+    with pytest.raises(ConfigurationError, match="ssh must be a table"):
+        parse_config({"ssh": "yes"})
 
 
-# ---------------------------------------------------------------------------
-# validate_services
-# ---------------------------------------------------------------------------
+def test_parse_ssh_rejects_unknown_keys():
+    with pytest.raises(
+        ConfigurationError, match=r"ssh has unknown key\(s\): unknown_key"
+    ):
+        parse_config({"ssh": {"unknown_key": 1}})
 
 
-def test_validate_services_empty_returns_all_agents() -> None:
-    assert validate_services([]) == AVAILABLE_SERVICES
+def test_parse_hosts_absent_disables_forwarding():
+    assert parse_config({}).hosts is None
 
 
-def test_validate_services_valid_agent() -> None:
-    assert validate_services(["claude-code"]) == ["claude-code"]
+def test_parse_hosts_defaults_file_to_etc_hosts():
+    config = parse_config({"hosts": {"patterns": ["*.corp"]}})
+    assert config.hosts is not None
+    assert config.hosts.patterns == ("*.corp",)
+    assert config.hosts.file == "/etc/hosts"
 
 
-def test_validate_services_invalid_raises() -> None:
-    with pytest.raises(ConfigurationError, match="not-a-service"):
-        validate_services(["not-a-service"])
+def test_parse_hosts_rejects_non_list_patterns():
+    with pytest.raises(ConfigurationError, match="must be a list of non-empty strings"):
+        parse_config({"hosts": {"patterns": "*.corp"}})
 
 
-def test_validate_services_companion_accepted() -> None:
-    assert validate_services(["llama-cpp"], ["llama-cpp"]) == ["llama-cpp"]
+def test_parse_hosts_rejects_invalid_regex():
+    with pytest.raises(ConfigurationError, match="not a valid regular expression"):
+        parse_config({"hosts": {"patterns": ["re:([unclosed"]}})
 
 
-def test_validate_services_mcp_companion_accepted() -> None:
-    assert validate_services(["mcp-myserver"], ["mcp-myserver"]) == ["mcp-myserver"]
+def test_parse_hosts_rejects_relative_file():
+    with pytest.raises(
+        ConfigurationError, match=r"hosts\.file must be an absolute path"
+    ):
+        parse_config({"hosts": {"file": "relative/hosts"}})
 
 
-def test_validate_services_unknown_companion_still_raises() -> None:
-    with pytest.raises(ConfigurationError, match="ghost"):
-        validate_services(["ghost"], ["llama-cpp"])
+def test_parse_hosts_expands_home_in_file(monkeypatch):
+    monkeypatch.setenv("HOME", "/home/tester")
+    config = parse_config({"hosts": {"file": "~/.hosts"}})
+    assert config.hosts is not None
+    assert config.hosts.file == "/home/tester/.hosts"
+
+
+def test_parse_config_agent_table_without_command_uses_default():
+    config = parse_config({"agent": {"workdir": "/w"}})
+    assert config.agent.command == ("pi",)
+    assert config.agent.workdir == "/w"
+
+
+def test_load_config_reads_skills_store_from_user_config_only(tmp_path):
+    """A user-global store survives a project [msb] table that shadows [msb]."""
+    user_dir = tmp_path / "userconfig"
+    (user_dir / "agent-circus").mkdir(parents=True)
+    (user_dir / "agent-circus" / "config.toml").write_bytes(
+        b'[skills]\nstore = "/user-store"\n'
+    )
+    project_dir = tmp_path / "project"
+    (project_dir / ".agent-circus").mkdir(parents=True)
+    (project_dir / ".agent-circus" / "config.toml").write_bytes(
+        b'[msb.sandbox]\nmemory = "2G"\n'
+    )
+    environ = {"XDG_CONFIG_HOME": str(user_dir)}
+    config = load_config(project_dir, environ)
+    assert config.sandbox.memory == "2G"
+    assert config.skills.store == "/user-store"
+
+
+def test_load_config_rejects_project_skills_store(tmp_path):
+    """A project [skills] store raises and names the user config path."""
+    user_dir = tmp_path / "userconfig"
+    (user_dir / "agent-circus").mkdir(parents=True)
+    (user_dir / "agent-circus" / "config.toml").write_bytes(
+        b'[skills]\nstore = "/user-store"\n'
+    )
+    project_dir = tmp_path / "project"
+    (project_dir / ".agent-circus").mkdir(parents=True)
+    (project_dir / ".agent-circus" / "config.toml").write_bytes(
+        b'[skills]\nstore = "/project-store"\n'
+    )
+    environ = {"XDG_CONFIG_HOME": str(user_dir)}
+    with pytest.raises(ConfigurationError, match="user config") as excinfo:
+        load_config(project_dir, environ)
+    assert str(user_dir / "agent-circus" / "config.toml") in str(excinfo.value)
+
+
+def test_load_config_gives_no_skills_store_without_user_config(tmp_path):
+    """No user config file: the store setting is the default (None)."""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    environ = {"XDG_CONFIG_HOME": str(tmp_path / "no-user-config")}
+    config = load_config(project_dir, environ)
+    assert config.skills.store is None
+
+
+@pytest.mark.parametrize(
+    ("key", "table"),
+    [
+        ("image", r"\[image\]"),
+        ("agent", r"\[agent\]"),
+        ("tracing", r"\[tracing\]"),
+        ("skills", r"\[skills\]"),
+        ("daemons", r"\[\[daemons\]\]"),
+        ("hooks", r"\[hooks\]"),
+        ("env", r"\[env\]"),
+    ],
+)
+def test_parse_config_rejects_moved_msb_keys(key, table):
+    """A moved key under [msb] raises and names the new table."""
+    with pytest.raises(
+        ConfigurationError, match=f"msb.{key} is not supported; use {table}"
+    ):
+        parse_config({"msb": {key: {}}})
+
+
+def test_parse_config_rejects_unknown_msb_key():
+    with pytest.raises(ConfigurationError, match=r"msb\.foo is not a supported key"):
+        parse_config({"msb": {"foo": 1}})
+
+
+def test_parse_config_still_accepts_direct_msb_keys():
+    config = parse_config(
+        {
+            "msb": {
+                "binary": "/bin/msb",
+                "sandbox": {"memory": "2G"},
+                "network": {"trust_host_cas": True},
+                "mounts": {".": "/workspace"},
+            }
+        }
+    )
+    assert config.binary == "/bin/msb"
+    assert config.sandbox.memory == "2G"
+    assert config.network.trust_host_cas is True
+    assert config.mounts == {".": "/workspace"}
+
+
+@pytest.mark.parametrize(
+    ("table", "raw"),
+    [
+        ("image", {"bogus": 1}),
+        ("agent", {"bogus": 1}),
+        ("tracing", {"bogus": 1}),
+        ("skills", {"bogus": 1}),
+        ("msb.sandbox", {"bogus": 1}),
+        ("msb.network", {"bogus": 1}),
+        ("logging", {"bogus": 1}),
+        ("git", {"bogus": 1}),
+        ("ssh", {"bogus": 1}),
+        ("hosts", {"bogus": 1}),
+    ],
+)
+def test_parse_config_rejects_unknown_subtable_keys(table, raw):
+    """Every strict table rejects unknown keys (D19)."""
+    top_key = table.split(".")[-1]
+    raw_config = {"msb": {top_key: raw}} if "." in table else {top_key: raw}
+    with pytest.raises(ConfigurationError, match=f"{table} has unknown key"):
+        parse_config(raw_config)
+
+
+def test_parse_config_1x_key_still_warns_only(caplog):
+    """A 1.x top-level key keeps the C7 warning instead of raising."""
+    from agent_circus.config import _WARNED_KEYS
+
+    _WARNED_KEYS.clear()
+    with caplog.at_level(logging.WARNING, logger="agent_circus.config"):
+        config = parse_config({"mcp_servers": [{"name": "x"}]})
+    assert config.daemons == ()
+    assert any("mcp_servers" in r.getMessage() for r in caplog.records)

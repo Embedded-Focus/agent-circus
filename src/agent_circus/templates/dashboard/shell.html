@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>shell · agent-circus</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="favicon.png" />
+    <link rel="stylesheet" href="vendor/xterm/xterm.css" />
+    <link rel="stylesheet" href="shell.css" />
+    <script src="vendor/xterm/xterm.js" defer></script>
+    <script src="vendor/xterm/addon-fit.js" defer></script>
+    <script src="shell-themes.js" defer></script>
+    <script src="shell.js" defer></script>
+  </head>
+  <body>
+    <header class="shell-bar">
+      <a id="shell-back" href="/">agent-circus</a>
+      <span id="shell-sandbox" class="mono"></span>
+      <span id="shell-status" class="st" aria-live="polite"></span>
+      <span class="spacer"></span>
+      <select id="shell-theme" title="Terminal theme" aria-label="Terminal theme"></select>
+      <button id="shell-font-down" type="button" title="Smaller text">A−</button>
+      <button id="shell-font-up" type="button" title="Larger text">A+</button>
+      <button id="shell-reconnect" type="button" hidden>Reconnect</button>
+    </header>
+    <div id="shell-message" class="shell-message" hidden></div>
+    <div id="terminal"></div>
+  </body>
+</html>

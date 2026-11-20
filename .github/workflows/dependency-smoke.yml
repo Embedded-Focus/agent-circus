@@ -6,58 +6,38 @@ on:
       - develop
       - main
     paths:
-      - src/agent_circus/templates/agent-circus/**
+      - src/agent_circus/templates/Dockerfile.msb-agents
   workflow_dispatch:
-    inputs:
-      upstream:
-        description: Resolve upstream dependencies before building
-        type: boolean
-        default: false
 
 permissions:
   contents: read
 
 jobs:
-  containers:
+  msb-agents:
+    name: Build msb-agents image and check agent executables
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        mode: [instant, deploy]
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.3
-        with:
-          version: latest-known
-      - run: uv sync --locked
-      - name: Deploy templates
-        if: matrix.mode == 'deploy'
-        run: uv run agent-circus init --deploy
-      - name: Resolve upstream dependencies
-        if: github.event_name == 'workflow_dispatch' && inputs.upstream
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: uv run agent-circus deps update
-      - name: Build images and check agent executables
-        run: |
-          uv run python - <<'PY'
-          from pathlib import Path
-          from agent_circus.compose import _exec_compose, compose_build
-          from agent_circus.context import build_compose_context
 
-          with build_compose_context(Path.cwd()) as ctx:
-              compose_build(ctx, [])
-              for service, executable in (
-                  ("claude-code", "claude"),
-                  ("codex", "codex"),
-                  ("opencode", "opencode"),
-                  ("mistral-vibe", "vibe"),
-              ):
-                  _exec_compose([
-                      "run", "--rm", "--no-deps",
-                      "--env", "XDG_CACHE_HOME=/tmp/agent-circus-cache",
-                      "--entrypoint", executable,
-                      service, "--version",
-                  ], ctx)
-          PY
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build msb-agents image (agents target)
+        uses: docker/build-push-action@v6
+        with:
+          context: src/agent_circus/templates
+          file: src/agent_circus/templates/Dockerfile.msb-agents
+          target: agents
+          tags: msb-agents:smoke
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Check agent executables
+        run: |
+          set -e
+          for executable in opencode claude codex pi; do
+            echo "::group::$executable --version"
+            docker run --rm --entrypoint "$executable" msb-agents:smoke --version
+            echo "::endgroup::"
+          done

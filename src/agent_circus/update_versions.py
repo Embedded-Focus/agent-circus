@@ -1,24 +1,32 @@
-"""Refresh pinned tool versions in the ``templates/agent-circus`` template.
+"""Refresh pinned tool versions in the bundled msb-agents Dockerfile.
 
-Looks up the latest release for each pinned component and rewrites the
-corresponding version string in the template's Dockerfile, compose.yaml, and
-pyproject.toml. Most components are backed by GitHub releases; npm-packaged
-components (npm itself, the OpenCode CLI) are resolved from the npm registry.
+Covers ``src/agent_circus/templates/Dockerfile.msb-agents``. Looks up the
+latest release for each pinned component and rewrites the corresponding
+version string. Most components are backed by GitHub releases; npm-packaged
+components (npm itself, the OpenCode CLI) are resolved from the npm registry;
+container image pins are resolved through the registry API, so a new tag is
+always accompanied by its fresh multi-arch manifest-list digest.
 
 Installed as its own console script (``agent-circus-update-templates``),
-separate from the ``agent-circus`` CLI, since it edits template *source*
-rather than acting on a deployed workspace.
+separate from the ``agent-circus`` CLI, since it edits the Dockerfile
+*source* rather than acting on a deployed workspace.
 
-Shortcoming: :data:`TEMPLATE_DIR` is derived from this module's own file
-location, so it only resolves to the real template sources when run against
+Shortcomings: the Dockerfile is derived from this module's own file
+location, so it only resolves to the real template source when run against
 an editable/source checkout (e.g. via ``uv run``). Running it from an
-installed wheel would edit the installed copy, not the repository.
+installed wheel would edit the installed copy, not the repository. The node
+base image in the msb-agents Dockerfile is digest-refreshed in place; its
+major tag (26-slim) is never bumped automatically. s6-overlay is tracked as
+four pins (release tag plus one sha256 per release asset); if the tag moves
+but an asset's ``.sha256`` lookup fails, ``--apply`` can leave the URLs
+ahead of the hashes — the Dockerfile build then fails loudly at
+``sha256sum -c`` instead of silently trusting an unverified tarball, and
+the updater's non-zero exit names the failed pin.
 """
 
 import json
 import os
 import re
-import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -30,7 +38,9 @@ import typer
 from github import Auth, Github
 from github.GithubException import GithubException
 
-TEMPLATE_DIR = Path(__file__).resolve().parent / "templates" / "agent-circus"
+MSB_AGENTS_DOCKERFILE = (
+    Path(__file__).resolve().parent / "templates" / "Dockerfile.msb-agents"
+)
 
 
 @dataclass(frozen=True)
@@ -46,6 +56,15 @@ class VersionPin:
     :param strip_prefix: Prefix removed from the release tag name before
         it is written into the file (e.g. ``"v"``, ``"rust-v"``). An empty
         string keeps the raw tag name.
+    :param image: Full container image reference including registry host
+        (e.g. ``docker.io/library/node``, ``ghcr.io/astral-sh/uv``); used by
+        the digest-backed sources.
+    :param tag: Fixed tag to resolve the digest for (source
+        ``"registry-digest"`` only).
+    :param tag_template: Tag built from the resolved version (source
+        ``"github-image"`` only), e.g. ``"{version}-dind"``.
+    :param asset: Release asset filename whose ``.sha256`` companion is
+        fetched (source ``"github-asset-sha256"`` only).
     :param source: Version lookup backend.
     """
 
@@ -54,105 +73,152 @@ class VersionPin:
     file: Path
     pattern: re.Pattern[str]
     strip_prefix: str = ""
-    source: Literal["github", "npm"] = "github"
+    image: str = ""
+    tag: str = ""
+    tag_template: str = ""
+    asset: str = ""
+    source: Literal[
+        "github", "npm", "github-image", "registry-digest", "github-asset-sha256"
+    ] = "github"
 
 
-PINS: list[VersionPin] = [
+# Pins in the msb-agents Dockerfile (src/agent_circus/templates/). This is the
+# updater's only target (see ALL_PINS).
+MSB_AGENTS_PINS: list[VersionPin] = [
+    # The node base image is digest-pinned only: the multi-arch manifest-list
+    # digest is refreshed in place, but the node major tag (26-slim) itself is
+    # never bumped automatically — bumping a major is a deliberate manual act.
     VersionPin(
-        name="npm",
-        repo="npm",
-        file=TEMPLATE_DIR / "compose.yaml",
-        pattern=re.compile(r"NPM_VERSION:\s*(\S+)"),
-        source="npm",
+        name="node (msb-agents)",
+        repo="",
+        file=MSB_AGENTS_DOCKERFILE,
+        pattern=re.compile(r"node:26-slim@(sha256:[0-9a-f]{64})"),
+        source="registry-digest",
+        image="docker.io/library/node",
+        tag="26-slim",
     ),
+    # Tag and digest move together: the latest uv release tag is resolved from
+    # GitHub, then its multi-arch digest from GHCR, so the tag@digest pair
+    # stays consistent.
     VersionPin(
-        name="yq",
-        repo="mikefarah/yq",
-        file=TEMPLATE_DIR / "Dockerfile",
-        pattern=re.compile(r"mikefarah/yq/releases/download/(v[0-9.]+)/yq_linux_amd64"),
-    ),
-    VersionPin(
-        name="uv",
+        name="uv (msb-agents)",
         repo="astral-sh/uv",
-        file=TEMPLATE_DIR / "Dockerfile",
-        pattern=re.compile(r"ghcr\.io/astral-sh/uv:(\S+)"),
+        file=MSB_AGENTS_DOCKERFILE,
+        pattern=re.compile(r"ghcr\.io/astral-sh/uv:([0-9][0-9.]*@sha256:[0-9a-f]{64})"),
+        source="github-image",
+        image="ghcr.io/astral-sh/uv",
+        tag_template="{version}",
+    ),
+    # Latest moby release drives the tag ({version}-dind), then the matching
+    # docker.io official image tag is resolved to its multi-arch digest. If
+    # the official image lags the moby release, the digest lookup fails and
+    # the pin is reported with an error rather than half-updated.
+    VersionPin(
+        name="docker (msb-agents)",
+        repo="moby/moby",
+        file=MSB_AGENTS_DOCKERFILE,
+        pattern=re.compile(
+            r"docker\.io/library/docker:([0-9][0-9.]*-dind@sha256:[0-9a-f]{64})"
+        ),
+        strip_prefix="docker-v",
+        source="github-image",
+        image="docker.io/library/docker",
+        tag_template="{version}-dind",
     ),
     VersionPin(
-        name="claude-code",
-        repo="anthropics/claude-code",
-        file=TEMPLATE_DIR / "compose.yaml",
-        pattern=re.compile(r"CLAUDE_CODE_VERSION:\s*(\S+)"),
-        strip_prefix="v",
-    ),
-    VersionPin(
-        name="claude-agent-acp",
-        repo="agentclientprotocol/claude-agent-acp",
-        file=TEMPLATE_DIR / "compose.yaml",
-        pattern=re.compile(r"CLAUDE_AGENT_ACP_VERSION:\s*(\S+)"),
-        strip_prefix="v",
-    ),
-    VersionPin(
-        name="bun",
-        repo="oven-sh/bun",
-        file=TEMPLATE_DIR / "compose.yaml",
-        pattern=re.compile(r"BUN_VERSION:\s*(\S+)"),
-        strip_prefix="bun-v",
-    ),
-    VersionPin(
-        name="claude-mem",
-        repo="thedotmack/claude-mem",
-        file=TEMPLATE_DIR / "compose.yaml",
-        pattern=re.compile(r"CLAUDE_MEM_VERSION:\s*(\S+)"),
-        strip_prefix="v",
-    ),
-    VersionPin(
-        name="codex",
-        repo="openai/codex",
-        file=TEMPLATE_DIR / "compose.yaml",
-        pattern=re.compile(r"CODEX_VERSION:\s*(\S+)"),
-        strip_prefix="rust-v",
-    ),
-    VersionPin(
-        name="codex-acp",
-        repo="agentclientprotocol/codex-acp",
-        file=TEMPLATE_DIR / "compose.yaml",
-        pattern=re.compile(r"CODEX_ACP_VERSION:\s*(\S+)"),
-        strip_prefix="v",
-    ),
-    # Resolved from npm rather than GitHub: the template installs
-    # @opencode/cli, and the repo's GitHub "latest release" still tracks the
-    # v1 line even after the v2 series shipped.
-    VersionPin(
-        name="opencode",
+        name="opencode (msb-agents)",
         repo="@opencode/cli",
-        file=TEMPLATE_DIR / "compose.yaml",
-        pattern=re.compile(r"OPENCODE_VERSION:\s*(\S+)"),
+        file=MSB_AGENTS_DOCKERFILE,
+        pattern=re.compile(r"@opencode/cli@([0-9][0-9.]*)"),
         source="npm",
     ),
     VersionPin(
-        name="mistral-vibe",
-        repo="mistralai/mistral-vibe",
-        file=TEMPLATE_DIR / "pyproject.toml",
-        pattern=re.compile(r"mistral-vibe>=([0-9.]+)"),
-        strip_prefix="v",
+        name="claude-code (msb-agents)",
+        repo="@anthropic-ai/claude-code",
+        file=MSB_AGENTS_DOCKERFILE,
+        pattern=re.compile(r"@anthropic-ai/claude-code@([0-9][0-9.]*)"),
+        source="npm",
     ),
-    # Resolved from npm: the image installs the published CLI, not a GitHub
-    # release, and pi-acp is published without version tags.
     VersionPin(
-        name="pi",
+        name="claude-agent-acp (msb-agents)",
+        repo="@agentclientprotocol/claude-agent-acp",
+        file=MSB_AGENTS_DOCKERFILE,
+        pattern=re.compile(r"@agentclientprotocol/claude-agent-acp@([0-9][0-9.]*)"),
+        source="npm",
+    ),
+    VersionPin(
+        name="codex (msb-agents)",
+        repo="@openai/codex",
+        file=MSB_AGENTS_DOCKERFILE,
+        pattern=re.compile(r"@openai/codex@([0-9][0-9.]*)"),
+        source="npm",
+    ),
+    VersionPin(
+        name="skills (msb-agents)",
+        repo="skills",
+        file=MSB_AGENTS_DOCKERFILE,
+        pattern=re.compile(r"\sskills@([0-9][0-9.]*)"),
+        source="npm",
+    ),
+    VersionPin(
+        name="codex-acp (msb-agents)",
+        repo="@agentclientprotocol/codex-acp",
+        file=MSB_AGENTS_DOCKERFILE,
+        pattern=re.compile(r"@agentclientprotocol/codex-acp@([0-9][0-9.]*)"),
+        source="npm",
+    ),
+    VersionPin(
+        name="pi (msb-agents)",
         repo="@earendil-works/pi-coding-agent",
-        file=TEMPLATE_DIR / "compose.yaml",
-        pattern=re.compile(r"PI_VERSION:\s*(\S+)"),
+        file=MSB_AGENTS_DOCKERFILE,
+        pattern=re.compile(r"pi-coding-agent@([0-9][0-9.]*)"),
         source="npm",
     ),
     VersionPin(
-        name="pi-acp",
+        name="pi-acp (msb-agents)",
         repo="pi-acp",
-        file=TEMPLATE_DIR / "compose.yaml",
-        pattern=re.compile(r"PI_ACP_VERSION:\s*(\S+)"),
+        file=MSB_AGENTS_DOCKERFILE,
+        pattern=re.compile(r"(?<![\w.-])pi-acp@([0-9][0-9.]*)"),
         source="npm",
+    ),
+    # s6-overlay is pinned by version and sha256 (the Dockerfile verifies the
+    # tarballs with sha256sum -c). The tag appears in all three ADD URLs and
+    # is rewritten together by apply_version; each tarball's hash comes from
+    # the release's own .sha256 asset, so hashes and URLs move in lockstep.
+    VersionPin(
+        name="s6-overlay (msb-agents)",
+        repo="just-containers/s6-overlay",
+        file=MSB_AGENTS_DOCKERFILE,
+        pattern=re.compile(r"s6-overlay/releases/download/(v[0-9][0-9.]*)/s6-overlay-"),
+    ),
+    VersionPin(
+        name="s6-overlay noarch sha256 (msb-agents)",
+        repo="just-containers/s6-overlay",
+        file=MSB_AGENTS_DOCKERFILE,
+        pattern=re.compile(r"'([0-9a-f]{64})  s6-overlay-noarch\.tar\.xz'"),
+        asset="s6-overlay-noarch.tar.xz.sha256",
+        source="github-asset-sha256",
+    ),
+    VersionPin(
+        name="s6-overlay x86_64 sha256 (msb-agents)",
+        repo="just-containers/s6-overlay",
+        file=MSB_AGENTS_DOCKERFILE,
+        pattern=re.compile(r"'([0-9a-f]{64})  s6-overlay-x86_64\.tar\.xz'"),
+        asset="s6-overlay-x86_64.tar.xz.sha256",
+        source="github-asset-sha256",
+    ),
+    VersionPin(
+        name="s6-overlay aarch64 sha256 (msb-agents)",
+        repo="just-containers/s6-overlay",
+        file=MSB_AGENTS_DOCKERFILE,
+        pattern=re.compile(r"'([0-9a-f]{64})  s6-overlay-aarch64\.tar\.xz'"),
+        asset="s6-overlay-aarch64.tar.xz.sha256",
+        source="github-asset-sha256",
     ),
 ]
+
+# Every tracked pin, in report order: all pins of the msb-agents Dockerfile.
+ALL_PINS: list[VersionPin] = [*MSB_AGENTS_PINS]
 
 
 def normalize_tag(tag_name: str, strip_prefix: str) -> str:
@@ -184,7 +250,11 @@ def read_current_version(content: str, pin: VersionPin) -> str:
 
 
 def apply_version(content: str, pin: VersionPin, new_version: str) -> str:
-    """Return *content* with the pinned version replaced by *new_version*.
+    """Return *content* with every occurrence of the pinned version replaced.
+
+    Some Dockerfiles reference the same image more than once (e.g. two
+    ``COPY --from`` lines sharing one digest-pinned source image), so *all*
+    matches of the pin's pattern are rewritten, not just the first.
 
     :param content: Full text of :attr:`VersionPin.file`.
     :param pin: Pin whose pattern locates the version.
@@ -192,13 +262,20 @@ def apply_version(content: str, pin: VersionPin, new_version: str) -> str:
     :returns: Updated file content.
     :raises ValueError: If the pattern does not match *content*.
     """
-    match = pin.pattern.search(content)
-    if match is None:
+    if pin.pattern.search(content) is None:
         raise ValueError(
             f"Could not locate current version for {pin.name!r} in {pin.file}"
         )
-    start, end = match.span(1)
-    return content[:start] + new_version + content[end:]
+
+    def _replace(match: re.Match[str]) -> str:
+        start, end = match.span(1)
+        return (
+            match.group(0)[: start - match.start()]
+            + new_version
+            + match.group(0)[end - match.start() :]
+        )
+
+    return pin.pattern.sub(_replace, content)
 
 
 def fetch_latest_tag(gh: Github, repo: str) -> str:
@@ -211,6 +288,98 @@ def fetch_latest_tag(gh: Github, repo: str) -> str:
         cannot be resolved.
     """
     return gh.get_repo(repo).get_latest_release().tag_name
+
+
+# Registry endpoint and anonymous token issuer for GHCR, keyed by registry
+# host. docker.io is handled via the public Docker Hub REST API instead (see
+# :func:`_fetch_docker_hub_digest`).
+_GHCR_API = "https://ghcr.io"
+_GHCR_TOKEN_URL = "https://ghcr.io/token"
+
+# Manifest media types requested in preference order; the first two are
+# multi-arch manifest lists/indices, so the returned Docker-Content-Digest is
+# the multi-arch digest suitable for digest-pinned FROM/COPY --from lines.
+_MANIFEST_MEDIA_TYPES = (
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.docker.distribution.manifest.v2+json",
+    "application/vnd.oci.image.manifest.v1+json",
+)
+
+
+def _fetch_docker_hub_digest(repo: str, tag: str) -> str:
+    """Resolve the digest of a Docker Hub image tag via the public Hub API.
+
+    Used for ``docker.io`` images instead of the registry token dance: the
+    Hub REST API is anonymous and returns the tag's multi-arch manifest-list
+    digest directly.
+
+    :param repo: Hub repository path (``library/node``).
+    :param tag: Tag to resolve.
+    :returns: Digest string (``sha256:...``).
+    :raises ValueError: If the API response carries no digest.
+    :raises urllib.error.URLError: If the request fails (including HTTP
+        errors such as a tag that does not exist).
+    """
+    url = f"https://hub.docker.com/v2/repositories/{repo}/tags/{tag}"
+    with urllib.request.urlopen(url, timeout=30) as response:
+        data = json.loads(response.read())
+    digest = data.get("digest")
+    if not isinstance(digest, str) or not digest:
+        raise ValueError(f"Docker Hub returned no digest for {repo}:{tag}")
+    return digest
+
+
+def _fetch_ghcr_digest(repo: str, tag: str) -> str:
+    """Resolve the digest of a GHCR image tag via the registry API.
+
+    Performs an anonymous pull-scoped token exchange and requests the tag's
+    manifest with manifest-list/OCI-index media types so the returned
+    ``Docker-Content-Digest`` header is the multi-arch manifest-list digest.
+
+    :param repo: GHCR repository path (``astral-sh/uv``).
+    :param tag: Tag to resolve.
+    :returns: Digest string (``sha256:...``).
+    :raises ValueError: If the registry response carries no digest header.
+    :raises urllib.error.URLError: If a registry request fails (including
+        HTTP errors such as a tag that does not exist).
+    """
+    scope = urllib.parse.urlencode({"scope": f"repository:{repo}:pull"})
+    with urllib.request.urlopen(f"{_GHCR_TOKEN_URL}?{scope}", timeout=30) as response:
+        token = json.loads(response.read())["token"]
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": ", ".join(_MANIFEST_MEDIA_TYPES),
+    }
+    request = urllib.request.Request(
+        f"{_GHCR_API}/v2/{repo}/manifests/{tag}", headers=headers
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        digest = response.headers.get("Docker-Content-Digest")
+    if not digest:
+        raise ValueError(f"GHCR returned no digest for {repo}:{tag}")
+    return digest
+
+
+def fetch_latest_docker_digest(image: str, tag: str) -> str:
+    """Resolve the multi-arch digest of *image:tag* from its registry.
+
+    :param image: Full image reference including registry host
+        (``docker.io/library/node``, ``ghcr.io/astral-sh/uv``).
+    :param tag: Tag to resolve.
+    :returns: Digest string (``sha256:...``).
+    :raises ValueError: If the registry is unsupported or the response
+        carries no digest.
+    :raises urllib.error.URLError: If a registry request fails (including
+        HTTP errors such as a tag that does not exist).
+    """
+    registry_host, _, repo = image.partition("/")
+    if registry_host == "docker.io":
+        return _fetch_docker_hub_digest(repo, tag)
+    if registry_host == "ghcr.io":
+        return _fetch_ghcr_digest(repo, tag)
+    raise ValueError(f"Unsupported registry for image {image!r}")
 
 
 def fetch_latest_npm_version(package: str) -> str:
@@ -231,15 +400,58 @@ def fetch_latest_npm_version(package: str) -> str:
     return latest
 
 
+def fetch_latest_github_asset_sha256(gh: Github, repo: str, asset: str) -> str:
+    """Return the sha256 recorded in a GitHub release's ``.sha256`` asset.
+
+    Resolves the repository's latest release tag and downloads
+    ``<asset>`` from it (e.g. ``s6-overlay-noarch.tar.xz.sha256``). The
+    asset content follows the sha256sum text format
+    (``<64 hex digits>  <filename>``); only the hash is returned.
+
+    :param gh: Authenticated or anonymous GitHub client.
+    :param repo: Repository as ``"owner/repo"``.
+    :param asset: Release asset filename of the ``.sha256`` file.
+    :returns: The 64-digit lowercase hex digest.
+    :raises ValueError: If the asset content is not a sha256sum line.
+    :raises urllib.error.URLError: If the download fails.
+    :raises GithubException: If the latest release cannot be resolved.
+    """
+    tag = fetch_latest_tag(gh, repo)
+    url = (
+        f"https://github.com/{repo}/releases/download/{urllib.parse.quote(tag)}"
+        f"/{urllib.parse.quote(asset)}"
+    )
+    with urllib.request.urlopen(url, timeout=30) as response:
+        text = response.read().decode("utf-8")
+    match = re.search(r"^([0-9a-f]{64})\s+\S", text, re.MULTILINE)
+    if match is None:
+        raise ValueError(f"Release asset {asset} of {repo} is not a sha256sum line")
+    return match.group(1)
+
+
 def fetch_latest_version(gh: Github, pin: VersionPin) -> str:
     """Return the latest normalized version for *pin*.
 
     :param gh: Authenticated or anonymous GitHub client.
     :param pin: Pin to check.
-    :returns: Latest normalized version string.
+    :returns: Latest normalized version string. For digest-backed sources
+        this is the tag@digest composite (or bare digest) to write into the
+        template.
+    :raises ValueError: If the registry is unsupported.
+    :raises urllib.error.URLError: If a registry request fails.
+    :raises GithubException: If the GitHub lookup fails.
     """
     if pin.source == "npm":
         return fetch_latest_npm_version(pin.repo)
+    if pin.source == "registry-digest":
+        return fetch_latest_docker_digest(pin.image, pin.tag)
+    if pin.source == "github-asset-sha256":
+        return fetch_latest_github_asset_sha256(gh, pin.repo, pin.asset)
+    if pin.source == "github-image":
+        version = normalize_tag(fetch_latest_tag(gh, pin.repo), pin.strip_prefix)
+        tag = pin.tag_template.format(version=version)
+        digest = fetch_latest_docker_digest(pin.image, tag)
+        return f"{tag}@{digest}"
     tag = fetch_latest_tag(gh, pin.repo)
     return normalize_tag(tag, pin.strip_prefix)
 
@@ -319,28 +531,6 @@ def apply_changes(results: list[PinResult]) -> list[Path]:
     return changed
 
 
-def sync_template_lockfile(template_dir: Path = TEMPLATE_DIR) -> None:
-    """Upgrade the template lockfile and sync its environment.
-
-    ``UV_PROJECT_ENVIRONMENT``/``VIRTUAL_ENV`` are stripped from the
-    subprocess environment: dev shells for *this* repo (e.g. devenv) commonly
-    export one of these pointing at the main project's own venv.  Strip them so
-    uv operates only on the template project in *template_dir*.
-
-    :param template_dir: Directory containing the template's own
-        ``pyproject.toml``/``uv.lock`` pair.
-    :raises subprocess.CalledProcessError: If ``uv lock -U`` or ``uv sync``
-        exits non-zero.
-    """
-    env = {
-        k: v
-        for k, v in os.environ.items()
-        if k not in {"UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"}
-    }
-    subprocess.run(["uv", "lock", "-U"], cwd=template_dir, check=True, env=env)
-    subprocess.run(["uv", "sync"], cwd=template_dir, check=True, env=env)
-
-
 def format_report(results: list[PinResult]) -> str:
     """Render a plain-text table of current vs. latest versions.
 
@@ -369,7 +559,7 @@ def main(
         ),
     ] = False,
 ) -> None:
-    """Check and optionally update pinned versions in the agent-circus template."""
+    """Check and optionally update pinned versions in the msb-agents Dockerfile."""
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     auth = Auth.Token(token) if token else None
     # PyGithub's default retry policy backs off and blocks for minutes on a
@@ -378,21 +568,12 @@ def main(
     # hanging.
     gh = Github(auth=auth, retry=0)
 
-    results = build_report(PINS, gh)
+    results = build_report(ALL_PINS, gh)
     typer.echo(format_report(results))
 
     if apply:
         changed = apply_changes(results)
         typer.echo(f"\nUpdated {len(changed)} file(s).")
-
-        typer.echo(
-            "Updating template lockfile (uv lock -U) and environment (uv sync)..."
-        )
-        try:
-            sync_template_lockfile()
-        except subprocess.CalledProcessError as e:
-            typer.echo(f"Template lockfile/environment update failed: {e}", err=True)
-            raise typer.Exit(code=1) from e
 
     if any(r.error for r in results):
         raise typer.Exit(code=1)

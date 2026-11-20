@@ -1,5 +1,20 @@
-"""Agent Circus - CLI for managing agent containers."""
+"""agent-circus: manage AI coding-agent sandboxes with Microsandbox."""
 
 from importlib.metadata import version as distribution_version
 
+from .exceptions import (
+    AgentCircusError,
+    ConfigurationError,
+    MsbCommandError,
+    MsbNotFoundError,
+)
+
 __version__ = distribution_version("agent-circus")
+
+__all__ = [
+    "AgentCircusError",
+    "ConfigurationError",
+    "MsbCommandError",
+    "MsbNotFoundError",
+    "__version__",
+]

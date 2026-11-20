@@ -1,941 +1,638 @@
-<div align="center">
+# agent-circus
 
-<img src="https://raw.githubusercontent.com/Embedded-Focus/agent-circus/main/assets/agent_circus_logo.png" alt="AI Agents Circus" width="260">
-
-# AI Agents Circus
-
-*Run AI coding agents in isolated Docker or Podman containers with one config language.*
+*Run AI coding agents in Microsandbox micro-VMs with one configuration file.*
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/Embedded-Focus/agent-circus/blob/main/LICENSE)
 [![CI](https://github.com/Embedded-Focus/agent-circus/actions/workflows/ci.yml/badge.svg)](https://github.com/Embedded-Focus/agent-circus/actions/workflows/ci.yml)
 [![Security](https://github.com/Embedded-Focus/agent-circus/actions/workflows/security.yml/badge.svg)](https://github.com/Embedded-Focus/agent-circus/actions/workflows/security.yml)
 [![Dependabot](https://img.shields.io/badge/dependabot-enabled-025e8c?logo=dependabot)](https://github.com/Embedded-Focus/agent-circus/security/dependabot)
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
-[![Docker](https://img.shields.io/badge/runtime-Docker-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Podman](https://img.shields.io/badge/runtime-Podman-892CA0?logo=podman&logoColor=white)](https://podman.io/)
 [![uv](https://img.shields.io/badge/uv-supported-DE5FE9)](https://docs.astral.sh/uv/)
 [![Last commit](https://img.shields.io/github/last-commit/Embedded-Focus/agent-circus?logo=github)](https://github.com/Embedded-Focus/agent-circus/commits/main)
-![Agents: Claude Code · Codex · Vibe CLI · OpenCode](https://img.shields.io/badge/agents-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Vibe%20CLI%20%C2%B7%20OpenCode-lightgrey)
+![Agents: Claude Code · Codex · OpenCode · Pi](https://img.shields.io/badge/agents-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20OpenCode%20%C2%B7%20Pi-lightgrey)
 
-**[Open Protocols](#open-protocols)** ·
-**[Getting Started](#getting-started)** ·
-**[Working with the Environment](#working-with-the-environment)** ·
-**[Authentication](#authentication)** ·
-**[Configuration](#configuration)** ·
-**[Container Runtimes](#container-runtimes)** ·
-**[Hooks](#hooks)** ·
-**[Editors](#setting-up-editors-to-work-with-acp)** ·
-**[Roadmap](#roadmap)**
+Looking for the Docker/Podman version? See the
+[`v1` branch](https://github.com/Embedded-Focus/agent-circus/tree/v1).
 
-</div>
+[Getting Started](#getting-started) ·
+[How It Works](#how-it-works) ·
+[Running Agents](#running-agents) ·
+[Editors](#setting-up-editors-to-work-with-acp) ·
+[Images](#images) ·
+[Lifecycle](#lifecycle) ·
+[Configuration](#configuration) ·
+[Hooks](#hooks) ·
+[Environment Variables](#environment-variables) ·
+[Secrets](#secrets) ·
+[Networking](#networking) ·
+[Host Entries](#host-entries) ·
+[CA Certificates](#ca-certificates) ·
+[Logs](#logs) ·
+[Troubleshooting](#troubleshooting)
 
-> [!NOTE]
-> Support for [microsandbox](https://microsandbox.dev/) is work in progress.
-> Development continues in the
-> [`microsandbox` branch](https://github.com/Embedded-Focus/agent-circus/tree/microsandbox)
-> until it is merged into the
-> [`develop` branch](https://github.com/Embedded-Focus/agent-circus/tree/develop)
-> and later into the
-> [`main` branch](https://github.com/Embedded-Focus/agent-circus/tree/main).
-> The `develop` and `main` branches are in maintenance mode. They receive
-> dependency updates only. Agent Circus checks these dependencies for
-> known vulnerabilities and updates them as needed.
+## Overview
 
-Run AI coding agents in sandboxed containers with full control over
-what they can see, reach, and inherit from your host environment.
+agent-circus runs AI coding agents inside [Microsandbox](https://microsandbox.dev/)
+(msb). Microsandbox starts each sandbox as a small virtual machine on your
+Linux host. Each sandbox boots from an OCI image, the same image format that
+Docker and Podman use.
 
-Docker and Podman are supported container runtimes. Docker is the default;
-Podman, including rootless operation, can be selected from the CLI, environment,
-or project configuration.
+The sandbox image contains the agent harnesses and a Docker engine. An agent
+harness is the CLI tool that drives an agent, for example `pi` or `opencode`.
+The Docker engine runs inside the sandbox, so agents can build and run
+containers in their own workspace. The Docker or Podman installation on your
+host only builds the sandbox image. It never runs agent workloads.
 
-Agent Circus wraps each agent in its own container, giving you
-a reproducible, isolated environment that works across machines and
-projects. You decide which files agents can access, secrets stay on
-the host, and a built-in firewall restricts outbound network access to
-known-good destinations.
+agent-circus reads the project file `.agent-circus/config.toml` and a
+user-global config. It applies the keys it supports and logs a warning
+for every other key.
 
-It also provides a universal configuration mechanism for operating
-agent harnesses consistently. Authentication, Git identity, SSH agent
-forwarding, MCP servers, environment variables, extra mounts, hooks,
-ports, and data stores are declared once in project config and applied
-across supported agents.
+The supported agent harnesses come preinstalled in the image:
 
-Getting started takes two commands. No files are written to your
-project, no manual container setup required. Customize per-project only
-when you need to.
-
-Currently supported agents:
-
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Anthropic)
-- [Codex](https://openai.com/codex/) (OpenAI)
-- [Vibe CLI](https://docs.mistral.ai/mistral-vibe/introduction) (Mistral)
+- [Pi](https://pi.dev/) (Earendil Works), the default interactive harness
 - [OpenCode](https://opencode.ai/) (SST)
-- [Pi](https://pi.dev/) (Earendil Works), driven through the
-  [pi-acp](https://github.com/svkozak/pi-acp) adapter
+- [Claude Code](https://github.com/anthropics/claude-code) (Anthropic)
+- [Codex](https://github.com/openai/codex) (OpenAI)
+- [pi-acp](https://github.com/svkozak/pi-acp), the ACP adapter for Pi
+- [claude-agent-acp](https://github.com/agentclientprotocol/claude-agent-acp),
+  the ACP adapter for Claude Code
+- [codex-acp](https://github.com/agentclientprotocol/codex-acp), the ACP
+  adapter for Codex
 
-IDEs interface with agents via the [Agent Client Protocol](https://agentclientprotocol.com/) (ACP).
-
-## Open Protocols
-
-Agent Circus is built around open interfaces instead of editor- or
-vendor-specific integrations:
-
-<p align="center">
-  <img src="assets/open_protocols.svg" alt="Open protocols map showing ACP and MCP relationships" width="680" />
-</p>
-
-- [ACP — Agent Client Protocol](https://agentclientprotocol.com/) connects
-  editors and IDEs to coding agents through a shared client protocol.
-- [MCP — Model Context Protocol](https://modelcontextprotocol.io/) connects
-  agents to tools, services, and contextual data sources.
-- [Agent Skills](https://agentskills.io/) package reusable agent capabilities
-  as portable, declarative instructions and resources.
-- [A2A — Agent2Agent Protocol](https://a2a-protocol.org/) defines a common
-  protocol for communication and task handoff between agents.
+Editors and IDEs connect to the agents through the
+[Agent Client Protocol](https://agentclientprotocol.com/) (ACP). In ACP mode,
+the editor talks to the agent through the sandbox, and the sandbox boundary
+stays in place.
 
 ## Getting Started
 
-### Installing the `agent-circus` Tool
+This section gets you from zero to a first agent session. Read the
+requirements first, because KVM and an image builder are host features.
 
-The host CLI requires Python 3.11 or newer and is tested on Python 3.11–3.14.
-The agent containers manage their own runtimes; the Mistral Vibe image uses
-Python 3.14 independently of the Python running the host CLI.
+### Requirements
 
-Install the published package from PyPI with
-[uv](https://docs.astral.sh/uv/getting-started/installation/):
+You need a Linux host with KVM. KVM is the virtual machine feature of the
+Linux kernel. agent-circus does not need it directly, but msb does. Run
+`ls /dev/kvm` to make sure that KVM is available. You also need
+[uv](https://docs.astral.sh/uv/getting-started/installation/)
+and one image builder, Podman or Docker, on the host.
 
-``` shell
-uv tool install agent-circus
-```
+You do not need a separate msb installation. The `microsandbox` Python
+package bundles the `msb` binary, and agent-circus finds it there.
 
-It is also possible to use agent-circus without installing it explicitly. For example:
+### Installing agent-circus
 
-``` shell
-uvx agent-circus version
-```
-
-Alternatively, install it into a Python 3.11 or newer virtual environment using `pip`:
-
-``` shell
-python3.11 -m venv agent-circus-venv
-. agent-circus-venv/bin/activate
-python -m pip install agent-circus
-```
-
-The `agent-circus` command is available while this virtual environment is
-activated. Activate it again in a new shell before using the tool. On Linux,
-the `venv` module may be provided as a separate package by your distribution.
-
-You can use `agent-circus` from any project directory; cloning this repository
-is not required. Docker or Podman must be installed on the host to build and run
-the agent containers.
-
-To install from a source checkout for development instead, run this command in
-the repository root:
+To install agent-circus from a checkout, run this command in the
+repository root:
 
 ``` shell
 uv tool install .
 ```
 
+To run agent-circus without installing it, use `uv run` from the repository
+root:
+
+``` shell
+uv run agent-circus version
+```
+
 ### Version Information
 
-The `version` command includes the full Git commit. For an installation from a
-local checkout, it reports that checkout's current `HEAD`. Distribution
-artifacts, including packages installed from PyPI, contain the commit recorded
-when they were built.
+The `version` command prints the version of agent-circus, the path of the msb
+binary, and the msb version. agent-circus expects the msb version that matches
+the installed `microsandbox` package. It logs a warning when a msb binary on
+your `PATH` differs from that version, because command line flags can
+change between releases.
 
-### Shell Completions
+### Installing a Pre-release
 
-`agent-circus completion <shell>` prints a completion script for `bash`, `zsh`,
-`fish`, `powershell`, or `pwsh` (defaults to `bash`), following the
-`<cmd> completion <shell>` convention used by tools like `kubectl` and `gh`.
-Source it directly in your shell startup file:
+Pre-releases (for example `2.0.0rc1`) are published to
+[TestPyPI](https://testpypi.org/project/agent-circus/) only. The install
+command is still being tested. Until then, download the wheel from
+<https://test.pypi.org/project/agent-circus/#files> and install it from
+the download:
 
 ``` shell
-source <(agent-circus completion bash)
+uv tool install ./agent_circus-<version>-py3-none-any.whl
 ```
 
-Alternatively, for bash, `agent-circus completion bash --install` writes the
-script to `~/.bash_completion.d/agent-circus`, a directory many bash-completion
-setups auto-source, creating it if missing and leaving it untouched if already
-up to date:
+## How It Works
+
+agent-circus manages one sandbox per workspace. The sandbox name is
+`agents-<project>`, where `<project>` is the name of your project directory.
+All agent harnesses run in this one sandbox. You select the harness per
+command, not per sandbox.
+
+The lifecycle has three steps:
+
+1. Build the agent image on the host and import it into the msb image cache.
+2. Boot the sandbox from that image with `agent-circus up`.
+3. Start a harness with `agent-circus exec` whenever you need one.
+
+The sandbox boots with `msb run --detach --init auto`. That hands PID 1
+to s6-overlay, the init system in the image. s6 starts and supervises
+the services of the image: the SSH agent bridge, the TLS CA import, and
+the Docker engine. The services start on every boot, including
+`agent-circus start`, and s6 restarts them when they crash. A
+`msb create` boot skips this hand-off. agent-circus never uses it.
+
+After a boot or a start, agent-circus asks the guest for `docker info` until
+the Docker engine answers. If the engine does not answer within the probe
+budget, agent-circus prints the last probe error and the path to the guest log.
+
+## Images
+
+The `build` command builds the agent image on the host and imports it into
+the msb image cache:
 
 ``` shell
-agent-circus completion bash --install
+agent-circus build --platform linux/amd64
 ```
 
-If you use a shorter alias for `agent-circus` (e.g. `alias ac=agent-circus`),
-pass `--alias` (bash only) to also define the alias and wire up its
-completion in the same script:
+The image comes from a Dockerfile that ships with agent-circus. That
+Dockerfile pins the base image, the uv image, and all agent versions by
+hash, so builds are reproducible. `build` writes the image to a temporary
+tar file, imports it with `msb load`, and deletes the tar file. Use
+`--keep-tar <path>` to write the tar file to a path and keep it.
+
+The build skips itself when the image tag is already in the msb image cache.
+Use `--force` to rebuild anyway. Use `--engine docker` to build with Docker
+instead of Podman.
+
+If you use your own Dockerfile instead (see `[image] dockerfile`), it
+needs an init system for the sandbox services, or the setting
+`init = "none"` under `[msb.sandbox]`. Without an init, the image must
+not set `ENTRYPOINT ["/init"]`; msb then keeps its own guest agent as
+PID 1. See "Configuration Reference" and "Lifecycle".
+
+The `import` command loads an existing docker-archive tar file into the msb
+image cache:
 
 ``` shell
-agent-circus completion bash --install --alias ac
+agent-circus import msb-agents.tar
 ```
 
-See the [uv tool documentation](https://docs.astral.sh/uv/concepts/tools/) on how to work with tools in general.
+## Lifecycle
 
-After installing you can start right away in one of your projects
-([instant mode](#instant-mode-preferred)):
+All commands work from your project directory and address the sandbox
+`agents-<project>` of that workspace. The commands are:
+
+| Command | Effect |
+| --- | --- |
+| `agent-circus up` | Boot the sandbox, or reuse the running one. |
+| `agent-circus ps` | Show sandbox status for this workspace. |
+| `agent-circus exec ...` | Run a command or an ACP session in the sandbox. |
+| `agent-circus stop` | Stop the sandbox. Guest state persists. |
+| `agent-circus start` | Start the sandbox again and verify the Docker engine. |
+| `agent-circus rm -f` | Remove the sandbox and its guest state. |
+| `agent-circus destroy` | Remove the sandbox with a confirmation prompt. |
+
+`up` never replaces an existing sandbox. Guest state survives every `up`.
+Your workspace files come from the host and stay on the host, so `rm` and
+`destroy` do not touch them. To reclaim the space of cached images, run
+`msb image prune`.
+
+`ps` prints a `docker compose ps`-style table (`NAME`, `ID`, `CREATED`,
+`STATUS`, `PORTS`) with relative creation ages. The `PORTS` column shows
+the persisted port forwards in `podman ps` style (for example
+`127.0.0.1:8000->8000/tcp`), comma-joined, and stays empty when the
+sandbox publishes no ports. `ps --all` lists every sandbox
+that msb knows about, not only the sandbox of this workspace.
+`ps --running` lists only running sandboxes.
+
+`agent-circus stop` shuts the sandbox down cleanly: it asks the s6 init
+inside the sandbox to stop all services in order, and waits up to
+`stop_timeout` seconds (default 45) for msb to report the sandbox as
+stopped. Only then does it force the stop. **Do not use `msb stop` or
+`msb restart` directly** for these sandboxes: msb 0.7.13 waits forever
+(status `draining`), because the init is PID 1 and msb does not reach
+it. If that happened to you, run
+`msb exec agents-<project> -- kill -TERM 1` or
+`msb stop --force agents-<project>`.
+
+For scripts, `ps --format json` prints a JSON array with `name`, `id`,
+`status`, `created_at`, `updated_at` and a typed `ports` array (objects
+of `host`, `host_port`, `guest_port`, `protocol`) per sandbox, and
+`ps --quiet` prints sandbox names only. Both stay silent when no
+sandbox matches.
+
+## Running Agents
+
+Boot the sandbox once, then start a harness:
 
 ``` shell
-# Docker (default)
-agent-circus build
-agent-circus exec claude-code -- claude-agent-acp
-
-# Podman
-agent-circus build --runtime podman
-agent-circus exec --runtime podman claude-code -- claude-agent-acp
+agent-circus up
+agent-circus exec
 ```
 
-The `exec` command automatically starts the container if it is not
-running yet. There is no separate `up` step needed.
-
-Agent Circus is not tied to ACP or editor integrations: the command
-after `--` can also be a direct agent CLI such as `codex`, or a shell
-such as `bash`, when you want to work inside the harness container.
-
-**Note:** Auto-started containers are not automatically removed when
-they are no longer in use. Run `agent-circus remove` to clean up idle
-containers.
-
-### Upgrading and Uninstalling
-
-For an installation managed by `uv`, upgrade or uninstall the tool with:
+Without a command, `exec` starts Pi, the default harness. To run another
+command, pass it after `--`:
 
 ``` shell
-uv tool upgrade agent-circus
-uv tool uninstall agent-circus
+agent-circus exec -- bash
+agent-circus exec -- docker ps
+agent-circus exec -- opencode
+agent-circus exec -- claude
+agent-circus exec -- codex
 ```
 
-For an installation in an activated virtual environment, use:
+`exec` boots the sandbox first when it is not running. The workspace is
+mounted at the same absolute path as on the host, so file paths agree
+between your editor and the agent.
+
+agent-circus brings your host harness configuration into the sandbox:
+
+- **Claude Code and Codex**: the host config directories `~/.claude` and
+  `~/.codex` are bind-mounted into the guest (`/root/.claude` and
+  `/root/.codex`) when the sandbox is created. The mount is read-write and
+  carries the credentials file (`.credentials.json`, `auth.json`), so a
+  login or token refresh inside the sandbox persists on the host, and the
+  other way around. A missing host directory is skipped with a warning;
+  create it and re-create the sandbox (`agent-circus rm -f && agent-circus up`)
+  to mount it. Because msb fixes mounts at creation, agent-circus also warns
+  when a running sandbox was created without a mount that is expected now.
+- **Pi and OpenCode**: selected config files (`~/.pi/agent/settings.json`,
+  `~/.pi/agent/models.json`, `~/.config/opencode/opencode.json`) are copied
+  into the guest after every boot or start. The copy is one-way: guest-side
+  edits to these files are overwritten by the next refresh. Authenticate
+  through `env_passthrough` (see [Secrets](#secrets)).
+
+agent-circus pre-trusts the agent workdir (`[agent] workdir`), the
+worktree mirror path (when enabled), and every
+`additional_dirs` mount for pi and pi-acp: after each boot or start it
+writes `~/.pi/agent/trust.json` in the guest, so the first harness start in
+a new sandbox does not ask to trust the directory. The write is idempotent
+and **overwrites** an existing trust file — add your own entries through
+the configuration, not by editing the file in the guest. If the write
+fails, agent-circus warns and pi simply asks on first start, as before.
+
+### Skills
+
+Project skills need no setup: they live in the repository
+(`.agents/skills/`, `.claude/skills/`, `.pi/skills/`), and the workspace
+is mounted read-write. Install them on the host or from inside the
+sandbox. Use relative symlinks; installers such as `npx skills` already
+do this. Absolute symlinks to host paths break inside the sandbox;
+`up` and `start` warn about skill links that do not resolve there.
+
+- User skills in `~/.pi/agent/skills`,
+  `~/.config/opencode/skills` and `~/.config/opencode/skill` are mounted
+  read-only at the same paths below `/root`. A skill changed in the
+  sandbox would later run on your host, so the mount refuses writes.
+- Install user skills on the host. A new skill appears in a running
+  sandbox; restart the agent session to load it. If the directory did
+  not exist when the sandbox was created, re-create the sandbox with
+  `agent-circus rm -f && agent-circus up`. `up` warns when a user skill
+  directory exists on the host but is not mounted in the sandbox.
+- `~/.claude/skills` and `~/.codex/skills` are part of the read-write
+  config mounts, so they are not read-only.
+- Skills that an agent writes in the sandbox land in the project.
+  Review them, then move them to your user directory on the host if you
+  want them everywhere.
+
+#### System skills
+
+System skills are skills that every sandbox sees. They live in a store
+on the host, by default `~/.local/share/agent-circus/system-skills/`
+(below `$XDG_DATA_HOME` when that is set). Set `[skills] store` to
+use another absolute path (`~` is allowed). agent-circus reads this key
+only from the user config (`~/.config/agent-circus/config.toml`); it
+ignores it in a project config, with a warning, because the store is
+the same for all projects.
+
+Manage the store with:
 
 ``` shell
-python -m pip install --upgrade agent-circus
-python -m pip uninstall agent-circus
+agent-circus skills add <owner>/<repo> --skill <name> -y
+agent-circus skills list
+agent-circus skills remove <name> -y
+agent-circus skills update
+agent-circus skills check
+agent-circus skills find <query>
 ```
 
-## Working with the Environment
+Each command runs the `skills` CLI inside a short-lived sandbox that
+mounts the store read-write, so the host needs no Node.js. You do not
+type `-g`; agent-circus adds it for you. Every command boots a small VM,
+which takes a few seconds. The installer uses the configured network
+profile and needs access to npm and the git host. Private repositories
+do not work: the installer has no SSH agent and no git credentials.
+dockerd inside the installer has no disk and fails; that is harmless.
+A running agent may briefly see a half-copied skill during an install.
 
-There are two modes of operation:
+Agents see the skills at `/root/.agents/skills`, read-only. msb enforces
+this on the host side, so agents cannot change them. A new skill shows
+up in a running sandbox; restart the agent session to load it.
+Sandboxes created before this feature need one
+`agent-circus rm -f && agent-circus up`.
 
-### Instant Mode (Preferred)
+Codex, Pi and OpenCode read the skills at `/root/.agents/skills`. Claude
+Code (also through `claude-agent-acp`) reads them as managed skills at
+`/etc/claude-code/.claude/skills`, the same store folder mounted a
+second time. If a new skill does not show up in a running Claude Code
+session, restart the session. A system skill wins over a skill with the
+same name in `~/.claude/skills`. Claude Code ignores this folder when
+your account gets managed settings from a Claude organization, or when
+`CLAUDE_CODE_DISABLE_POLICY_SKILLS` is set. Sandboxes created before
+Claude Code support also need one `agent-circus rm -f && agent-circus up`.
 
-Instant mode uses the templates bundled in the `agent-circus` package
-directly. No files are written to your project directory. Just run
-commands against any workspace:
+Your host `~/.agents/skills` directory is **not** used. agent-circus is
+independent of it; with `--log-level DEBUG`, `up` notes when that
+directory holds skills. To
+move skills from there, install them again with
+`agent-circus skills add`.
+
+### ACP Sessions
+
+For an ACP session from an editor or IDE, add `--acp`:
 
 ``` shell
-# Build container images
-agent-circus build
-
-# Execute a command in a container (starts it automatically)
-agent-circus exec claude-code -- claude-agent-acp
-agent-circus exec codex -- codex-acp
-agent-circus exec opencode -- opencode
-agent-circus exec pi -- pi-acp
-agent-circus exec -T claude-code -- echo hello   # non-interactive
-
-# Optionally start containers ahead of time
-agent-circus up                           # start all services
-agent-circus up claude-code               # start a single service
-
-# Show status of agent containers
-agent-circus ps
-
-# Remove all related resources
-agent-circus remove
-agent-circus remove --volumes             # also remove named volumes
-agent-circus remove --force               # don't ask for permission
+agent-circus exec --acp -- pi-acp
+agent-circus exec --acp -- opencode acp
+agent-circus exec --acp -- claude-agent-acp
+agent-circus exec --acp -- codex-acp
 ```
 
-### Updating container dependencies
+In ACP mode, agent-circus streams the session between your editor and the
+sandbox without a pseudo-terminal. Standard output carries only ACP
+messages. agent-circus keeps standard error silent: editors treat any
+stderr output from the agent as an API error and show an error dialog
+for it. Warnings and status messages therefore go to the log file (see
+[Configuration](#configuration) below); pass `--log-file` or configure
+`[logging]` to keep them, otherwise `/tmp/agent-circus-acp.log` is used. Fatal errors
+still print to standard error right before agent-circus exits. The stream
+copies bytes without change, so large messages and non-ASCII text
+arrive intact. When the editor disconnects, agent-circus stops the agent
+process in the sandbox.
 
-Each Agent Circus release includes a baseline set of agent and tool versions.
-You can select newer upstream versions without upgrading the CLI:
+## Setting up Editors to Work with ACP
+
+### Emacs
+
+This is a working [agent-shell](https://github.com/xenodium/agent-shell)
+configuration based on agent-circus. The runner starts the harness through
+`agent-circus exec --acp`, so the editor talks to the sandbox over ACP. The
+path resolver maps file paths between your editor and the `/workspace`
+mount in the sandbox.
+
+The sandbox carries Pi, OpenCode, Claude Code, and Codex. agent-shell
+knows the harness command for every agent it supports (for example
+\='("opencode" "acp") for OpenCode); these defaults name the harnesses
+that ship in the sandbox image, so the runner returns the exec prefix
+only. API keys do not go into
+this configuration; agent-circus reads them from `env_passthrough` on the
+host. If you change the mount in `[msb.mounts]`, change the workspace path
+constant to match it.
+
+``` emacs-lisp
+(defconst rpo/agent-shell--msb-workspace-path "/workspace/"
+  "The workspace path inside the agent-circus sandbox.")
+
+(defun rpo/agent-shell--resolve-msb-path (path)
+  "Resolve PATH between local filesystem and the sandbox workspace.
+
+For example:
+
+- /workspace/README.md
+    => /home/you/projects/my-project/README.md
+- /home/you/projects/my-project/README.md
+    => /workspace/README.md"
+  (let ((cwd (agent-shell-cwd)))
+    (if (string-prefix-p cwd path)
+        ;; Local -> sandbox
+        (string-replace cwd rpo/agent-shell--msb-workspace-path path)
+      ;; Sandbox -> local
+      (if agent-shell-text-file-capabilities
+          (if-let* ((_ (string-prefix-p rpo/agent-shell--msb-workspace-path path))
+                    (local-path (expand-file-name
+                                 (string-replace rpo/agent-shell--msb-workspace-path cwd path))))
+              (or
+               (and (file-in-directory-p local-path cwd) local-path)
+               (error "Resolves to path outside of working directory: %s" path))
+            (error "Unexpected path outside of workspace folder: %s" path))
+        (error "Refuse to resolve to local filesystem with text file capabilities disabled: %s" path)))))
+
+(defun rpo/agent-shell-msb-runner (_buffer)
+  "Return the agent-circus exec command prefix to run for BUFFER's agent.
+
+This is the prefix only. agent-shell appends the agent's own ACP
+command (for example \='("opencode" "acp") for OpenCode) after the
+prefix. Those per-agent defaults name the harnesses that ship in
+the sandbox image (opencode acp, pi-acp, claude-agent-acp,
+codex-acp). Do NOT add a harness command to the prefix: the
+doubled command makes the guest harness reject its arguments."
+  (list "agent-circus" "exec" "--acp" "--"))
+
+(use-package agent-shell
+  :ensure t
+  :config
+  (setq acp-logging-enabled t)
+  (setq agent-shell-command-prefix #'rpo/agent-shell-msb-runner)
+  (setq agent-shell-path-resolver-function #'rpo/agent-shell--resolve-msb-path)
+  (setq agent-shell-file-completion-enabled t))
+```
+
+Start the sandbox before the first session, or keep it running. `exec`
+boots the sandbox by itself, but the first session then waits for the boot.
 
 ``` shell
-agent-circus deps show
-agent-circus deps update --dry-run
-agent-circus deps update
-agent-circus build
 agent-circus up
 ```
 
-`deps update` updates the complete supported dependency set: npm, uv, yq,
-Claude Code, Claude Agent ACP, Bun, Claude-Mem, Codex, Codex ACP, OpenCode,
-and Mistral Vibe, including its Python transitive dependencies. It accepts
-stable versions and does not automatically downgrade existing dependencies.
-The Node base image and apt packages are outside this updater's scope.
-
-#### Host requirement: uv
-
-Applying an update requires the `uv` executable on the host. Install it before
-using `deps update`; no particular host Python version needs to be installed:
-
-``` shell
-curl -LsSf https://astral.sh/uv/install.sh | sh
-uv --version
-```
-
-The operation also needs network access to GitHub, the Python package registry,
-and the Python download service. It runs entirely on the host and does not start
-or execute code inside an agent container. Agent Circus runs the following
-command in a disposable copy of the effective container recipe:
-
-``` shell
-uv lock --upgrade --prerelease if-necessary --python 3.14 --no-config
-```
-
-Mistral Vibe supports Python 3.12 and newer. Agent Circus deliberately runs it
-on Python 3.14 to use the current Python runtime in the controlled container
-environment. For lock resolution, `uv` uses an existing Python 3.14 interpreter
-or automatically downloads a managed interpreter to its host cache. This does
-not require a system-wide Python installation or manual preparation. Automatic
-setup can fail if downloads are disabled, for example with
-`UV_PYTHON_DOWNLOADS=never`, or if the download service cannot be reached. To
-diagnose that configuration directly, run:
-
-``` shell
-uv python find 3.14
-```
-
-The command only generates a lockfile; it does not create or synchronize a host
-project environment. The candidate recipe is temporary, and the active
-dependency selection changes only after every lookup, lock, and validation step
-succeeds. Direct tool versions must be stable. Python transitive dependencies
-may use a prerelease when it is required by a selected stable package; Mistral
-Vibe currently has such a dependency. `--dry-run` only checks direct tool
-versions; it does not prepare Python 3.14 or resolve Python
-transitive dependency changes.
-
-If `uv` fails, Agent Circus prints its captured output after removing likely
-credentials. To retain diagnostics from a retry, put the global logging options
-before the subcommand:
-
-``` shell
-agent-circus --log-file /tmp/agent-circus.log deps update
-```
-
-There is no persistent per-operation log unless `--log-file`, `LOGFILE`, or the
-user-global logging configuration is set. Output from an earlier invocation
-that did not use one of those options cannot be recovered.
-
-Updates take effect only after rebuilding images and recreating containers.
-Run `agent-circus up` after `build` to let Compose recreate containers whose
-images changed. Existing running containers are not changed by `deps update`.
-You can also use `agent-circus up --build` for the build/start steps.
-
-#### Authentication
-
-GitHub discovery uses `GITHUB_TOKEN`, falling back to `GH_TOKEN`, or anonymous
-access if neither is set. For example, with a token already set in your shell:
-
-``` shell
-agent-circus deps update --dry-run
-```
-
-The token needs access to public release metadata; no repository write access
-is needed. Authentication and API rate-limit errors leave the active dependency
-selection unchanged. Tokens are not saved in snapshots or added to container
-build arguments. npm and PyPI discovery use public registries; private registry
-configuration and automatic reuse of `gh auth` credentials are not supported by
-this feature.
-
-#### Selection scope and history
-
-In instant mode, selections live under
-`$XDG_DATA_HOME/agent-circus/dependencies/`, defaulting to
-`~/.local/share/agent-circus/dependencies/`. An update affects subsequent builds
-in all instant-mode workspaces for that user.
-
-In deploy mode, selections live in `.agent-circus/dependencies/` in the project
-and take precedence over user-wide selections. A deployed project with no
-selection uses the versions in its deployed templates. You can commit its
-`selection.json` and `snapshots/` directory to share exact selections with your
-team; exclude the `.lock` file. All commands accept `--workspace PATH` (`-w PATH`)
-after the subcommand.
-
-``` shell
-agent-circus deps history
-agent-circus deps rollback
-agent-circus deps reset
-agent-circus deps show --workspace /path/to/project
-```
-
-`rollback` selects the previous snapshot; repeating it switches back to the
-selection you just left. `reset` selects the installed CLI release's baseline.
-Both operations work without upstream access or host uv. Rebuild and run `up`
-after either operation to change the containers.
-
-Snapshots contain a version manifest (`versions.toml`), `pyproject.toml`, and
-`uv.lock`. They are immutable and identified by their content hash. Successful
-updates save the previous selection, including the bundled baseline, before
-atomically activating the new snapshot. Failed updates leave the active
-selection intact; unchanged updates do not duplicate snapshots or discard the
-rollback target. Snapshots are retained until you manually remove unused ones.
-Do not edit snapshot contents or remove active/previous snapshots.
-
-`deps show` distinguishes the release baseline from locally resolved upstream
-versions. Successful upstream resolution does **not** establish that the new
-agents work together. Snapshots preserve versions, not downloaded artifacts or
-container images: rebuilding still requires upstream artifacts to be available.
-They also do not lock every npm transitive dependency, apt package, or base-image
-digest, so they do not guarantee byte-for-byte reproducible images.
-
-#### CLI upgrades and deployed templates
-
-Instant mode uses a new release's baseline after a CLI upgrade when no explicit
-selection is active. Explicit selections remain active if their recipe format
-is compatible; incompatible selections produce an error instead of being
-silently replaced. Use `deps reset` to switch to the installed release's
-baseline. Saved baseline snapshots remain available for rollback when compatible.
-Deployed projects keep their files and selection across CLI upgrades; use
-`deps reset` explicitly to select the new baseline.
-
-Updates never overwrite deployed Dockerfiles or Compose files. Builds use a
-temporary copy and a build override that preserves the original Compose path
-base. This first implementation recognizes recipes matching the installed
-release except for supported version pins. Custom hook scripts and other copied
-files are preserved; changes to Dockerfile, Compose structure, or Python project
-configuration require migration before using a dependency selection.
-
-To migrate an unsupported deployment, back up your customizations, redeploy with
-`agent-circus init --deploy --force`, and reapply supported customizations through
-hooks and `config.toml`. The force option overwrites deployed template files,
-including hooks, so keep your backup until migration is complete.
-
-Maintainers can continue using `make update-templates-dryrun` and
-`make update-templates` to prepare the next release's bundled baseline. These
-source-maintenance targets are separate from end-user dependency selections.
-The manual **Dependency container smoke tests** GitHub Actions workflow builds
-both template modes and checks agent version commands against the baseline or
-newly resolved upstream dependencies; run it before accepting a release baseline.
-
-### Deploy Mode
-
-Deploy mode copies configuration files into a `.agent-circus/`
-directory inside your project. Use this if you need to customize the
-`Dockerfile` or `compose.yaml` per project.
-
-``` shell
-# Deploy configuration files to the workspace
-agent-circus init --deploy
-
-# All other commands work the same; deploy mode is auto-detected
-agent-circus build
-agent-circus exec claude-code -- claude-agent-acp
-
-# Remove containers and deployed files
-agent-circus remove --destroy             # remove containers + .agent-circus/
-agent-circus remove --destroy --force     # don't ask for permission
-```
-
-When both a deployed `.agent-circus/` directory and instant mode are
-available, deploy mode takes priority.
-
-## Authentication
-
-Each agent authenticates against its vendor's API using the
-credentials already present on the host. Agent Circus seeds a private,
-project-local writable copy of each vendor configuration directory and mounts
-that copy into the corresponding container:
-
-| Agent       | Seed source          | Container path                |
-|-------------|----------------------|-------------------------------|
-| Claude Code | `~/.claude`          | `/home/node/.claude`          |
-| Codex       | `~/.codex`           | `/home/node/.codex`           |
-| Vibe CLI    | `~/.vibe`            | `/home/node/.vibe`            |
-| OpenCode    | `~/.config/opencode` | `/home/node/.config/opencode` |
-| Pi          | `~/.pi`              | `/home/node/.pi`              |
-
-Pi seeds selectively. A host `~/.pi` holds roughly 400 MB, most of it in
-`agent/npm` (installed Pi packages) and `agent/install` (managed Pi
-releases). Both contain code that would run inside the container, and
-`agent/sessions` holds host-side transcripts. Agent Circus therefore copies
-only `agent/settings.json` and `agent/models.json` into the Pi store. See
-[Pi](#pi-pi-acp-adapter) for what that means for sessions and packages.
-
-The copies are stored under
-`~/.local/state/agent-circus/<project>/agent-config/<agent>/` with directory
-permissions restricted to the current user. They are seeded only once, so
-container changes do not modify host configuration and later host changes are
-not copied automatically. Agent Circus merges generated settings such as MCP
-servers into these writable copies before startup.
-
-To discard a copy and seed it again from the current host configuration on the
-next start, first stop the affected service and run:
-
-```shell
-agent-circus config reset codex
-agent-circus config reset --all
-```
-
-Use `--force` to skip the confirmation prompt. Reset refuses to delete a config
-store while its service is running.
-
-For credential refresh or other explicit edits to the real host provider
-configuration, see [Host Credentials](#host-credentials) below.
-
 ## Configuration
 
-Agent Circus can be configured via TOML files. Settings are resolved
-in this order (last wins):
+agent-circus reads `.agent-circus/config.toml` in your project, plus a
+user-global file from
+`$XDG_CONFIG_HOME/agent-circus/config.toml`. The
+project file wins.
 
-1. **User-global** — `$XDG_CONFIG_HOME/agent-circus/config.toml`
-   (default: `~/.config/agent-circus/config.toml`)
-2. **Project-local** — `.agent-circus/config.toml` in the workspace
+agent-circus applies its own `[msb]` table, plus the `logging`,
+`env_passthrough`, `additional_dirs`, `git` (only `worktree_mirror`), and
+`port_forwards` keys. Every other key produces a warning.
 
-CLI flags override both.
-
-> [!IMPORTANT]
-> A `key = value` line belongs to the last `[table]` header above it, blank
-> lines or not. A top-level key placed after `[runtime]`, `[hooks]`,
-> `[ssh]`, etc. silently becomes part of that table instead of standing on
-> its own, with no error or warning:
->
-> ``` toml
-> [runtime]
-> engine = "podman"
->
-> env_passthrough = ["GRAFANA_*"]  # WRONG: becomes runtime.env_passthrough
-> ```
->
-> Place standalone keys **before** the first `[table]` header instead.
-
-### Initialising config with `init`
-
-Rather than editing `config.toml` by hand, use `agent-circus init` flags to
-write common options directly. This creates `.agent-circus/config.toml`
-(and the directory, if absent) without copying any template files — instant
-mode continues to work alongside a `config.toml`.
-
-``` sh
-# Enable SSH agent forwarding
-agent-circus init --ssh
-
-# SSH forwarding with config and known_hosts passthrough
-agent-circus init --ssh \
-  --ssh-config ~/.ssh/config \
-  --ssh-known-hosts ~/.ssh/known_hosts
-
-# Shadow secret files
-agent-circus init --shadow .env --shadow .env.local
-
-# Git config with commit signing
-agent-circus init --git --git-signing-key ~/.ssh/id_ed25519.pub
-
-# Combine with full deploy
-agent-circus init --deploy --ssh --git --shadow .env
-```
-
-All flags are additive and idempotent: running them again merges into the
-existing `config.toml` without overwriting unrelated keys.
-
-| Flag | Description |
-|---|---|
-| `--ssh` | Add `[ssh]` table to enable SSH agent forwarding |
-| `--ssh-config PATH` | Set `ssh.config_path` (implies `--ssh`) |
-| `--ssh-known-hosts PATH` | Set `ssh.known_hosts_path` (implies `--ssh`) |
-| `--shadow TEXT` | Append a path to the `shadow` list (repeatable) |
-| `--git` | Add `[git]` table to enable Git config forwarding |
-| `--git-config PATH` | Set `git.config_path` (implies `--git`) |
-| `--git-signing-key PATH` | Set `git.signing_key_path` (implies `--git`) |
-| `--hosts-pattern TEXT` | Append a pattern to `hosts.patterns` (repeatable) |
-| `--ca-cert-pattern TEXT` | Append a pattern to `ca_certs.patterns` (repeatable) |
-| `--env-pattern TEXT` | Append a pattern to `env_passthrough` (repeatable) |
-| `--git-worktree-mirror` | Set `git.worktree_mirror = true` and write `AGENTS.md` |
-
-### Container Runtimes
-
-Docker and Podman are supported container runtimes. Docker is the default.
-Podman supports rootless workflows and uses `podman compose`, which delegates
-to an installed Compose provider such as `podman-compose` or Docker Compose.
-
-Select the runtime with, in priority order:
-
-1. CLI option:
-   ``` shell
-   agent-circus up --runtime podman
-   agent-circus build --runtime docker
-   ```
-2. Environment variable:
-   ``` shell
-   AGENT_CIRCUS_RUNTIME=podman agent-circus up
-   ```
-3. Config file:
-   ``` toml
-   [runtime]
-   engine = "podman"
-   ```
-4. Default:
-   ``` text
-   docker
-   ```
-
-The CLI option always wins over the environment. For example, this uses Docker:
+agent-circus logs to stderr. Set the level and an optional log file either on
+the command line or in the config; the command line wins.
 
 ``` shell
-AGENT_CIRCUS_RUNTIME=podman agent-circus up --runtime docker
+agent-circus --log-level DEBUG --log-file /tmp/agent-circus.log exec --acp --
 ```
-
-Because Podman's Compose command delegates to an external provider, exact
-Compose behavior can depend on which provider and version are installed. Agent
-Circus logs runtime and provider version details at debug level to help diagnose
-provider-specific behavior.
-
-For Agent Circus-managed writable state, such as project-local agent config
-stores and data stores, Podman services use `userns_mode: keep-id` so rootless
-containers can access host-owned state directories without recursively changing
-host ownership with Podman's `U` volume option. The `[host_credentials]` auth
-file mounts (see [Host Credentials](#host-credentials)) use the same Podman
-user namespace behavior, but still point at the real host credential file.
-
-### Shadowing Files
-
-The `shadow` setting prevents host files from leaking into containers
-by overlaying them with `/dev/null` bind mounts:
 
 ``` toml
-shadow = [".env", ".env.local"]
+[logging]
+level = "DEBUG"
+file = "/tmp/agent-circus.log"
 ```
 
-This is useful for keeping API keys and other secrets in `.env` files
-out of agent containers.
+In ACP mode (`agent-circus exec --acp`), agent-circus never writes logs to
+stderr — editors report stderr output from the agent process as API
+errors (see [ACP Sessions](#acp-sessions)). Logs then go to the log file
+only; when no log file is configured, `/tmp/agent-circus-acp.log` is
+used.
 
-### MCP Servers
+## Execution Traces
 
-[MCP](https://modelcontextprotocol.io/) servers run as sidecar
-containers. Agent Circus starts them automatically and injects the
-server URLs into every agent's native configuration.
+An execution trace records resource use and ACP traffic metadata for one
+agent session. The trace does not change the ACP byte stream. For terminal
+sessions, it also does not intercept the terminal input or output.
 
-Add entries to `config.toml`:
+Use `--trace` to enable a trace for one session:
+
+``` shell
+agent-circus exec --trace -- pi
+agent-circus exec --trace --acp -- pi-acp
+```
+
+By default, agent-circus writes each trace to a new directory under
+`.agent-circus/traces/`. The `latest` file contains the ID of the newest
+trace. The project `.gitignore` excludes the `.agent-circus` directory.
+agent-circus does not delete old traces. Remove old trace directories when you
+no longer need them.
+
+Use this configuration to enable traces for all `exec` commands:
 
 ``` toml
-[[mcp_servers]]
-name = "filesystem"
-image = "mcp/filesystem:latest"
-```
-
-Optional fields: `port` (default `8080`), `transport` (default
-`streamable-http`), `path` (default `/mcp`), `env`, `command`,
-`volumes`, and `install_ca_certs` (default `false`).
-
-Configured `[hosts]` entries and `[ca_certs]` files are also forwarded to MCP
-sidecars. Set `install_ca_certs = true` for an MCP image that provides
-`/bin/sh`, `cp`, and `update-ca-certificates`; Agent Circus then installs the
-mounted certificates as root using a Docker Compose `post_start` hook. Leave it
-disabled for images that use another trust-store mechanism.
-
-Check running sidecars with `agent-circus ps --mcp`.
-
-To use an MCP server that is already running, configure its network URL instead
-of an image:
-
-```toml
-[[mcp_servers]]
-name = "existing"
-url = "http://host.docker.internal:9000/mcp"
-transport = "streamable-http"
-```
-
-Each entry must define exactly one of `image` or `url`. URL-based entries only
-inject agent configuration; Agent Circus does not create, start, stop, or show a
-sidecar for them. On Linux, `host.docker.internal` is mapped through Docker's
-`host-gateway`. The host server must listen on an address reachable from Docker,
-such as `0.0.0.0`; a service bound only to host `127.0.0.1` is generally not
-reachable from a bridge-network container.
-
-External MCP servers currently support unauthenticated HTTP or HTTPS access
-only. Authentication headers, tokens, OAuth, client certificates, and access to
-an existing host stdio process are not supported.
-
-To run an MCP server as a local stdio child process inside each agent container,
-install its executable in the agent image and configure it without `image` or
-`url`:
-
-```toml
-env_passthrough = ["re:^GITHUB_"]
-
-[[mcp_servers]]
-name = "github"
-transport = "stdio"
-command = "github-mcp-server"
-args = ["stdio"]
-env_vars = ["GITHUB_PERSONAL_ACCESS_TOKEN", "GITHUB_HOST"]
-```
-
-Install the GitHub MCP server in every agent image with a `base_root` build
-hook. This example installs version 1.2.0 for x86-64 agent images:
-
-```toml
-[hooks]
-base_root = """
-curl -fsSL \
-  https://github.com/github/github-mcp-server/releases/download/v1.2.0/github-mcp-server_Linux_x86_64.tar.gz \
-  | tar -xz -C /usr/local/bin github-mcp-server
-chmod 0755 /usr/local/bin/github-mcp-server
-"""
-```
-
-If the configuration already defines `hooks.base_root`, append these commands
-to that hook instead of adding a second `[hooks]` table. Rebuild the agent images
-after changing a build hook.
-
-Stdio entries require `command`; `args` and `env_vars` are optional lists of
-strings. They do not create Compose sidecars. The command must be available in
-every agent image, for example through a build hook.
-
-Environment forwarding has two steps: `env_passthrough` makes variables from the
-host available in the agent container, while `env_vars` tells MCP clients such
-as Codex which variable names may be forwarded to the stdio child process. Only
-the names are written to generated agent configuration; secret values remain in
-the environment.
-
-### Local LLM via llama.cpp (OpenCode)
-
-**Note**: Experimental feature; might change when implementing a future plugin mechanism.
-
-Add a `[llama_cpp]` table to `config.toml` to run a
-[llama.cpp](https://github.com/ggml-org/llama.cpp) server as a sidecar
-container and wire it into OpenCode as a local provider. When enabled,
-Agent Circus starts the sidecar automatically alongside the `opencode`
-container and injects the provider configuration into `opencode.json` so
-OpenCode uses the local model without any manual setup.
-
-``` toml
-[llama_cpp]
-# All fields are optional — defaults shown below
-model = "ggml-org/gemma-3-1b-it-GGUF/gemma-3-1b-it-Q4_K_M.gguf"
-models_cache = "${HOME}/.cache/huggingface"
-context_size = 2048
-extra_args = []
-```
-
-Fields:
-
-| Field | Required | Default | Description |
-|---|---|---|---|
-| `model` | no | `ggml-org/gemma-3-1b-it-GGUF/gemma-3-1b-it-Q4_K_M.gguf` | Model passed to `llama-server -m`. Accepts a HuggingFace path (`owner/repo/file.gguf`) or a local path inside the container. |
-| `models_cache` | no | `${HOME}/.cache/huggingface` | Host directory bind-mounted into the sidecar so downloaded models survive restarts. Use an absolute path or Compose environment interpolation (`${HOME}/…`); `~` is not supported. |
-| `context_size` | no | `2048` | Context window size passed to `--ctx-size`. |
-| `extra_args` | no | `[]` | List of additional raw flags appended to the `llama-server` command. |
-
-When `[llama_cpp]` is present, Agent Circus:
-
-1. Starts a `llama-cpp` sidecar using `ghcr.io/ggml-org/llama.cpp:server`.
-2. Bind-mounts `models_cache` to `/models` inside the sidecar and sets
-   `HF_HOME=/models` so the HuggingFace model cache is preserved across
-   restarts — models are only downloaded on first use.
-3. Adds `depends_on: llama-cpp` to the `opencode` service so the sidecar
-   starts first.
-4. Merges a `provider` block into `opencode.json` pointing OpenCode at
-   `http://llama-cpp:8080/v1`.
-
-The model identifier used inside OpenCode is derived from the filename stem
-of `model` — for example, `gemma-3-1b-it-Q4_K_M.gguf` becomes
-`gemma-3-1b-it-Q4_K_M`.
-
-> **CPU-only.** The `ghcr.io/ggml-org/llama.cpp:server` image runs on CPU.
-> GPU-enabled images (e.g. `server-cuda`) require additional Docker configuration
-> and are not currently supported by Agent Circus.
-
-> **OpenCode only.** The llama.cpp sidecar is started unconditionally when
-> `[llama_cpp]` is present, but the provider injection only targets the
-> `opencode` service. Other agents are unaffected.
-
-### Claude-Mem (Claude Code)
-
-**Note**: Experimental feature; might change when implementing a future plugin mechanism.
-
-Add a `[claude_mem]` table to `config.toml` to enable
-[Claude-Mem](https://docs.claude-mem.ai/) for Claude Code. Claude-Mem captures
-observations from Claude Code sessions and makes project knowledge available to
-future sessions.
-
-``` toml
-[claude_mem]
+[tracing]
 enabled = true
+directory = ".agent-circus/traces"
+sample_interval = 1.0
+repetition_threshold = 64
+capture_payloads = false
+max_payload_bytes = 104857600
 ```
 
-When enabled, Agent Circus:
+The `sample_interval` value sets the time in seconds between resource
+samples. The `repetition_threshold` value sets the number of equal bytes that
+creates an event. Relative values for `directory` use the project workspace
+as their base.
 
-1. Passes `CLAUDE_MEM_ENABLED=true` as a build argument to the `claude-code`
-   image, which installs the Claude-Mem package into it (see the rebuild note
-   below).
-2. Mounts a workspace-scoped Claude-Mem data directory at
-   `/home/node/.claude-mem`.
-3. Sets `CLAUDE_MEM_DATA_DIR=/home/node/.claude-mem` for the `claude-code`
-   service.
-4. Runs Claude-Mem setup idempotently when the `claude-code` container starts.
-5. Starts the Claude-Mem worker if it is not already running.
-
-Claude-Mem data is stored under
-`~/.local/state/agent-circus/<project>/data/claude-mem/` on the host. Each
-workspace gets its own memory store, so knowledge from different projects or
-customers is not mixed. Disabling `[claude_mem]` stops mounting and starting
-Claude-Mem and removes it from the next image build, but does not delete the
-existing memory data.
-
-Fields:
-
-| Field | Required | Default | Description |
-|-------|----------|---------|-------------|
-| `enabled` | no | `false` | Enable Claude-Mem for supported services |
-| `scope` | no | `workspace` | Memory scope; currently only `workspace` is supported |
-| `services` | no | `["claude-code"]` | Services that receive Claude-Mem; currently only `claude-code` is supported |
-
-Claude-Mem uses its own default provider configuration. If you configure
-provider API keys with Claude-Mem, forward them with `env_passthrough` so secret
-values remain outside Agent Circus config files.
-
-``` toml
-env_passthrough = ["CLAUDE_MEM_GEMINI_API_KEY", "CLAUDE_MEM_OPENROUTER_API_KEY"]
-```
-
-> **Claude Code only.** Claude-Mem support currently targets the `claude-code`
-> service. Other supported Claude-Mem IDEs and CLIs are not wired up by Agent
-> Circus yet.
-
-> **Rebuild required**: Claude-Mem is baked into the `claude-code` image only
-> when `[claude_mem].enabled` is `true` at build time. Run
-> `agent-circus build claude-code` (or `agent-circus up --build`) after
-> enabling `[claude_mem]`; without a rebuild the container starts with a
-> warning and Claude-Mem stays inactive until the image is built with the
-> package. Disabling `[claude_mem]` takes effect on the next rebuild.
-
-> **Compatible with `[host_credentials]`**: enabling direct host credential
-> mounts for `claude-code` (see [Host Credentials](#host-credentials)) does
-> not conflict with `[claude_mem]` — Claude-Mem's plugin files and the OAuth
-> credentials file live at different paths within the config directory.
-
-### Pi (pi-acp adapter)
-
-Pi runs inside the container like the other agents. The
-[pi-acp](https://github.com/svkozak/pi-acp) adapter speaks ACP over the
-container's stdin and stdout, and starts `pi --mode rpc` as a child process:
+Command-line options take priority over the configuration:
 
 ``` shell
-agent-circus exec pi -- pi-acp
+agent-circus exec --trace --trace-sample-interval 0.5 -- pi
+agent-circus exec --no-trace -- pi
+agent-circus exec --trace --trace-dir /tmp/msb-traces -- pi
 ```
 
-Two pins decide what gets installed. Both live in the service's build args
-and are tracked by `ac deps show` and `make update-templates`:
+### Trace Files
 
-| Pin               | Installs                                    |
-|-------------------|---------------------------------------------|
-| `PI_VERSION`      | `@earendil-works/pi-coding-agent` (the `pi` CLI) |
-| `PI_ACP_VERSION`  | `pi-acp` (the ACP adapter)                   |
+Each trace directory contains files for one execution. The trace directory
+uses mode `0700`. Trace files use mode `0600` because some files can contain
+project or session data.
 
-**State that persists.** The project config store mounts at `/home/node/.pi`,
-one level above Pi's own `~/.pi/agent`. That is deliberate: pi-acp stores its
-session map in `~/.pi/pi-acp/session-map.json`, so sessions and the adapter's
-mapping survive container removal together. You can resume those sessions in
-`pi` directly with `/resume`.
+The main files are:
 
-**State that does not cross the boundary.** The host `~/.pi` is not mounted.
-Only `settings.json` and `models.json` are seeded, once, into the project
-store. Host Pi extensions, packages, and sessions stay on the host, so
-extensions that must be available inside the container belong in the image.
-Install them in the `base-user.sh` hook file (deploy mode), which runs during the
-image build:
+| File | Contents |
+| --- | --- |
+| `manifest.json` | Trace version, start time, sandbox resources, executable name, and environment variable names. |
+| `summary.json` | Exit status, duration, maximum VM use, stream counts, and repetition event count. |
+| `events.jsonl` | Trace lifecycle events, collector errors, and repeated-byte events. |
+| `vm-metrics.jsonl` | VM CPU, memory, disk, and network samples from `msb metrics`. |
+| `processes.jsonl` | Guest process CPU, memory, I/O, thread, and file descriptor samples from `/proc`. |
+| `acp-transport.jsonl` | ACP chunk direction, size, hash, newline count, and longest equal-byte run. |
+| `msb-system.jsonl` | Microsandbox lifecycle, runtime, and kernel log entries. |
+| `agent-circus.log` | Log messages from agent-circus during the execution. |
+| `collector-errors.log` | Error output from trace collector processes. |
 
-``` bash
-# .agent-circus/hooks/base-user.sh
-npm install -g <pi-package>
+The process trace does not save command arguments or environment values. The
+manifest saves only the executable name. These limits prevent common prompts
+and API keys from entering the normal trace files.
+
+`acp-transport.jsonl` contains data only for ACP sessions. A terminal trace
+still contains VM metrics and guest process samples. Microsandbox records only
+the first primary exec session in its execution log, so this trace does not
+use that log as a copy of the agent stream.
+
+### Raw ACP Payloads
+
+Use `--trace-payloads` when chunk metadata is not sufficient. This option also
+enables tracing. It saves the exact ACP input, output, and error streams under
+the `payloads/` directory.
+
+``` shell
+agent-circus exec --acp --trace-payloads -- pi-acp
 ```
 
-**Credentials.** Pi stores provider credentials in `~/.pi/agent/auth.json`. To
-reuse host credentials, enable the service:
+Raw payloads can contain prompts, source code, tool results, and credentials.
+Do not share these files without inspection. The `max_payload_bytes` value
+limits each stream, and metadata collection continues after this limit.
 
-``` toml
-[host_credentials]
-services = ["pi"]
+### Evaluate a Trace
+
+Read `summary.json` first. It shows whether the agent exited normally and
+whether the repetition detector found an incident. It also shows the maximum
+VM CPU and memory values that were available.
+
+``` shell
+trace_id=$(cat .agent-circus/traces/latest)
+trace_dir=".agent-circus/traces/$trace_id"
+jq . "$trace_dir/summary.json"
 ```
 
-Without that, keep container-local credentials by starting Pi interactively
-once per project (`agent-circus exec pi -- pi`) and configuring the provider
-there. pi-acp offers the same path from an ACP client that supports terminal
-auth: `pi-acp --terminal-login`.
+Read all repeated-byte events with this command:
 
-**Limits to know about.**
-
-- pi-acp does not delegate filesystem or terminal operations back to the
-  editor (`fs/*` and `terminal/*`). Pi reads, writes, and executes inside the
-  container. This is the intended sandbox boundary.
-- Agent Circus does not yet translate `[[mcp_servers]]` into Pi's
-  `~/.pi/agent/mcp.json` format. Configure Pi's MCP servers inside the
-  container for now.
-- pi-acp is an MVP-stage adapter that expects minor breaking changes. Pin
-  `PI_ACP_VERSION` and bump it deliberately.
-
-### Host Credentials
-
-> [!IMPORTANT]
-> This replaces the old `agent-circus exec <service> --host-config` flag,
-> which no longer exists. There is no `[host_config]` setting — the table is
-> called `[host_credentials]`, and it only ever mounts a single credential
-> file per agent, never the whole configuration directory.
-
-Add a `[host_credentials]` table to `config.toml` to bind-mount an agent's
-authentication file directly from its real host path, read-write, instead of
-going through the project-local copy:
-
-``` toml
-[host_credentials]
-services = ["codex"]
+``` shell
+jq 'select(.event == "repetition_detected")' "$trace_dir/events.jsonl"
 ```
 
-Only the single file below is mounted from the host; everything else in that
-agent's configuration directory (settings, MCP-server merges, Claude-Mem
-plugin files, etc.) is unaffected and still goes through the normal
-project-local copy described in [Authentication](#authentication).
+Byte `33` is the ASCII value for `!`. If an event contains byte `33`, use its
+time and sequence values to find the related ACP chunk:
 
-| Agent          | Host credential file                | Container path                              |
-|----------------|--------------------------------------|----------------------------------------------|
-| `claude-code`  | `~/.claude/.credentials.json`       | `/home/node/.claude/.credentials.json`      |
-| `codex`        | `~/.codex/auth.json`                | `/home/node/.codex/auth.json`               |
-| `mistral-vibe` | `~/.vibe/.env`                      | `/home/node/.vibe/.env`                     |
-| `opencode`     | `~/.local/share/opencode/auth.json` | `/home/node/.local/share/opencode/auth.json`|
-| `pi`           | `~/.pi/agent/auth.json`             | `/home/node/.pi/agent/auth.json`            |
-
-Two of these paths are governed by variables, not fixed locations:
-
-- `codex`'s auth file lives under `$CODEX_HOME`, defaulting to `~/.codex`.
-- `opencode`'s auth file follows the XDG Base Directory spec and lives under
-  `$XDG_DATA_HOME/opencode/`, defaulting to `~/.local/share/opencode/` — a
-  different directory tree than `$XDG_CONFIG_HOME/opencode` (`~/.config/opencode`),
-  which is where Agent Circus mounts `opencode`'s regular config.
-
-Agent Circus always targets the **default** location (`${HOME}/.codex/...`,
-`${HOME}/.local/share/opencode/...`) regardless of whether `$CODEX_HOME` or
-`$XDG_DATA_HOME` are customized on the host — the same limitation that already
-applies to `models_cache` and `seed_from` elsewhere in `config.toml`. If you've
-relocated either directory, the mount in `[host_credentials]` will not follow it.
-
-Because this is a direct bind mount of the real file, writes made inside the
-container (e.g. a login/refresh flow) land immediately on the host — no
-`config reset` or container recreation dance required:
-
-```shell
-agent-circus exec codex -- codex login
+``` shell
+jq 'select(.longest_repeated_byte.count >= 64)' \
+  "$trace_dir/acp-transport.jsonl"
 ```
 
-If the credential file does not exist yet (e.g. the agent has never logged in
-on this host), Agent Circus creates an empty placeholder file first so Docker
-does not create a directory at that path instead.
+Use the VM metrics to compare CPU and memory at the incident time:
 
-`services` lists which agents use this mount; omit it or set `services = []`
-to disable the feature. Settings merge shallow and last-wins across config
-layers (see [Configuration](#configuration)), so a project-local
-`.agent-circus/config.toml` can override a user-global `[host_credentials]`
-table wholesale — including setting `services = []` to opt out of a
-globally-enabled setting for one project.
+``` shell
+jq '{timestamp, cpu_percent, memory_bytes, memory_limit_bytes, net_rx_bytes, net_tx_bytes}' \
+  "$trace_dir/vm-metrics.jsonl"
+```
 
-### Additional Directories
+Use the process samples to find the processes that gained the most CPU ticks
+during the trace. One CPU tick is a kernel accounting unit. The sample file
+records the kernel tick rate. The process tick values are cumulative.
 
-Use the `[[additional_dirs]]` array to mount extra host directories into
-every agent container. Directories appear under `/workspaces/<name>` alongside
-the primary project at `/workspace`.
+``` shell
+jq -s '
+  [.[].processes[]]
+  | group_by(.pid)
+  | map(
+      select(length > 1)
+      | {
+          pid: .[0].pid,
+          name: .[0].name,
+          cpu_ticks: (
+            (.[-1].user_ticks + .[-1].system_ticks)
+            - (.[0].user_ticks + .[0].system_ticks)
+          ),
+          max_resident_pages: (map(.resident_pages) | max)
+        }
+    )
+  | sort_by(.cpu_ticks)
+  | reverse
+  | .[:10]
+' "$trace_dir/processes.jsonl"
+```
+
+If raw payload capture was enabled, search the agent output for a long run of
+exclamation marks:
+
+``` shell
+rg -a -n '!{64}' "$trace_dir/payloads/agent-to-client.bin"
+```
+
+If the raw ACP output contains the run, the agent harness sent it to the ACP
+client. If the VM CPU also rises, use `processes.jsonl` to identify the busy
+guest process. If only VM CPU rises, inspect `msb-system.jsonl` and
+`collector-errors.log` for a runtime or collector failure.
+
+## Configuration Reference
+
+The `[[additional_dirs]]` array mounts extra host directories into the
+sandbox under `/workspaces/<name>`, next to the project at `/workspace`.
+The fields: `path` is required, `readonly` defaults to
+false, and `name` defaults to the basename of `path`.
 
 ``` toml
 [[additional_dirs]]
@@ -944,195 +641,1370 @@ readonly = true
 
 [[additional_dirs]]
 path = "/home/user/other-project"
-# readonly defaults to false
 # name defaults to the basename of path
 name = "other-project"
 ```
 
-Fields:
-
-| Field | Required | Default | Description |
-|---|---|---|---|
-| `path` | yes | — | Absolute path on the host |
-| `readonly` | no | `false` | Mount read-only when `true` |
-| `name` | no | basename of `path` | Container mount name (`/workspaces/<name>`) |
-
-### Data Stores
-
-Use the `[[data_stores]]` array to persist data across container restarts on a
-per-project basis. Each named store is a directory kept under
-`~/.local/state/agent-circus/<project>/data/<name>/` on the host and
-bind-mounted into configured agent containers.
-
 ``` toml
-[[data_stores]]
-name = "memory"
-# mount_path defaults to /home/node/.local/share/agent-circus/<name>
+env_passthrough = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
 
-[[data_stores]]
-name = "bashhistory"
-mount_path = "/commandhistory"
+[env]                                  # non-secret variables; see
+                                       # "Environment Variables"
+# GCX_KEYCHAIN = "off"
+
+[msb]
+# binary = "/usr/local/bin/msb"        # default: the bundled msb binary
+
+[image]
+tag = "docker.io/library/msb-agents:26"
+# dockerfile = "Dockerfile.msb-agents" # default: the bundled Dockerfile
+# platform = "linux/arm64"             # default: the host architecture
+
+[msb.sandbox]
+memory = "4G"
+# cpus = 2                              # default: 1
+# init = "auto"                         # "none" for custom images without
+                                        # an init; or an absolute init path.
+                                        # Applies at sandbox creation only.
+# stop_timeout = 45                     # seconds to wait for a clean stop
+# docker_stop_timeout = 20              # seconds dockerd may take to stop
+                                        # containers at shutdown
+# root_disk = "flat:32G"                # root disk spec, see "Docker and Disks"
+# docker_disk = "10G"                   # docker opt-in: dedicated ext4 disk
+                                        # for /var/lib/docker; unset = no docker
+# docker_disk_persist = false           # keep docker data in a named volume
+                                        # that survives rm/destroy
+
+[msb.mounts]
+"." = "/workspace"                     # default; more mounts: "/data" = "/data:ro"
+
+[msb.network]
+mode = "public,private"                # default; unrestricted network access
+# trust_host_cas = false              # trust the host's CAs; see
+                                       # "CA Certificates"
+
+[skills]                            # user config only
+# store = "~/.local/share/agent-circus/system-skills"  # system skill store;
+                                       # see "System skills"
+
+[[port_forwards]]                       # publish a guest port on the host
+guest_port = 8000                       # or container_port
+# host_port = 8000                      # default: guest_port
+# host = "127.0.0.1"                    # default: loopback only
+# protocol = "tcp"                      # or "udp"
+
+[agent]
+command = ["pi"]                       # default exec target
+# workdir = "/workspace"               # default; host path with git.worktree_mirror
+
+[[daemons]]                         # a supervised process; see "Daemons"
+name = "opencode-web"                   # lowercase letters, digits and "-"
+command = ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096"]
+# autostart = true                      # start on every boot
+# port = 4096                           # wait for it; show the URL
+# workdir = "/workspace"                # default: [agent] workdir
+# env = { KEY = "value" }               # extra variables
+# env_passthrough = ["OPENAI_API_KEY"]  # host variables for this daemon
+
+[hooks]                             # project setup scripts; see "Hooks"
+provision = "apt-get update && apt-get install -y ripgrep"  # once per
+                                        # sandbox and after each change
+
+[hooks.startup]                     # table form: once per boot
+script = "uv sync"                      # or: file = "path/to/script.sh"
+# required = false                      # default: true for provision
+# timeout = 300                         # seconds; default: no timeout
+# workdir = "/workspace"                # default: [agent] workdir
+# env = { KEY = "value" }               # extra variables
+# env_passthrough = ["NPM_TOKEN"]       # host variables for this hook
+
+[ssh]                                  # forward the host SSH agent; see
+                                       # "SSH Agent Forwarding"
+# config_path = "~/.ssh/config"        # copied to /root/.ssh/config
+# known_hosts_path = "~/.ssh/known_hosts"  # copied to /root/.ssh/known_hosts
+
+[hosts]                                # forward host hosts-file entries; see
+                                       # "Host Entries"
+patterns = []                          # globs or re:-prefixed regexes
+# file = "/etc/hosts"                  # hosts file to read
+
+[git]                                  # forward the host git config; see
+                                       # "Git Configuration"
+# config_path = "~/.gitconfig"         # default: ~/.gitconfig, then
+                                       # $XDG_CONFIG_HOME/git/config
+# signing_key_path = "~/.ssh/id_ed25519.pub"  # SSH public key
+# worktree_mirror = true               # default; see "Git Worktrees"
 ```
 
-Fields:
+All fields are optional. The values above are the defaults. The
+`[[daemons]]` and `[hooks]` entries are examples; there are no
+daemons and no hooks by default.
 
-| Field | Required | Default | Description |
-|-------|----------|---------|-------------|
-| `name` | yes | — | Store name; used as the host subdirectory |
-| `mount_path` | no | `/home/node/.local/share/agent-circus/<name>` | Container mount path |
-| `services` | no | all agent services | Services that receive the store |
-| `seed_from` | no | unset | Host directory copied into the store before first container start; use an absolute path or environment interpolation like `${HOME}/.codex` |
-| `seed_mode` | no | `once` | Seed copy behavior; currently only `once` is supported |
+## Environment Variables
 
-Seeded stores are useful when you want a writable, project-local copy of other
-host state. Tilde paths such as `~/.local/share/tool` are rejected; use an
-absolute path or environment interpolation such as
-`${HOME}/.local/share/tool`.
+Set fixed, non-secret variables for the sandbox in the `[env]` table:
 
-Seeding currently happens only once per data store. After the first successful
-seed copy, later container starts keep the data store's existing contents and do
-not re-copy from `seed_from`. Optional always-on seeding will be added in a
-future release. To re-initiate seeding for a user-defined data store, remove the store directory
-(`~/.local/state/agent-circus/<project>/data/<name>/`) before starting the
-container again. If you want to keep the existing store contents and only allow
-another seed copy into it, remove the store's `.agent-circus-seeded` marker
-file instead.
+``` toml
+[env]
+GCX_KEYCHAIN = "off"
+GOPROXY = "https://proxy.corp.internal/go,direct"
+```
 
-**Bash history.** The container image configures shells to write history to
-`/commandhistory`. Adding a `bashhistory` data store (as shown above) makes
-that history survive container restarts. Without a data store, history is kept
-only for the lifetime of the container.
+agent-circus applies the variables at these times:
+
+- when it creates the sandbox, so the services of the image (for
+  example the Docker engine) see them;
+- at every `agent-circus exec`, so a running sandbox gets a changed value
+  at the next command, without a new sandbox;
+- at every hook run and in the environment file of every daemon (see
+  [Hooks](#hooks) and [Daemons](#daemons)).
+
+A service of the image keeps the value that it had when the sandbox was
+created. To change such a value, re-create the sandbox
+(`agent-circus rm -f && agent-circus up`).
+
+When a variable is set in more than one place, the later source in this
+list wins:
+
+1. `[env]`
+2. `env_passthrough` (top level)
+3. `env_passthrough` and `env` of a hook or daemon
+4. `agent-circus exec -e KEY=VALUE`
+
+### Dollar References
+
+Values that contain `$` are guest shell words: agent-circus expands the
+references inside the sandbox, against the sandbox's own environment
+(the same behavior as the guest shell):
+
+``` toml
+[env]
+PATH = "$PATH:/home/node/.local/bin"
+```
+
+The rules:
+
+- Full shell semantics apply inside double quotes: `${VAR}` works, and
+  `$(command)` or backticks run a command in the guest. Keep that in
+  mind for values you did not write yourself.
+- `$$` gives a literal `$`, so `COST = "5$$"` becomes `5$`.
+- A reference to an unset variable expands to an empty string (POSIX
+  behavior). agent-circus does not detect typos.
+- References resolve against the sandbox environment, not against other
+  `[env]` values. `$OTHER` does not read a variable defined in the same
+  table.
+- Values from `env_passthrough` never expand: a host secret keeps its
+  `$` characters as they are.
+- msb fixes the sandbox environment at creation and passes values
+  literally there, so values with `$` are not applied at creation time.
+  They take effect when agent-circus runs commands: `exec`, hooks, and
+  daemons. A service of the image that starts at boot reads the raw
+  value.
+
+Variable names must not start with `MSB_`. msb reserves this prefix
+and rejects such variables, so agent-circus stops with an error.
+
+Do not put secrets in `[env]`: `config.toml` is often in Git. Use
+`env_passthrough` (see [Secrets](#secrets)).
+
+## Secrets
+
+API keys never go into the image. agent-circus passes them per command with
+`--env KEY=VALUE`, or you list them once under `env_passthrough`:
+
+``` shell
+agent-circus exec -e OPENAI_API_KEY=sk-... -- pi
+```
+
+Claude Code and Codex usually need no API key variable: their credentials
+live in the host config directories that agent-circus bind-mounts into the
+sandbox (see [Running Agents](#running-agents)). `env_passthrough` is the
+way to authenticate Pi and OpenCode, or to override the mounted
+credentials for a single command.
+
+agent-circus reads the variables under `env_passthrough` from your host shell
+at every command. Entries are patterns: a plain name
+must exist, or the command fails before msb starts. A glob (`LG_*`) or a
+regex with the `re:` prefix (`re:^LG_`, matched case-insensitively) expands
+to every matching variable that is set. Log output never contains secret
+values.
+
+The variables are not stored in the sandbox. Each command gets them from
+the shell that starts it, for example the shell of `agent-circus proxy
+--shell` for browser shells. To make a variable optional, use a regex
+that matches only its name: agent-circus then skips it when it is unset.
+
+``` toml
+env_passthrough = ["re:^LG_", "re:^ARTIFACTS_DIR$", "re:^DEBUG_BUILD$"]
+```
+
+For values that are not secret and do not change, use `[env]` instead.
+
+Daemons are different: s6 starts them in the guest, not `agent-circus exec`,
+so their variables must be stored in the guest. See
+[Daemon Secrets](#daemon-secrets).
+
+## Networking
+
+By default, a sandbox starts with `--net "public,private"`. This gives the
+sandbox unrestricted network access, which the Docker engine in the guest
+needs to pull images. Your model API endpoints and MCP servers are reachable
+through this profile.
+
+agent-circus does not yet translate a network policy into msb network rules.
+Until that feature exists, treat the default as an open profile and keep
+sensitive host services outside the reach of the sandbox.
 
 ### Port Forwarding
 
-Use the `[[port_forwards]]` array to publish a container port on the host.
-Each entry applies to one explicit agent service.
+Use the `[[port_forwards]]` array to publish a guest port on the host, for
+example to reach a dev server, a debugger, or an MCP server that the agent
+starts inside the sandbox:
 
 ``` toml
 [[port_forwards]]
-service = "codex"
 container_port = 3333
-host_port = 3333
-# host defaults to 127.0.0.1
-# protocol defaults to tcp
+# host_port = 3333      # default: container_port
+# host = "127.0.0.1"    # default: loopback only
+# protocol = "tcp"      # or "udp"
 ```
 
-For example, to reach the lean-ctx dashboard from the host, publish port
-`3333` and run the dashboard inside the container bound to the container
-network interface:
+The `service` field is accepted but ignored:
+agent-circus runs one sandbox per workspace, so there is nothing to select a
+service from. `guest_port` is accepted as an alias for `container_port`.
 
-``` sh
-lean-ctx dashboard --host=0.0.0.0 --port=3333
+Forwarded ports bind to `127.0.0.1` on the host by default — the same
+default msb itself uses. Set `host = "0.0.0.0"` only when the service should
+be reachable from other machines on your network. The process inside the
+sandbox must bind to `0.0.0.0` or the guest network interface; a server
+bound to `127.0.0.1` inside the guest is not reachable through the forward.
+Servers differ in how they opt in, for example:
+
+``` shell
+opencode serve --hostname 0.0.0.0 --port 4096
 ```
 
-The process inside the container must bind to `0.0.0.0` or the container
-network interface. If it binds only to `127.0.0.1` inside the container,
-Docker port publishing cannot reach it from the host.
+Port mappings are fixed when the sandbox is created. `msb start` and `msb
+modify` cannot change them. When `up` reuses an existing sandbox whose
+mappings differ from the configuration, agent-circus prints a warning. Remove
+and re-create the sandbox to apply the new ports:
 
-Fields:
-
-| Field | Required | Default | Description |
-|-------|----------|---------|-------------|
-| `service` | yes | - | Agent service to expose |
-| `container_port` | yes | - | Port inside the container |
-| `host_port` | no | `container_port` | Port on the host |
-| `host` | no | `127.0.0.1` | Host bind address |
-| `protocol` | no | `tcp` | `tcp` or `udp` |
-
-Agent Circus binds forwarded ports to `127.0.0.1` by default. Use
-`host = "0.0.0.0"` only when the UI or API should be reachable from other
-machines on the network.
-
-Published ports are set when Docker creates the container. If port forwarding
-configuration changes for an already-created service, recreate the container:
-
-``` sh
-agent-circus remove
-agent-circus up codex
+``` shell
+agent-circus rm -f
+agent-circus up
 ```
 
-Host port collisions are left to Docker Compose. If the requested host port is
-already in use, Docker reports its normal error. Agent Circus only publishes
-the port; it does not check whether a process is listening inside the
-container.
+If a forwarded port does not answer from the host with `Empty reply from
+server` (or hangs), the service inside the sandbox most likely bound to the
+guest loopback interface (`127.0.0.1`) instead of all interfaces. The
+forward targets the guest network interface, so it cannot reach a
+loopback-bound server. Restart the service bound to `0.0.0.0` in the guest,
+for example `opencode serve --hostname 0.0.0.0 --port <port>`. If that does
+not help, check whether another process
+on the host holds the port. agent-circus probes every configured host port
+before booting and fails with the conflicting `host:port -> guest/protocol`
+mapping when it is already bound (for example by a second VM); the probe is
+best-effort, so msb may still report a conflict grabbed between probe and
+boot.
 
-### SSH Agent Forwarding
+agent-circus adds one extra port forward at sandbox creation: the router
+forward. It publishes the guest's HTTP router on a free host port
+(guest port 7780; see [Central Proxy](#central-proxy)). It appears in
+`agent-circus ps` like any other forward. Guest port 7780 is reserved: do
+not use it for a daemon or a `[[port_forwards]]` entry (agent-circus
+rejects a TCP forward to 7780). When `up` starts a stopped sandbox whose
+router host port was taken by another process in the meantime, agent-circus
+prints a warning; the sandbox then needs a re-creation.
 
-Add an `[ssh]` table to `config.toml` to forward your host SSH agent into
-agent containers. This lets agents interact with Git servers (e.g. GitHub)
-over SSH without any key material entering the container — all private key
-operations stay on the host.
+A daemon is a long-running process that agent-circus starts and supervises
+in the sandbox, for example a web interface of a harness or a dev server.
+Without daemons, you start such a process by hand in a shell
+(`agent-circus exec -- bash`) and it stops when the shell ends. You define
+daemons in `.agent-circus/config.toml`, and agent-circus starts them on every
+boot.
+
+The sandbox image runs the process supervisor s6 as PID 1 (see
+[How It Works](#how-it-works)). agent-circus registers every daemon as an s6
+service. s6 restarts a daemon when it exits, and stops it with SIGTERM
+when the sandbox stops. The image's own s6 services (the Docker engine,
+the SSH agent bridge) are not daemons; you do not configure them.
+
+### OpenCode Web Interface
+
+This example runs the OpenCode server in the sandbox and makes it
+reachable from the host browser at
+`http://opencode-web.<sandbox>.localhost:7700/` through the
+[central proxy](#central-proxy):
+
+``` toml
+[[daemons]]
+name = "opencode-web"
+command = ["opencode", "serve", "--port", "4096"]
+port = 4096
+env_passthrough = ["OPENCODE_PASSWORD"]
+```
+
+- No `[[port_forwards]]` entry is needed. A daemon with a `port` is
+  exposed through the central proxy by default, and the daemon can bind
+  to `127.0.0.1` in the guest; the router reaches it there.
+- OpenCode always requires a login: user `opencode` and a password.
+  `env_passthrough` reads the password from `OPENCODE_PASSWORD` in your
+  host shell. The variable must be set; otherwise agent-circus registers no
+  daemon at all and prints a warning.
+- Without the `env_passthrough` line, OpenCode makes up a new password at
+  every start, including restarts after a crash. Read it with
+  `agent-circus daemon logs opencode-web | grep 'server password'`. The
+  password then stays in plain text in the daemon log.
+- Do not put the password in `env`: `config.toml` is often in Git.
+- A direct `[[port_forwards]]` entry still works as before, for example
+  when a client needs a fixed host port. An exposed daemon then shows
+  both URLs (`agent-circus urls`).
+
+### Daemon Settings
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `name` | (required) | Unique name: lowercase letters, digits and `-`, at most 40 characters |
+| `command` | (required) | Command and arguments, as a list. No shell runs it; use `["sh", "-c", "..."]` for shell syntax. |
+| `autostart` | `true` | Start the daemon on every boot. With `false`, start it with `agent-circus daemon start`. |
+| `port` | none | Guest TCP port. agent-circus waits up to 30 seconds for it after a start, and shows the URL. |
+| `expose` | `true` | Route the port through the central proxy (only effective with a `port`). |
+| `workdir` | the `[agent]` workdir | Guest working directory |
+| `env` | none | Extra environment variables |
+| `env_passthrough` | none | Host environment variables, with the same patterns as the top-level `env_passthrough` |
+
+A daemon also gets the variables of the top-level `env_passthrough`, and
+`SSH_AUTH_SOCK` when SSH agent forwarding is on. `env` wins over both.
+
+`HOME` defaults to `/root` (the guest runs as root). s6 daemons inherit
+the VM boot environment, which does not reliably carry `HOME`; without
+it, harnesses such as OpenCode cannot find their config below
+`~/.config` and fall back to their defaults. Set `HOME` in `env` to
+override it.
+
+Values of `env` that contain `$` are guest shell words: agent-circus
+expands the references when the daemon starts, against the daemon's
+environment (see ["Dollar References"](#dollar-references)).
+`env_passthrough` values never expand. Before agent-circus supported `$`
+references, such values stayed literal.
+
+### Commands
+
+``` shell
+agent-circus daemons                    # list daemons: state, PID, uptime, URL
+agent-circus daemon start opencode-web  # start a stopped or failed daemon
+agent-circus daemon stop opencode-web   # stop it until the next start or boot
+agent-circus daemon restart opencode-web
+agent-circus daemon logs opencode-web       # last 100 lines
+agent-circus daemon logs -f -n 20 opencode-web  # follow new lines
+```
+
+`up` and `start` register the daemons from the configuration. `up` also
+applies configuration changes to a sandbox that is already running: it
+adds new daemons, updates changed ones and removes deleted ones. A changed
+daemon keeps running with its old settings until you restart it with
+`agent-circus daemon restart`. When you delete the last daemon from the
+configuration, it keeps running until the sandbox stops. `agent-circus exec`
+does not register daemons.
+
+The `STATE` column of `agent-circus daemons` shows one of these values:
+
+| State | Meaning |
+| --- | --- |
+| `running` | The process runs. |
+| `starting` | s6 starts or restarts the process. |
+| `stopping` | The process got SIGTERM and has not exited yet. |
+| `stopped` | The daemon is stopped (`daemon stop`, or `autostart = false`). |
+| `failed` | The daemon exited 5 times within 60 seconds, and s6 stopped restarting it. Read the log, fix the cause, then run `agent-circus daemon start`. |
+| `not registered` | The daemon is in the configuration but not in the sandbox. Run `agent-circus up`. |
+
+The logs are in the guest at `/var/log/circus-daemons/<name>/current`.
+They keep the daemon's stdout and stderr, with a timestamp per line, and
+survive a restart of the sandbox. s6 rotates them at 1 MB and keeps 10 old
+files. `agent-circus daemon logs <name>` reads them; `agent-circus logs`
+shows all daemon logs together with the other sandbox logs (see
+[Logs](#logs)).
+
+### Daemon Secrets
+
+`agent-circus exec` passes variables to one process, and they are gone when
+it ends. A daemon is started by s6, and s6 restarts it after a crash, so
+the variables must be stored in the guest. agent-circus therefore writes the
+environment of each daemon (`env`, `env_passthrough`, the top-level
+`env_passthrough`, and `[env]`) to a file in the guest:
+
+- The file is `/run/circus-daemons/<name>/env.sh`. `/run/circus-daemons` is
+  a separate tmpfs (memory only) that only root can read. The values do not
+  reach the disk of the sandbox, and they are gone when the sandbox stops.
+  agent-circus writes them again at the next `up` or `start`.
+- Every process that runs as root in the sandbox can read the file. All
+  commands in the sandbox run as root, including the agents. An agent can
+  therefore read the secrets of every daemon, the same as it can read the
+  secrets of its own environment.
+- While agent-circus registers the daemons, the values are on the command
+  line of the `msb` process on the host, the same as for
+  `agent-circus exec -e`.
+
+Give a daemon only the secrets it needs.
+
+### Limitations of Daemons
+
+- Daemons need s6-overlay as PID 1. A custom image without s6 (see
+  [Images](#images)) cannot run daemons; agent-circus prints a warning and
+  boots the sandbox without them.
+- `port` only checks TCP on `127.0.0.1` in the guest.
+- A daemon runs as root, like every other command in the sandbox.
+
+## Central Proxy
+
+The central proxy reaches every web daemon of every sandbox at one host
+port, by name. You do not need a `[[port_forwards]]` entry per daemon,
+there is no host port clash between sandboxes, and adding a daemon later
+does not need a re-creation of the sandbox:
+
+``` text
+http://<daemon>.<sandbox>.localhost:7700/
+e.g. http://opencode-web.agents-myproject.localhost:7700/
+```
+
+Browsers, Chrome, Firefox and curl resolve `*.localhost` names to the
+loopback interface, so the URL works without an `/etc/hosts` entry. Other
+clients may need one.
+
+### How it works
+
+``` mermaid
+flowchart LR
+    A["🌐<br/>browser<br/>/ curl"]
+    B["agent-circus<br/>proxy<br/><i>on the host</i>"]
+    F["msb<br/>port forward"]
+    R["circus-router<br/><i>in the guest</i>"]
+    D["📦<br/>daemon"]
+    A -- "http://opencode-web.agents-foo.localhost:7700/" --> B
+    B -- "accepts only *.localhost names<br/>finds the router host port<br/>via msb inspect (cached 5 s)" --> F
+    F -- "127.0.0.1:auto-picked port<br/>to guest :7780<br/>(one per sandbox, added at creation)" --> R
+    R -- "looks up the first Host label<br/>in routes.json, e.g. opencode-web: 4096" --> D
+```
+
+agent-circus rewrites the routes file on every `up`, so new or changed
+daemons need no re-creation. Only the router port itself is fixed at
+sandbox creation.
+
+### Daemon Lookup
+
+How the proxy and the router find the daemon for one request:
+
+``` mermaid
+sequenceDiagram
+    autonumber
+    participant B as browser
+    participant P as agent-circus proxy (host)
+    participant M as msb
+    participant R as circus-router (guest)
+    participant D as daemon (guest)
+
+    B->>P: GET, Host: opencode-web.agents-foo.localhost
+    P->>P: split Host into daemon + sandbox names
+    P->>M: msb inspect agents-foo
+    M-->>P: ports, incl. the router forward 127.0.0.1:56263 -> 7780
+    Note over P: cached for 5 seconds
+    P->>R: connect to the router forward, replay the head
+    R->>R: first Host label -> routes.json
+    R->>D: connect to 127.0.0.1:4096 in the guest
+    D-->>R: response
+    R-->>P: response
+    P-->>B: response
+    Note over B,D: from here on: raw bytes both ways<br/>(WebSockets, SSE, streaming)
+```
+
+The two halves split the name between them. The proxy resolves the
+sandbox name through msb's own metadata (`msb inspect`); the guest
+router resolves the daemon name through the routes file. Neither reads
+your configuration at request time.
+
+If a step fails, you get a distinct error: unknown sandbox gives 404
+from the proxy, a sandbox without the router forward gives 502, an
+unknown daemon name gives 404 from the guest router, and a closed
+daemon port gives 502 from the guest router.
+
+### Using the proxy
+
+Start the proxy in a terminal (a foreground process; you start it once
+per login session):
+
+``` shell
+agent-circus proxy
+agent-circus proxy --port 7701        # or: AGENT_CIRCUS_PROXY_PORT=7701
+agent-circus proxy --shell            # also allow browser shells (see below)
+```
+
+The proxy port is not a config file key. The order is: `--port`, then
+`AGENT_CIRCUS_PROXY_PORT`, then `7700`.
+
+To keep the proxy running in the background, see
+[Run as a systemd user service](#run-as-a-systemd-user-service).
+
+List the URLs of this workspace's exposed daemons:
+
+``` shell
+agent-circus urls                     # table with NAME, PORT, URL, DIRECT
+agent-circus urls --format json       # machine-readable, notes on stderr
+```
+
+The proxy binds to `127.0.0.1` and `[::1]` only, never to a wildcard
+address. It accepts only `*.localhost` host names; any other name (for
+example a foreign domain that resolves to `127.0.0.1`) gets HTTP 421
+with a pointer to the dashboard. This is a DNS rebinding guard.
+
+To stop a daemon from being reachable through the proxy, set
+`expose = false` on its `[[daemons]]` entry. A daemon without a
+`port` is never exposed.
+
+### Run as a systemd user service
+
+The proxy is a foreground process. A systemd **user service** keeps it
+running in the background, starts it at login, and restarts it when it
+crashes. No root rights are needed; the service runs as your user.
+
+Start without `--shell`. The dashboard works, browser shells stay off:
+
+``` ini
+# ~/.config/systemd/user/agent-circus-proxy.service
+[Unit]
+Description=agent-circus central proxy
+
+[Service]
+ExecStart=%h/.local/bin/agent-circus proxy --workspace %h/devel/myproject
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+```
+
+Notes on the unit file:
+
+- `ExecStart` needs the **absolute path** of the `agent-circus` program
+  (`command -v agent-circus`). A user service does not read your shell
+  profile, so `PATH` is minimal. agent-circus then finds the `msb`
+  binary in the bundled microsandbox install, through `binary` in your
+  config, or on `PATH`; set `binary` in the config when in doubt.
+- `--workspace` points at the workspace whose sandbox URLs you want
+  (any directory with an `agent-circus.toml`). The proxy serves **all**
+  sandboxes of your user, not only this workspace's one; the workspace
+  only picks the config.
+- `%h` is your home directory. Use it instead of `~`: systemd does not
+  expand `~` in `ExecStart`.
+- Set the port with `Environment=AGENT_CIRCUS_PROXY_PORT=7701`, or add
+  `--port 7701` to the command line.
+
+Enable and start it:
+
+``` shell
+systemctl --user daemon-reload
+systemctl --user enable --now agent-circus-proxy.service
+journalctl --user -u agent-circus-proxy -f      # follow the logs
+```
+
+The service starts at your next login. To start it at **boot**, before
+you log in, run once:
+
+``` shell
+loginctl enable-linger
+```
+
+#### With shell support
+
+Add `--shell` to the `ExecStart` line. The token file then lives under
+`$XDG_RUNTIME_DIR/agent-circus/shell-token`. systemd sets
+`XDG_RUNTIME_DIR` to `/run/user/<uid>` for the service, so the token
+lands in the same file your terminal sessions use; it is removed at
+reboot, and the service creates a new one at the next start.
+
+Two things change when the proxy runs under systemd instead of your
+terminal:
+
+- The proxy process owns no terminal, so read the dashboard URL with
+  the token from the logs (`journalctl --user -u agent-circus-proxy`), or
+  run `agent-circus dashboard` in any terminal; it reads the same token
+  file and prints the full URL. Rotate the token by deleting the file
+  and running `systemctl --user restart agent-circus-proxy`.
+- Browser shells read `[env]`, `env_passthrough` and `SSH_AUTH_SOCK`
+  from the **environment of the proxy process**. A systemd service
+  does not have your login shell's environment. Pass every variable a
+  shell needs in the unit, for example:
+
+  ``` ini
+  EnvironmentFile=%h/.config/agent-circus/proxy.env
+  Environment=SSH_AUTH_SOCK=%t/ssh-agent.socket
+  ```
+
+  Keep `proxy.env` mode 0600; it holds secrets.
+
+The shell token lets anyone who holds it open a shell in every running
+sandbox of your user. A long-running service holds it for a long time;
+weigh this against the short-lived terminal run described in
+[Browser Shell](#browser-shell).
+
+### Dashboard
+
+While the proxy runs, it serves a live dashboard on the same port:
+
+``` shell
+agent-circus proxy
+# Dashboard: http://localhost:7700/
+agent-circus dashboard               # print the URL and open the browser
+agent-circus dashboard --no-browser  # only print the URL
+agent-circus dashboard --here        # open this workspace's sandbox detail view
+```
+
+The overview shows the sandboxes as a **list** (one row per sandbox:
+state, daemon counts, problem icons, active connections, a small
+traffic sparkline and the age). A click anywhere on a row opens the
+sandbox's detail view. A **List | Cards** switch brings back the card
+layout; the choice is remembered. The filter input and the two
+checkboxes (`show stopped`, `show other msb sandboxes`) work in both
+layouts.
+
+The **detail view** (`#/sandbox/<name>`) shows everything about one
+sandbox: state, age, workspace, router state, fix hints, a full daemon
+table with proxy links and log buttons, this sandbox's own traffic and
+connections, and the published ports. The address can be bookmarked;
+the browser back button returns to the list.
+
+The page shows, refreshed every few seconds:
+
+- every msb sandbox: state, age, workspace path and published ports;
+- every daemon in every running sandbox: s6 state, uptime, port, whether
+  the port answers, and a clickable proxy URL;
+- every connection through the proxy: active ones, recent ones (the
+  first request line and response status of each connection), per-route
+  totals and a traffic sparkline for the last 10 minutes;
+- a fix hint with a copyable command for every problem it finds.
+
+Daemon details come from the running guest, so a stopped sandbox shows
+no daemons. Sandboxes with a router from before this feature show
+"outdated"; run `agent-circus up` once in that workspace to update it.
+
+The dashboard counts **connections, not requests**: the proxy routes per
+connection, so a page load that reuses one keep-alive connection counts
+once. Only the first request and the first response status of each
+connection are recorded.
+
+Privacy: the connection log stores the method and the path, never the
+query string (it may contain tokens), and never headers or bodies.
+Dashboard requests themselves are not logged. All data lives in the
+proxy's memory and is lost when the proxy exits.
+
+Traffic is tracked per sandbox: each sandbox keeps its own last 100
+connections and its own 10-minute series, so a busy sandbox cannot
+push a quiet sandbox's connections out of the view. The proxy tracks
+at most 64 sandboxes and forgets the least recently used one first;
+an evicted sandbox loses its traffic history until new traffic
+arrives.
+
+The dashboard is read-only; it never changes anything. Every problem it
+finds comes with a copyable command:
+
+| Problem | Command |
+|---|---|
+| Sandbox is stopped | `agent-circus up` |
+| Created without the router port | `agent-circus rm -f && agent-circus up` |
+| Router does not answer | `agent-circus up` |
+| Router older than agent-circus | `agent-circus up` |
+| Daemon failed (crash limit) | `agent-circus daemon restart <name>` |
+| Daemon runs but port is closed | `agent-circus daemon logs <name>` |
+| Daemon is stopped | `agent-circus daemon start <name>` |
+
+Security: the dashboard answers only on the loopback names
+(`localhost`, `127.0.0.1`, `[::1]`), is read-only, and is served with a
+strict Content-Security-Policy (no inline script, same-origin
+resources only). Every local process that can open the page can read
+it — the same exposure as `msb list`. The log viewer shows the same
+data as `agent-circus daemon logs`, including any secrets a daemon
+prints (for example a generated password).
+
+### Browser Shell
+
+The dashboard can open an interactive shell in a running sandbox, in a
+browser tab. It is **off by default**. Turn it on for one proxy run:
+
+``` shell
+agent-circus proxy --shell
+```
+
+There is no config key and no environment variable for it: one
+explicit flag is easy to audit, and a forgotten config line cannot
+turn the shell on.
+
+What runs: the same as `agent-circus exec -- bash` in the sandbox's
+workspace (`sh` when the guest has no bash). The workspace config is
+read again for every new shell, so `[env]`, `env_passthrough` and
+`SSH_AUTH_SOCK` apply as in `exec`, and config edits apply to the
+next shell. One difference to a terminal: `env_passthrough` values
+come from the environment of the terminal where `agent-circus proxy
+--shell` was started, so start it where your API keys are set. A
+missing required variable gives a clear error in the page.
+
+The token: the shell is guarded by a secret token in
+`$XDG_RUNTIME_DIR/agent-circus/shell-token` (else
+`~/.local/state/agent-circus/shell-token`), a file only your user can
+read. `agent-circus proxy --shell` prints the dashboard URL with the
+token in the address fragment, and `agent-circus dashboard` adds it the
+same way; the browser stores it and strips it from the address at
+once (a fragment is never sent to a server). Each browser needs the
+token once. To rotate it: delete the file and restart the proxy.
+
+**Anyone with the token can open a shell in every running sandbox of
+your user.** The page is a terminal into a VM with a read-write
+workspace and possibly SSH agent forwarding. The proxy also checks
+the Origin header, accepts loopback host names only, allows at most 8
+shells at the same time, and prints one audit line per shell in its
+terminal (`shell opened: …` / `shell closed: …`). The page itself is
+read-only otherwise; the shell is the only feature that executes
+something.
+
+Handling: Ctrl+Shift+C / Ctrl+Shift+V copy and paste (on macOS
+Cmd+C/Cmd+V work as usual), A+ / A− change the font size, and
+Reconnect starts a new shell. The **Theme** menu in the shell's top
+bar picks the terminal colors; **Auto** follows the dashboard's
+light/dark Theme button. The browser remembers the choice for all
+shells. Available themes: agent-circus light and dark, Modus Operandi,
+Modus Operandi Tinted, Modus Vivendi, Modus Vivendi Tinted, Catppuccin
+Latte and Mocha, Dracula, Gruvbox Light and Dark, Nord, Solarized
+Light and Dark. Only the color values are taken from these projects;
+each theme in `shell-themes.js` names its source. Closing the tab ends
+the shell; there is no detach. Run long jobs in `tmux` inside the
+guest.
+
+Known limits of the shell: a sandbox whose workspace directory is gone
+or unknown cannot get a browser shell (use `agent-circus exec` in a
+terminal); `bash` starts as a non-login interactive shell, so profile
+scripts that only run for login shells do not run; window resizing
+depends on msb reading the new size after `SIGWINCH` (if it does not,
+"Reconnect" picks up the current size); passthrough values are
+visible in the host process list while a shell runs, as with
+`agent-circus exec` today; the shell page needs
+`style-src 'unsafe-inline'` for xterm.js, but scripts stay restricted
+to the same origin; the two agent-circus themes use xterm's default ANSI
+colors, which are hard to read on the light background for yellow and
+white text (pick Modus Operandi for a light theme with tuned ANSI
+colors); Solarized has a lower text contrast (about 4.1:1 in Solarized
+Light) by design.
+
+### Known limits
+
+- Routing happens per connection, not per request. After the first
+  request head, the proxy and the router only copy bytes (this is what
+  makes WebSockets, SSE and streaming responses work). A client that
+  reuses one keep-alive connection for a different host name stays on
+  the first backend; browsers do not do this over plain HTTP/1.1.
+- HTTP/1.x only. No TLS and no HTTP/2 on the proxy port. Non-HTTP
+  protocols still need `[[port_forwards]]`.
+- The proxy is a foreground process. It does not auto-start; run it in a
+  terminal, or wrap it in a
+  [systemd user service](#run-as-a-systemd-user-service).
+- The dashboard only exists while the proxy runs. Traffic history is in
+  memory only and covers 10 minutes; it resets when the proxy restarts.
+- Per-sandbox traffic is kept for at most 64 sandboxes; the least
+  recently used one is evicted and loses its history. Per-route totals
+  (`traffic.routes`) are unbounded.
+- The sandbox list has no column sorting.
+- A dashboard table re-renders every 2 s; text selection inside a table
+  is lost on refresh.
+- Daemon details need a sandbox that runs a current router; run
+  `agent-circus up` once after updating agent-circus.
+- Counts are per connection, and only the first request and response of
+  a keep-alive connection are recorded.
+- Direct `[[port_forwards]]` traffic does not pass the proxy and is not
+  shown in the dashboard.
+- Sandboxes created before this feature need one re-creation
+  (`agent-circus rm -f && agent-circus up`) to get the router port.
+- The router host port is picked at creation. If another process takes
+  it later, `up` warns, and the sandbox needs a re-creation.
+- The router needs `python3` in the guest image. The bundled image has
+  it. Custom images without it get a warning and the proxy cannot reach
+  their daemons.
+- `*.localhost` resolution: Chrome, Firefox and curl resolve it to the
+  loopback. Other clients may need an `/etc/hosts` entry.
+- The `Host` header is not rewritten. Dev servers with strict host
+  allow-lists may reject `*.localhost` names; Vite allows `.localhost`
+  subdomains by default.
+- Every local process can reach every exposed daemon through the proxy.
+  This is the same exposure as loopback port forwards today.
+
+## Logs
+
+The command `agent-circus logs` shows the log output of the sandbox VM. It
+reads the log files that the sandbox services write inside the guest and
+prefixes every line with its source in square brackets, in the style of
+`docker compose logs`:
+
+``` text
+[kernel] [    0.079527] Run /init.krun as init process
+[bridge] --- circus-ssh-agent-bridge start 2026-01-01T10:00:02+00:00
+[dockerd] time="2026-01-01T10:00:00.000000000Z" level=info msg="Starting up"
+[hook.provision] gcx config set stacks.default.stack default
+[daemon.opencode-web] 2026-01-01 10:00:03.123456789 --- circus-daemon opencode-web start 2026-01-01T10:00:03+00:00
+[daemon.opencode-web] 2026-01-01 10:00:03.456789012 server listening on http://0.0.0.0:4096
+```
+
+| Label | Source name | Guest path | Content |
+| --- | --- | --- | --- |
+| `[kernel]` | `kernel` | `dmesg` in the guest | Kernel messages |
+| `[bridge]` | `bridge` | `/tmp/ssh-agent-bridge.log` | The SSH agent bridge |
+| `[dockerd]` | `dockerd` | `/tmp/dockerd.log` | The Docker engine daemon |
+| `[hook.<name>]` | `hooks` | `/var/log/agent-circus/*.log` | The last run of each hook |
+| `[daemon.<name>]` | `daemons` | `/var/log/circus-daemons/*/current` | Each [[daemons]] entry |
+
+The output is grouped by source; the order above is a display
+convention, not event time. The kernel section comes first because its
+ring buffer covers the boot. The bridge and dockerd s6 services start
+independently, so their real relative order is not guaranteed. The
+command does not merge lines by event time.
+
+``` shell
+agent-circus logs               # all sources, last 50 lines each
+agent-circus logs -n 200        # more lines per source
+agent-circus logs dockerd       # one source only
+agent-circus logs dockerd kernel  # several sources
+agent-circus logs -t            # podman-style leading timestamps
+agent-circus logs -f            # follow all sources, labels included
+agent-circus logs --list        # list the sources and their guest paths
+```
+
+`-t`/`--timestamps` moves the stamps that sources embed in their lines
+to a podman-style leading position (RFC 3339, like `podman logs -t`).
+It does not sort lines:
+
+``` text
+2026-01-01T10:00:03.456789012+00:00 [daemon.opencode-web] server listening on http://0.0.0.0:4096
+2026-01-01T10:00:00.000000000Z [dockerd] level=info msg="Starting up"
+```
+
+Only lines that carry a stamp change:
+
+- Daemon lines carry s6-log stamps. s6-log stamps record when the
+  logger receives a complete line and contain no timezone; agent-circus
+  generates the daemon loggers with `TZ=UTC0`, so `-t` can label them
+  `+00:00`. Daemon logs written by an older sandbox (before this
+  guarantee) may carry another timezone and stay ambiguous; re-create
+  the sandbox or restart its daemons to switch new lines to UTC.
+- dockerd writes its own wall-clock timestamp on most of its lines
+  (logrus `time="..."` fields).
+- The kernel stamps are time since guest boot (`[    0.064705]` = 65 ms
+  after power-on), not wall-clock time.
+- Bridge and hook lines do not have a timestamp on every line.
+
+Unstamped lines and the kernel stamps print unchanged; agent-circus
+never invents a timestamp and never sorts lines.
+
+The kernel source reads `dmesg` in the guest. Follow mode prints a
+limited `dmesg` snapshot first and then follows only new records with
+`dmesg --follow-new`, which needs a readable `/dev/kmsg`. A kernel
+record arriving between the snapshot and the follower start can be
+missed.
+
+By default every line carries its source label. With `--no-labels`, each
+file is printed under a `==> path <==` header (the `tail` multi-file
+style) and the lines stay as the services wrote them; following without
+labels runs a single plain `tail -F`, joined by the two-stage kernel
+follower when the kernel is selected.
+
+``` text
+==> /tmp/dockerd.log <==
+time="2026-01-01T10:00:00.000000000Z" level=info msg="Starting up"
+```
+
+To follow a single daemon instead of all sources, use
+`agent-circus daemon logs -f <name>`.
+
+The command needs a running sandbox: a stopped sandbox keeps no guest
+processes, and a sandbox that failed to boot wrote nothing this command
+can reach. `agent-circus logs -f` ends when you press Ctrl-C; the sandbox
+keeps running. With labels, follow mode runs one labeled `tail -F`
+pipeline per file (plus the two-stage kernel follower) in the guest;
+the pipelines share one output stream, so line order is preserved
+within each source, but sources interleave by arrival.
+
+## Hooks
+
+A hook is a shell script that agent-circus runs in the sandbox to set up
+your project. Use hooks to install project software without building
+your own image. There are two hooks:
+
+| Hook | Runs | Typical use |
+| --- | --- | --- |
+| `provision` | Once per sandbox, and again when the script changes | Install packages and tools: `apt-get install`, `npm install -g`, downloads, `docker pull` |
+| `startup` | Once per boot of the sandbox | Prepare the project: write tool configs, `docker compose up -d`, database migrations |
+
+Both hooks run as root, in the agent workdir (`[agent] workdir`).
+A long-running process does not belong in a hook. Make it a daemon (see
+[Daemons](#daemons)).
+
+### Example: install and configure a CLI tool
+
+This example installs the Grafana CLI `gcx` and configures it with a
+server URL and a token from your host shell:
+
+``` toml
+env_passthrough = ["GRAFANA_*"]
+
+[hooks]
+provision = """
+set -eu
+GCX_VERSION=1.6.0
+case "$(uname -m)" in
+  x86_64)  arch=amd64 ;;
+  aarch64) arch=arm64 ;;
+  *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+curl -fsSL "https://github.com/grafana/gcx/releases/download/v${GCX_VERSION}/gcx_${GCX_VERSION}_linux_${arch}.tar.gz" \
+  | tar xz -C /usr/local/bin gcx
+"""
+
+startup = """
+set -eu
+: "${GRAFANA_SERVER:?GRAFANA_SERVER is required}"
+: "${GRAFANA_TOKEN:?GRAFANA_TOKEN is required}"
+gcx config set stacks.default.grafana.server "${GRAFANA_SERVER}"
+gcx config set stacks.default.grafana.token "${GRAFANA_TOKEN}"
+gcx config set contexts.default.stack default
+gcx config set stacks.default.grafana.org-id 1
+"""
+```
+
+- `provision` installs `gcx` once. The binary stays in the sandbox across
+  `stop` and `start`.
+- If you change `GCX_VERSION`, the script changes, and the next
+  `agent-circus up` runs `provision` again.
+- `startup` writes the configuration on every boot, so a new token in
+  your host shell reaches the sandbox at the next start.
+- The script detects the CPU architecture, because the sandbox image is
+  built for the architecture of your host.
+- `set -eu` stops the script at the first failing command. agent-circus
+  does not add it for you.
+
+### When Hooks Run
+
+| Command | Sandbox before | `provision` | `startup` |
+| --- | --- | --- | --- |
+| `up` | missing (created) | runs | runs |
+| `up`, `start` | stopped (started) | runs if the script changed | runs |
+| `up` | running | runs if the script changed | runs if it has not run in this boot |
+| `exec` | missing or stopped | runs if the script changed | runs |
+| `exec` | running | **does not run**; prints a warning if the script changed | runs if it has not run in this boot |
+| `rm`, `destroy` | – | its result is lost; the next `up` runs it again | – |
+
+The order after a boot or start is: host entries, SSH files, Git
+configuration, Docker engine ready, `provision`, `startup`, daemons. So
+`provision` can clone private repositories through the SSH agent, and
+daemons can use what the hooks set up.
+
+`exec` on a running sandbox never runs `provision`, so a session does not
+change the sandbox under you. Run `agent-circus up` to apply a changed
+`provision` script.
+
+agent-circus compares only the **script text**. A change to `env`,
+`env_passthrough` or a passed-through value does not run `provision`
+again. Use `agent-circus hook run provision --force` for that.
+
+### Hook Settings
+
+The short form is a string with the script. The table form allows more
+settings:
+
+``` toml
+[hooks.provision]
+file = ".agent-circus/hooks/provision.sh"  # or: script = "..."
+required = true                            # default: true for provision,
+                                           # false for startup
+timeout = 600                              # seconds; default: no timeout
+workdir = "/workspace"                     # default: [agent] workdir
+env = { NPM_CONFIG_LOGLEVEL = "warn" }     # extra variables
+env_passthrough = ["NPM_TOKEN"]            # host variables for this hook
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `script` | – | The script text. Set `script` or `file`, not both. |
+| `file` | – | A script file on the host. A relative path starts at the workspace root. agent-circus reads the file on the host at every run. |
+| `required` | `true` (`provision`), `false` (`startup`) | When a required hook fails, the command exits with code 1 and skips the later steps (`startup`, daemons). The sandbox keeps running. When an optional hook fails, agent-circus prints a warning and continues. |
+| `timeout` | none | Stop the hook after this many seconds. |
+| `workdir` | the `[agent] workdir` | Guest working directory |
+| `env` | `{}` | Extra variables |
+| `env_passthrough` | `[]` | Host variables for this hook, with the same rules as the top-level `env_passthrough` |
+
+A hook gets the same variables as a daemon: `[env]`, the
+top-level `env_passthrough`, `SSH_AUTH_SOCK` (with `[ssh]`), its own
+`env_passthrough`, and its `env`. If a plain name in `env_passthrough` is
+not set on the host, the hook fails. Variable names must not start with
+`MSB_`: msb reserves that prefix and rejects such variables. Values of
+`env` that contain `$` expand inside the sandbox before the hook runs
+(see ["Dollar References"](#dollar-references)).
+
+A script that starts with `#!` runs with that interpreter. Any other
+script runs with `bash`. A script can be at most 64 KiB. For larger
+setups, call a script from your repository in the hook.
+
+A failed `provision` run is due again: the next `up` or `start` runs it
+again. A failed `startup` run is not repeated in the same boot; run it by
+hand with `agent-circus hook run startup`.
+
+### Writing Hook Scripts
+
+- Make `provision` safe to run more than once. `apt-get install` and
+  `docker pull` are safe. A script that appends a line to a file is not.
+- A background process that a hook starts must not keep the hook's
+  output open. Otherwise agent-circus waits for it. Redirect its output,
+  for example `some-tunnel >/dev/null 2>&1 &`. Better: make it a daemon.
+- `provision` results are lost with `agent-circus rm`, and the next `up`
+  runs `provision` again. Docker images that `provision` pulls survive
+  with `docker_disk_persist = true` (see [Docker and Disks](#docker-and-disks)).
+- The workspace is the same folder as on the host. A tool that writes
+  into it, such as `uv sync` writing `.venv`, shares that folder with
+  the host. Set `UV_PROJECT_ENVIRONMENT` to a path in the sandbox if the
+  host uses its own `.venv`.
+
+### Hook Commands
+
+| Command | Effect |
+| --- | --- |
+| `agent-circus hooks` | Show each hook: `up to date`, `due`, `never run` or `not configured`, the last exit code and the time of the last run. |
+| `agent-circus hook run <hook>` | Run `provision` or `startup` now, if it is due. Exits with code 1 when the hook fails. |
+| `agent-circus hook run <hook> --force` | Run it even when it is up to date. |
+| `agent-circus hook logs <hook> [-n N] [-f]` | Show the output of the last run. |
+
+The output of a hook appears on the terminal while it runs. A copy is in
+`/var/log/agent-circus/<hook>.log` in the sandbox; each run replaces it.
+In ACP mode (`exec --acp`), the output goes only to that file. If the
+sandbox must boot first, an ACP start waits for the hooks. Run
+`agent-circus up` once before you connect an editor to a new sandbox.
+
+### Hooks and Agents
+
+- The agent can change hook files and `config.toml` through the
+  workspace mount. A changed hook runs at the next boot or `up`. In the
+  sandbox, this gives the agent no new rights: it already runs as root.
+  But the change is in your repository. Review it like other code before
+  you commit it. agent-circus logs `The provision script changed since the
+  last run` before it runs a changed script.
+- Variables that only a hook gets (`env_passthrough` of the hook) are
+  not hidden from the agent: the agent can edit the hook to print them.
+- Hook variables are on the command line of the `msb` process on the
+  host while the hook runs, the same as for daemons and `exec -e`.
+
+## Docker and Disks
+
+The sandbox image ships Docker 29. Docker 29 stores images and containers
+with the overlayfs snapshotter, and that snapshotter needs a real
+filesystem under `/var/lib/docker`. The sandbox root filesystem is an
+overlayfs by default, and the kernel refuses to stack one overlayfs on
+another. A sandbox without disk configuration therefore cannot run
+containers. The sandbox boots, and every `docker` command fails with
+"Cannot connect to the Docker daemon". The boot log explains why.
+
+Enable docker with one of two settings under `[msb.sandbox]`:
+
+``` toml
+[msb.sandbox]
+# Option 1: a dedicated ext4 disk for docker data, removed with the
+# sandbox. Docker data does not count against the root disk size.
+docker_disk = "10G"
+
+# Option 2: a flat root. The whole root filesystem becomes one real
+# filesystem with no overlayfs, and docker data shares it with the rest
+# of the guest. Size it for image content plus docker data (about 3G of
+# image content plus your docker usage).
+root_disk = "flat:32G"
+```
+
+Both settings can be combined: `root_disk = "flat:32G"` with
+`docker_disk = "10G"` puts docker data on its own disk inside a flat
+root. A plain size such as `root_disk = "16G"` keeps the managed root
+and does not enable docker.
+
+Without `root_disk`, the managed root stays at the msb default of 4G.
+Docker data does not count against it, but image content and rootfs
+writes do. The sandbox image carries about 3G of content, so expect
+roughly 1G of headroom. If your agents write a lot outside
+`/var/lib/docker`, raise the root next to the docker disk.
+
+dockerd runs as a supervised s6 service inside the sandbox. It is
+restarted when it crashes and stopped cleanly when the sandbox stops.
+`docker_stop_timeout` (default 20 seconds) bounds how long dockerd waits
+for running containers at shutdown. It is passed to the sandbox at
+creation, so a change needs a re-created sandbox.
+
+Disk settings apply at sandbox creation. agent-circus warns when the
+settings of an existing sandbox differ from the configuration. Remove and
+re-create the sandbox to apply them:
+
+``` shell
+agent-circus rm && agent-circus up
+```
+
+Removing the sandbox deletes the docker data disk, together with all
+images and containers in it. The disk survives `stop` and `start`.
+
+### Persistent Docker Data
+
+Large images or slow builds are expensive to recreate. Set
+`docker_disk_persist = true` to keep docker data when you remove the
+sandbox:
+
+``` toml
+[msb.sandbox]
+docker_disk = "20G"
+docker_disk_persist = true
+```
+
+agent-circus then stores `/var/lib/docker` in a named msb volume called
+`agents-<project>-docker` instead of a disk that belongs to the sandbox.
+`up` creates the volume on first use and reuses it when the sandbox is
+created again. `rm` and `destroy` keep the volume and print its name.
+Everything in it survives: images, build cache, containers, networks,
+and docker volumes. Containers with a restart policy start again with
+the new sandbox.
+
+To delete the volume as well, add `--volumes`:
+
+``` shell
+agent-circus destroy --volumes
+agent-circus rm -f --volumes
+```
+
+You can also delete it later with `msb volume rm agents-<project>-docker`.
+`msb volume list` shows all volumes and their sizes.
+
+Rules and limits:
+
+- `docker_disk_persist` needs `docker_disk`. A flat root alone cannot
+  persist docker data.
+- The size of an existing volume cannot change. When `docker_disk` does
+  not match the volume, `up` stops with an error. Set `docker_disk` to
+  the size that the error names, or delete the volume.
+- Only one running sandbox can use a disk volume at a time. msb refuses
+  a second one, and `up` reports that the volume is in use.
+- An existing sandbox keeps the disk it was created with. After you turn
+  the setting on or off, `up` warns until you re-create the sandbox. The
+  images on the old private disk are lost when you re-create it.
+- A newer dockerd can use the data of an older one. Going back to an
+  older sandbox image with an older dockerd can fail on the same volume.
+
+Host storage lives under the msb storage root (`~/.microsandbox` by
+default). A flat root or a docker disk adds its size there per sandbox.
+A persistent docker volume stays there until you delete it.
+
+## Git Worktrees
+
+agent-circus supports Git worktrees through the worktree mirror. It is on
+by default (`[git] worktree_mirror = true`). To turn it off, set:
+
+``` toml
+[git]
+worktree_mirror = false
+```
+
+A `[git]` table also turns on the forwarding of your host Git
+configuration (see "Git Configuration"), even when it only sets
+`worktree_mirror`.
+
+The mirror adds a second bind mount for the workspace at its exact host absolute
+path inside the sandbox (in addition to the standard `/workspace` mount).
+Both paths point to the same directory, so Git's recorded absolute paths
+are valid on both sides of the sandbox boundary — `git worktree list`,
+`git worktree add`, and all other operations that consume or emit absolute
+paths work without any manual path rewriting.
+
+The mount applies at sandbox creation, like all msb mounts. agent-circus
+warns when an existing sandbox was created without the mirror. Remove and
+re-create the sandbox to apply the flag:
+
+``` shell
+agent-circus rm -f && agent-circus up
+```
+
+Earlier releases had the mirror off by default. A sandbox created by such
+a release has no mirror mount, so agent-circus warns until you re-create
+it, or until you set `worktree_mirror = false` to keep the old behavior.
+Re-creating removes the guest state: installed packages and the result of
+the `provision` hook (Docker data survives only with
+`docker_disk_persist`).
+
+When agent-circus cannot add the default mirror, because the host path of
+the workspace is already a mount target in the sandbox (for example a
+workspace at `/workspace` on the host, as in a dev container), it boots
+without the mirror and logs a short note. An explicit
+`worktree_mirror = true` stops with an error in that case instead.
+
+With the mirror on, agents start in the host path of the workspace
+instead of `/workspace` (unless `[agent] workdir` or `exec --workdir`
+sets another directory). Git then records paths that are valid on the
+host, and you do not need extra instructions in `AGENTS.md`. ACP sessions
+from an editor still open in `/workspace`, because the editor maps file
+paths to it; the git wrapper runs their worktree commands through the
+host path (see below).
+
+Create worktrees below `.agent-circus/worktrees/`, for example
+`git worktree add .agent-circus/worktrees/my-branch -b my-branch`.
+agent-circus creates this directory on `up`, `start`, and `exec` in the main
+checkout, with a `.gitignore` that hides it from `git status`. It is part
+of the workspace mount, so the worktree and its uncommitted files are
+visible on the host, and Git paths are valid on both sides. Claude Code's
+own worktrees in `.claude/worktrees/` work the same way. Add
+`.claude/worktrees/` to your `.gitignore` if you use them.
+
+A worktree outside the workspace (such as `../my-branch`) created in the
+sandbox exists only in the sandbox. agent-circus warns about such worktrees
+on `up`, `start`, `exec`, and `destroy`. They are lost when you remove the
+sandbox and leave a stale entry in `.git/worktrees/` (clean it up with
+`git worktree prune`). Without `worktree_mirror`, worktrees in
+`.agent-circus/worktrees/` record `/workspace` paths that are invalid on
+the host; agent-circus warns about this as well.
+
+The sandbox runs `git` through a small wrapper (`/usr/local/bin/git`,
+installed by agent-circus on every start). It rejects `git worktree add`
+and `git worktree move` to paths outside `.agent-circus/worktrees/` and
+`.claude/worktrees/`. Agents act on the first lines of an error, so the
+error starts with the command to run: the rejected command, rewritten to
+run in the repository root with a target below `.agent-circus/worktrees/`
+(named after the new branch or the rejected path). Then follow one line
+with the reason (for example "outside the workspace", so the worktree
+would be lost with the sandbox) and a warning not to bypass the check
+with `/usr/bin/git`:
+
+``` text
+fatal: agent-circus: rejected worktree path /home/user/feature
+Run this instead:
+  git -C /home/user/myrepo worktree add .agent-circus/worktrees/feature -b feature
+Why: /home/user/feature is outside the workspace. A worktree there would exist only in this sandbox and would be lost when the sandbox is removed.
+Do not use /usr/bin/git to get around this check: the worktree would not work correctly on the host.
+```
+
+All other Git commands pass through
+unchanged. The wrapper guides agents; it is not a security boundary:
+`/usr/bin/git` bypasses it. Worktrees that Codex creates under `~/.codex`
+are rejected as well, because their paths differ between host and
+sandbox.
+
+With `worktree_mirror = true`, `/workspace` and the host path are the
+same directory, but Git records the path it is given. Agents in ACP
+sessions work in `/workspace`, so the wrapper translates their worktree
+commands: `git worktree add`, `move`, `remove`, `lock`, `unlock` and
+`repair` on this checkout through `/workspace` run through the host path
+instead, with every path argument mapped to it. For example,
+`git worktree add .agent-circus/worktrees/feature -b feature` in
+`/workspace` runs as
+`git -C /home/user/myrepo worktree add /home/user/myrepo/.agent-circus/worktrees/feature -b feature`.
+The wrapper prints one line that says so. The new worktree is also
+reachable as `/workspace/.agent-circus/worktrees/feature`, and Git works
+there as well. A target outside the worktree directories is still
+rejected, with a suggestion through the host path, e.g.
+`git worktree add ../feature -b feature` becomes
+`git -C /home/user/myrepo worktree add .agent-circus/worktrees/feature -b feature`.
+With `--git-dir` or `--work-tree`, the wrapper does not translate and
+rejects every target through `/workspace`.
+
+An agent can still create a worktree through `/workspace` without the
+wrapper, for example with `/usr/bin/git` or with a Git library inside a
+harness. Git then records `/workspace` paths, and the worktree is broken
+on the host although its files are there. With `worktree_mirror = true`,
+agent-circus repairs such worktrees on the host at every `up`, `start` and
+`exec`: for each registered worktree below `/workspace` whose directory
+exists in the workspace, it runs `git worktree repair` with the host
+path, and logs `Repaired Git worktree ...`. This needs `git` on the
+host; without it, agent-circus prints a warning. Until the next `up`,
+`start` or `exec`, the worktree stays broken on the host. Without the
+mirror, agent-circus does not repair anything, because `/workspace` paths
+are the only paths that work in the sandbox then.
+
+agent-circus does not run in a linked worktree (a directory created with
+`git worktree add`). Its Git metadata lives in the main repository, outside
+the sandbox, so Git cannot work inside the sandbox. `up`, `start`, and
+`exec` fail with an error when the workspace or one of its parent
+directories is a linked worktree. Run agent-circus from the main checkout and
+create or change worktrees there, on the host or in the sandbox. `ps`,
+`stop`, `rm`, and `destroy` still work, so you can remove a sandbox that
+was created in a worktree earlier.
+
+The remaining agent-circus `[git]` keys are supported as well; see
+"Git Configuration".
+
+## Git Configuration
+
+The `[git]` table forwards the git configuration of your host into the
+sandbox. Agents in the sandbox then use your git identity, and they can
+sign commits with your SSH key. Any `[git]` table turns forwarding on,
+even when it only sets `worktree_mirror`:
+
+``` toml
+[git]
+config_path = "~/.gitconfig"                # optional, default search
+signing_key_path = "~/.ssh/id_ed25519.pub"  # optional, SSH public key
+worktree_mirror = true                      # optional; see "Git Worktrees"
+```
+
+With no `config_path`, agent-circus uses the first file that exists:
+`~/.gitconfig`, then `$XDG_CONFIG_HOME/git/config` (default
+`~/.config/git/config`). Only the first file is copied.
+
+agent-circus writes three files into the sandbox, below
+`/root/.config/agent-circus/git/`: the copy of the host gitconfig, the
+copy of the signing key, and a managed gitconfig that includes the host
+copy and sets `user.signingkey`. Symlinks on the host (for example from
+home-manager) are followed; the sandbox gets a copy of the target file. The top of `/root/.gitconfig` in the
+sandbox gets one managed include block that points at the managed
+file. Everything else in `/root/.gitconfig` stays as it is. Your own
+`git config --global` changes in the sandbox stay and win over host
+settings, because git uses the last value it reads.
+
+The files are refreshed at every `up`, `start`, and `exec`. The copy is
+one-way: guest-side edits of the copies are overwritten. If you remove
+the `[git]` table, the last files stay in the sandbox until you
+re-create it.
+
+To sign commits in the sandbox, set `gpg.format = ssh` in the host git
+config, point `signing_key_path` at your **public** key, and configure
+the `[ssh]` table so the SSH agent is forwarded. git then signs with
+`ssh-keygen` and the private key stays in your host agent. agent-circus
+refuses files that do not look like one OpenSSH public key, and it never
+copies a file that contains a private key.
+
+Missing or invalid files never stop a command. agent-circus logs a warning
+(or an INFO message when no default gitconfig exists) and forwards the
+parts it can.
+
+Limitations:
+
+- Host paths inside the host gitconfig do not exist in the sandbox.
+  This affects `includeIf` targets, `core.excludesFile`,
+  `gpg.ssh.allowedSignersFile`, and credential helpers. Signing works,
+  but `git log --show-signature` may not verify signatures.
+- The host gitconfig may contain secrets, for example tokens in remote
+  URLs. They are copied into the sandbox.
+
+## SSH Agent Forwarding
+
+An SSH agent is a small program on your host that holds your private SSH
+keys and signs requests for them. With agent forwarding, the `ssh` and
+`git` commands inside the sandbox use this agent. Git over SSH then works
+without a private key in the sandbox, and no private key material ever
+enters the guest.
+
+Add an `[ssh]` table to `.agent-circus/config.toml` to turn the forwarding
+on. An empty table is enough:
 
 ``` toml
 [ssh]
 ```
 
-The host's SSH agent socket (`$SSH_AUTH_SOCK`) is mounted read-only at
-`/run/ssh-agent.sock` inside each container, and `SSH_AUTH_SOCK` is set
-accordingly.
+The host needs a running SSH agent. Make sure that `SSH_AUTH_SOCK` is set
+and that `ssh-add -l` on the host lists your keys. When `SSH_AUTH_SOCK` is
+not set, `up` and `start` fail with an error before msb runs.
 
-> **Note:** `SSH_AUTH_SOCK` must be set in your environment when running
-> `agent-circus`. If it is not, agent-circus will report an error.
-
-#### Starting an SSH agent on the host
-
-**Linux — desktop session (GNOME, KDE, etc.)**
-
-Most desktop environments start an SSH agent automatically as part of the
-session. `SSH_AUTH_SOCK` is usually already set; verify with:
-
-``` sh
-echo $SSH_AUTH_SOCK
-```
-
-**Linux — systemd user service**
-
-For headless or server setups, enable the systemd SSH agent user service:
-
-``` sh
-systemctl --user enable --now ssh-agent
-```
-
-Add the following to your shell profile (e.g. `~/.bashrc` or `~/.zshrc`) to
-make the socket available in new shells:
-
-``` sh
-export SSH_AUTH_SOCK="$XDG_RUNTIME_DIR/ssh-agent.socket"
-```
-
-**Linux — manual (one-off)**
-
-Start a temporary agent in your current shell session:
-
-``` sh
-eval $(ssh-agent)
-```
-
-**macOS**
-
-macOS integrates the system keychain as an SSH agent; `SSH_AUTH_SOCK` is set
-automatically in GUI and terminal sessions. No extra setup is needed.
-
-#### Loading keys into the agent
-
-Once the agent is running, add your key(s):
-
-``` sh
-ssh-add ~/.ssh/id_ed25519
-# or to add all default keys:
-ssh-add
-```
-
-On macOS you can persist keys across reboots in the keychain:
-
-``` sh
-ssh-add --apple-use-keychain ~/.ssh/id_ed25519
-```
-
-#### Passing SSH config and known_hosts
-
-By default only the agent socket is forwarded. To also make your SSH config
-and known hosts available inside containers, add the optional fields:
+You can copy an SSH client configuration and a `known_hosts` file into the
+sandbox:
 
 ``` toml
 [ssh]
@@ -1140,130 +2012,47 @@ config_path = "~/.ssh/config"
 known_hosts_path = "~/.ssh/known_hosts"
 ```
 
-Both fields are optional and independent of each other. Tilde (`~`) is
-expanded to your home directory. The files are mounted read-only at
-intermediate paths and copied into `/home/node/.ssh/` at container startup
-with correct ownership — no key material is involved.
+agent-circus copies these files to `/root/.ssh` after every `up` and
+`start`. The copy is one-way. Files that you edit inside the sandbox are
+overwritten at the next refresh. Symlinks on the host (for example from
+home-manager) are followed; the sandbox gets a copy of the target file.
 
-> **Rebuild required**: The copy logic lives in `docker-entrypoint.sh`
-> which is baked into the image. Run `agent-circus build` after enabling
-> these options for the first time.
+A host `~/.ssh/config` with macOS-only options such as `UseKeychain`
+makes `ssh` inside the sandbox fail. Add this line at the top of the file:
 
-> **IdentityFile directives**: If your `~/.ssh/config` references local key
-> paths (e.g. `IdentityFile ~/.ssh/id_ed25519`), those paths won't exist
-> inside the container. This is harmless — SSH falls back to the forwarded
-> agent automatically when a referenced file is absent.
-
-### Git Configuration
-
-Add a `[git]` table to `config.toml` to forward your host Git configuration
-into agent containers, giving agents the correct identity for commits and
-enabling SSH commit signing.
-
-``` toml
-[git]
-config_path = "~/.gitconfig"              # optional, defaults to ~/.gitconfig
-signing_key_path = "~/.ssh/id_ed25519.pub"  # optional
-worktree_mirror = true                    # optional, see below
+``` ssh-config
+IgnoreUnknown UseKeychain
 ```
 
-The host gitconfig is mounted read-only at `/run/git-host/config`. At container
-startup the entrypoint generates `/home/node/.gitconfig` using git's native
-`[include]` mechanism:
+`IdentityFile` entries that point at host paths produce warnings only.
+The keys come from the agent, not from files in the sandbox.
 
-``` ini
-[include]
-    path = /run/git-host/config
-[user]
-    signingkey = /run/git-host/signingkey.pub   # only when signing_key_path is set
-```
+Two setup steps apply:
 
-All portable settings (name, email, aliases, …) flow through the include
-unchanged. Only `user.signingkey` is overridden to point to the container-local
-path, resolving the host-absolute-path issue without rewriting the original file.
-The public key is not copied into `~/.ssh`; when `signing_key_path` is set it is
-mounted at `/run/git-host/signingkey.pub`.
+1. Rebuild the image once with `agent-circus build`. The image then contains
+   `openssh-client` and `socat`.
+2. Re-create the sandbox when you add or remove the `[ssh]` table:
+   `agent-circus rm -f && agent-circus up`. The connection route between the
+   sandbox and the host agent is fixed at sandbox creation.
 
-SSH commit signing still uses your private key through the forwarded SSH agent.
-Load the matching private key on the host before starting or using the
-container, e.g.:
+After every boot and start, agent-circus refreshes the route target and runs
+`ssh-add -l` inside the sandbox. The check warns when it cannot reach the
+agent, for example after you restarted the agent on the host. Run
+`agent-circus up` again in that case, so agent-circus refreshes the route.
 
-``` sh
-ssh-add ~/.ssh/id_ed25519
-```
+Warning: every process in the sandbox can ask the host agent to sign. Run
+`ssh-add -c` on the host to confirm each use, or run a dedicated agent
+with only the keys that the sandbox needs.
 
-Inside the container, `ssh-add -l` should list the key and `git config --global
---get user.signingkey` should print `/run/git-host/signingkey.pub`.
+## Host Entries
 
-> **Rebuild required**: The entrypoint logic is baked into the image.
-> Run `agent-circus build` after enabling `[git]` for the first time.
+The hosts file of your host (`/etc/hosts` by default) maps names to IP
+addresses. This is where a company VPN or a local test server adds its
+names. The sandbox does not see these names, because it has its own hosts
+file and its own resolver.
 
-> **`[include]` directives** in your gitconfig that reference other host paths
-> (e.g. `~/.gitconfig.local`) will silently produce no-ops inside the container.
-> Extract the portable parts into the forwarded file or use `config_path` to
-> point at a dedicated container-friendly config.
-
-#### Worktree support (`worktree_mirror`)
-
-Set `worktree_mirror = true` when the repository is also used outside the
-containers and you need transparent Git worktree support.
-
-This adds a second bind mount for the workspace at its exact host absolute path
-inside every agent container (in addition to the standard `/workspace` mount).
-Both paths point to the same directory, so Git's recorded absolute paths are
-valid inside the container — `git worktree list`, `git worktree add`, and all
-other operations that consume or emit absolute paths work without any manual
-path rewriting.
-
-Enable it via `agent-circus init`:
-
-``` sh
-agent-circus init --git-worktree-mirror
-```
-
-This also writes a managed `## Git Operations` section to `AGENTS.md` in the
-workspace, instructing agents to use the host path (e.g.
-`/home/user/projects/myrepo`) rather than `/workspace` for Git operations.
-The section is bounded by HTML comment markers and updated idempotently on
-subsequent runs.
-
-> **Note:** The host path of the workspace is embedded in `AGENTS.md` at init
-> time. Re-run `agent-circus init --git-worktree-mirror` if the repository is
-> moved to a different location on the host.
-
-### CA Certificates
-
-Add a `[ca_certs]` table to `config.toml` to forward selected CA certificates from the
-host into agent containers. This is needed when agents make HTTPS requests to internal
-services signed by a private or corporate CA.
-
-``` toml
-[ca_certs]
-patterns = ["corp-*.crt", "my-vpn-ca.crt", "re:internal"]
-# path = "/usr/local/share/ca-certificates"   # optional, defaults as above
-```
-
-Certificates whose **filename** matches a pattern are bind-mounted at
-`/run/ca-host/<filename>` and installed into the container's system trust store by the
-entrypoint (`update-ca-certificates`), making them trusted for all tools (curl, git,
-npm, etc.).
-
-Pattern syntax is the same as `[hosts]`: fnmatch glob by default, `re:` prefix for regex.
-
-Use `agent-circus init` to write patterns:
-
-``` sh
-agent-circus init --ca-cert-pattern "corp-*.crt" --ca-cert-pattern "vpn-ca.crt"
-```
-
-> **Rebuild required**: `install-ca-certs.sh` and its sudoers rule are baked into the
-> image. Run `agent-circus build` after enabling `[ca_certs]` for the first time.
-
-### Host Entries
-
-Add a `[hosts]` table to `config.toml` to forward selected entries from the host's
-`/etc/hosts` into agent containers. This is useful for reaching internal servers, VPN
-targets, or other hosts that are only resolvable on the host machine.
+The `[hosts]` table forwards selected entries from the host hosts file
+into the sandbox. The table uses the same pattern syntax as agent-circus:
 
 ``` toml
 [hosts]
@@ -1271,272 +2060,139 @@ patterns = ["*.corp.internal", "myserver", "re:\\.vpn\\.example\\.com$"]
 # file = "/etc/hosts"   # optional, defaults to /etc/hosts
 ```
 
-Matching entries are injected via Docker Compose's `extra_hosts` mechanism, which adds
-them to `/etc/hosts` inside every agent container.
+A pattern matches a name in the hosts file. A pattern without `re:` is a
+glob, where `*` matches any text. A pattern with `re:` is a regular
+expression. Matching ignores upper and lower case. When one name of a
+line matches, all names of that line are forwarded.
 
-**Pattern syntax:**
+agent-circus writes the matching entries into a managed block in
+`/etc/hosts` inside the sandbox. Everything outside this block stays as
+it is. The block is refreshed at every `up`, `start`, and `exec`, so a
+change on the host applies without re-creating the sandbox. Names resolve
+through the guest resolver and never reach the DNS rules of msb.
 
-| Pattern | Syntax | Example |
-|---------|--------|---------|
-| `*.corp.internal` | fnmatch glob (default) | matches `foo.corp.internal` |
-| `myserver` | exact glob | matches only `myserver` |
-| `re:\.vpn\.` | Python regex (prefix `re:`) | matches any name containing `.vpn.` |
+Entries that point at a loopback address (`127.0.0.0/8` or `::1`) resolve
+to the sandbox itself, not to your host. agent-circus warns about them.
+Use `host.microsandbox.internal` (with the `host` network profile) to
+reach services on your host instead.
 
-- Matching is case-insensitive.
-- If **any** name on a hosts line matches, **all** names from that line are forwarded
-  (e.g. if `myserver.corp.internal` matches, `myserver` is also forwarded — preserving
-  alias semantics).
+Containers that an agent starts with the Docker engine inside the sandbox
+do not get these entries.
 
-Use `agent-circus init` to write patterns without editing `config.toml` directly:
+If you remove the `[hosts]` table, the last block stays in the sandbox
+until you re-create it. To empty the block without re-creating, set
+`patterns = []` and run `agent-circus up` once.
 
-``` sh
-agent-circus init --hosts-pattern "*.corp.internal" --hosts-pattern "myserver"
-```
+## CA Certificates
 
-The flag is additive and idempotent: running it again merges new patterns without
-duplicating existing ones.
+Company networks often use a private certificate authority (CA). A TLS
+inspection proxy or an internal server, such as an artifact store, uses
+such a CA. Programs in the sandbox do not trust this CA by default, so
+HTTPS requests to these servers fail.
 
-### Environment Variables
-
-Two complementary mechanisms control environment variables in containers:
-
-| Mechanism | When | Use for |
-|-----------|------|---------|
-| `[env]` table | **Build time** — baked into the image as `ENV` instructions | Stable toolchain paths, non-secret config |
-| `env_passthrough` list | **Runtime** — forwarded from the host when the container starts | Secrets, tokens, values that change per session |
-
-#### `[env]` — bake into the image
-
-Each entry is injected as a Docker `ENV` instruction at the end of the base build stage,
-so `$VARNAME` is expanded relative to the image's current value — not the host shell.
+Set `trust_host_cas = true` under `[msb.network]`:
 
 ``` toml
-[env]
-GOPATH = "/home/node/go"
-PATH = "/usr/local/go/bin:$PATH"
+[msb.network]
+trust_host_cas = true
 ```
 
-This only affects **instant mode**. In deploy mode add `ENV` lines directly to
-`.agent-circus/Dockerfile`.
+agent-circus then creates the sandbox with `--trust-host-cas`. msb copies
+every CA that the host trusts into the sandbox and adds it to the system
+store of the sandbox.
 
-#### `env_passthrough` — forward from the host at runtime
+The certificates must be in the CA store of the host. agent-circus does
+not select or copy single certificates. The `[ca_certs]` table of
+agent-circus is not supported; agent-circus logs a message and ignores it.
+On Debian or Ubuntu hosts, put the certificate files into
+`/usr/local/share/ca-certificates/` and run `sudo update-ca-certificates`
+on the host.
 
-Variable **values** are never stored in any config or override file — Docker Compose
-reads them directly from the host environment when the container starts.
+Security note: every CA that the host trusts is also trusted in every
+sandbox with this option. A CA that someone plants on the host is
+trusted in the sandbox as well. The option is off by default.
 
-``` toml
-env_passthrough = ["MY_CORP_*", "re:^VAULT_", "ANTHROPIC_API_KEY"]
-```
-
-Pattern syntax is the same as `[hosts]` and `[ca_certs]`: fnmatch glob by default,
-`re:` prefix for regex, case-insensitive.
-
-``` sh
-agent-circus init --env-pattern "MY_CORP_*" --env-pattern "re:^VAULT_"
-```
-
-#### Combined example
-
-A typical Go project that needs a corporate proxy and a rotating API token:
-
-``` toml
-# Bake the Go toolchain path into the image once (stable, non-secret).
-[env]
-GOPATH = "/home/node/go"
-PATH = "/usr/local/go/bin:$PATH"
-GOPROXY = "https://proxy.corp.internal/go,direct"
-
-# Forward secrets and session-specific values from the host at runtime.
-env_passthrough = ["ANTHROPIC_API_KEY", "MY_CORP_*", "re:^VAULT_"]
-```
-
-### `[logging]` — log level and file
-
-Control logging from your user-global `config.toml`
-(`~/.config/agent-circus/config.toml`):
-
-``` toml
-[logging]
-level = "DEBUG"                      # DEBUG | INFO | WARNING | ERROR | CRITICAL
-file  = "/tmp/agent-circus.log"      # optional; omit to log to stdout only
-```
-
-The `--log-level` and `--log-file` CLI flags (and their `LOGLEVEL` / `LOGFILE`
-environment variables) take precedence over `config.toml`.  This section is
-read from the **user-global** config only — project-local logging config is
-not supported because logging is initialised before the workspace is known.
-
-## Hooks
-
-Hooks let you inject custom shell commands into the Docker image build,
-without modifying the shared `Dockerfile`.
-
-| Script | Runs as | When | Typical use |
-|---|---|---|---|
-| `base-root.sh` | `root` | Build time | Install apt packages, system-level configuration |
-| `base-user.sh` | `node` | Build time | Install npm/uv/pip packages, user-level tooling |
-| `startup.sh` | `node` | Container start | Project-specific runtime setup |
-
-Build scripts are optional and removed from the image after execution.
-`startup.sh` is read directly from the bind-mounted workspace at container
-start — changes take effect immediately without a rebuild.
-
-### Inline hooks via `config.toml` (instant mode)
-
-In instant mode you can define hook content directly in `config.toml` using
-the `[hooks]` table.  This works without a `.agent-circus/` directory and is
-ideal for user-global hooks that apply to every project:
-
-``` toml
-[hooks]
-base_root = """
-apt-get update && apt-get install -y ripgrep fd-find
-"""
-
-base_user = """
-npm install -g @myorg/custom-tool
-curl -fsSL https://my-tool.sh | sh
-"""
-
-startup = """
-uv sync
-"""
-```
-
-Values are multi-line TOML strings written verbatim as shell scripts. A
-`#!/usr/bin/env bash` shebang is prepended automatically when absent.  If
-both a `[hooks]` table and project hook files exist, `config.toml` wins.
-
-> **Note:** `startup.sh` defined in `config.toml` is written to the XDG state
-> directory and bind-mounted read-only into the container at
-> `/run/startup-hook/startup.sh` — *outside* the workspace bind-mount, so it
-> leaves no files in your project directory. The entrypoint runs it in
-> preference to a `startup.sh` file in `.agent-circus/hooks/`, so `config.toml`
-> takes precedence. `base_root` and `base_user` are ignored in deploy mode —
-> place those scripts in `.agent-circus/hooks/` directly.
->
-> Earlier releases mounted `config.toml` startup hooks inside the workspace
-> instead, and the container runtime sometimes left a zero-byte placeholder at
-> `.agent-circus/hooks/startup.sh` that the project user could not delete. Agent
-> Circus removes such leftovers automatically on `ac rm`, `ac destroy`, and
-> service start, and drops the `hooks` directory once it is empty. When the
-> file is owned by `root` and undeletable from the host, it is removed by a
-> short-lived root container; if no local image exists for that, the log tells
-> you how to delete it manually (`sudo rm -f`).
-
-### Hook files (deploy mode)
-
-In deploy mode, place scripts under `.agent-circus/hooks/`:
+The option applies only when the sandbox is created. After you change
+it, or after you add or remove a CA on the host, re-create the sandbox:
 
 ``` shell
-# .agent-circus/hooks/base-root.sh
-apt-get update \
-    && apt-get install -y ripgrep
+agent-circus rm -f && agent-circus up
 ```
+
+agent-circus warns when the sandbox and the configuration disagree about
+the option.
+
+curl, git, the Docker engine, Node-based agents, Python (`requests`,
+`ssl`) and uv use the system store. Codex is not verified yet. Changes
+to the image need `agent-circus build` and a re-created sandbox.
+Containers that an agent starts with the Docker engine inside the
+sandbox do not get these certificates.
+
+## Troubleshooting
+
+If the sandbox boots but the Docker engine stays unreachable, read the
+log of dockerd:
 
 ``` shell
-# .agent-circus/hooks/base-user.sh
-npm install -g @myorg/custom-tool
+agent-circus logs dockerd
 ```
+
+The log contains one `--- circus-dockerd start` line per (re)start of the
+service, including restarts after a crash. The command
+`msb exec agents-<project> -- /command/s6-rc -a list` lists the services
+that s6 currently runs.
+
+If a command fails with a message about the msb storage root and path
+substitution, an ancestor of the msb storage root is writable by other
+accounts. The msb storage root is `~/.microsandbox` by default. Fix the
+directory named in the error. Then run `umask` in your shell to make sure
+that new directories get safe permissions:
 
 ``` shell
-# .agent-circus/hooks/startup.sh
-# Sync project dependencies and start an SSH tunnel to an internal host.
-uv sync
-autossh -M 0 -f -N -L 5432:db.internal:5432 tunnel-user@bastion.internal
+chmod g-w,o-w ~/.microsandbox
 ```
 
-## Setting up Editors to Work with ACP
+If `up` or `start` reports that dockerd did not become ready, the warning
+names the probe error and the diagnostic commands. Run the commands from the
+warning and compare their output with the dockerd log
+(`agent-circus logs dockerd`).
 
-### Emacs
+If `docker` commands fail with "Cannot connect to the Docker daemon" and
+the boot log says that the docker data root is on overlayfs, docker is
+not enabled for this sandbox. Add `docker_disk = "10G"` or
+`root_disk = "flat:32G"` under `[msb.sandbox]`, then remove and re-create
+the sandbox. See the Docker and Disks section.
 
-This is a working [agent-shell](https://github.com/xenodium/agent-shell) configuration based `agent-circus`:
+If a forwarded port answers with `Empty reply from server`, see the
+Port Forwarding section under Networking: the server inside the sandbox is
+bound to `127.0.0.1` in the guest and must be restarted on `0.0.0.0`.
 
-``` emacs-lisp
-(defconst rpo/agent-shell--container-workspace-path "/workspace/"
-  "The workspace path inside agent containers.")
+If `ssh-add -l` inside the sandbox reports that it cannot connect to the
+agent, see the SSH Agent Forwarding section. Common causes are a missing
+`[ssh]` table at sandbox creation, a stopped host agent, or a sandbox
+created before the image rebuild.
 
-(defun rpo/agent-shell--resolve-container-path (path)
-  "Resolve PATH between local filesystem and container workspace.
+If a name from your host hosts file does not resolve inside the sandbox,
+see the Host Entries section. Check that the `[hosts]` table is present,
+that the pattern matches the name, and that `agent-circus up` ran after the
+last change to the host file.
 
-For example:
+If a mounted directory is empty inside the sandbox, make sure that the host
+path in the configuration contains files. agent-circus fails the boot when a
+host path does not exist or is not a directory, but it cannot see inside
+the directory, so an empty source produces an empty guest directory.
 
-- /workspace/README.md
-    => /home/xenodium/projects/kitchen-sink/README.md
-- /home/xenodium/projects/kitchen-sink/README.md
-    => /workspace/README.md"
-  (let ((cwd (agent-shell-cwd)))
-    (if (string-prefix-p cwd path)
-        ;; Local -> container
-        (string-replace cwd rpo/agent-shell--container-workspace-path path)
-      ;; Container -> local
-      (if agent-shell-text-file-capabilities
-          (if-let* ((_ (string-prefix-p rpo/agent-shell--container-workspace-path path))
-                    (local-path (expand-file-name
-                                 (string-replace rpo/agent-shell--container-workspace-path cwd path))))
-              (or
-               (and (file-in-directory-p local-path cwd) local-path)
-               (error "Resolves to path outside of working directory: %s" path))
-            (error "Unexpected path outside of workspace folder: %s" path))
-        (error "Refuse to resolve to local filesystem with text file capabilities disabled: %s" path)))))
+## Limitations
 
-(defun rpo/agent-shell-circus-runner-multi (buffer)
-  "Return the agent-circus exec command prefix to run for BUFFER's agent.
+msb is beta software. agent-circus pins the msb version through the
+`microsandbox` package and warns about version drift, but command line flags
+can still change between releases.
 
-Looks up the agent identifier in BUFFER's `agent-shell' config and
-selects the matching `agent-circus exec` service, defaulting to
-\"claude-code\" when no identifier-specific override is found.
+One workspace maps to one sandbox, and all harnesses of a workspace share
+it. Commands in the sandbox run as root, because the Docker engine in the
+guest needs root. There is no per-agent user separation yet.
 
-Works in both instant mode and deploy mode."
-  (let* ((cfg (agent-shell-get-config buffer))
-         (id  (map-elt cfg :identifier))
-         (service
-          (pcase id
-            ('claude-code "claude-code")
-            ('codex "codex")
-            ('mistral-vibe "mistral-vibe")
-            ('opencode "opencode")
-            ('pi "pi")
-            (_ "opencode"))))
-    (list "agent-circus" "--log-level" "DEBUG" "--log-file" "/tmp/agent-circus.log" "exec" service "--")))
-
-(use-package agent-shell
-  :ensure t
-  :config
-  (setq agent-shell-mistral-authentication
-        (agent-shell-mistral-make-authentication :api-key "ignored"))
-  (setq acp-logging-enabled t)
-  (setq agent-shell-command-prefix #'rpo/agent-shell-circus-runner-multi)
-  (setq agent-shell-path-resolver-function #'rpo/agent-shell--resolve-container-path)
-  (setq agent-shell-file-completion-enabled t))
-```
-
-## Roadmap
-
-Planned areas of work include:
-
-- Expanded Docker and Podman compatibility testing across runtime and Compose
-  provider versions, plus continued hardening for additional container engines.
-- A plugin mechanism that keeps core isolation features small and focused while
-  making integrations easier to add, share, and select per project.
-
-### Plugin Mechanism
-
-The plugin infrastructure is intended to separate core mechanisms such
-as filesystem and network isolation from optional components. New
-agent harnesses, sidecars, and integrations should be addable without
-changing the core, and add-ons such as llama.cpp or Claude-Mem should
-become easier to package, share, and enable only where they are
-needed, e.g. per-project.
-
-## Disclosure: AI-Assisted Development
-
-This project is in large parts AI-generated code. However, humans
-manage the architecture and perform code reviews of those parts which
-are generated by AI.
-
-Furthermore, this is a self-hosting project. Agents working on this
-project are running inside what `agent-circus` provides. To reduce
-model risk, AI systems from different vendors are assigned distinct
-roles in the development process (implementation, testing, and
-security review).
+agent-circus does not start sidecar containers. Features of agent-circus that
+need companion containers, for example llama.cpp or claude-mem, have no
+agent-circus equivalent yet. A process that runs in the sandbox itself can
+run as a [daemon](#daemons).

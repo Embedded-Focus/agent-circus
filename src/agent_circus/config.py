@@ -1,1566 +1,1947 @@
-"""Configuration management for Agent Circus CLI."""
+"""Configuration loading and validation for agent-circus.
 
-import fnmatch
-import json
+agent-circus reads the project ``.agent-circus/config.toml`` file, plus a
+user-global config. The ``[msb]`` table holds the settings that map
+directly to the msb binary: ``msb.binary``, ``[msb.sandbox]``,
+``[msb.network]``, and ``[msb.mounts]``. All other agent-circus settings
+live in top-level tables (``[image]``, ``[agent]``, ``[tracing]``,
+``[skills]``, ``[[daemons]``, ``[hooks]``, ``[env]``). Unknown or
+misplaced config keys stop the command with a
+:class:`ConfigurationError`.
+"""
+
+from __future__ import annotations
+
 import logging
 import os
 import re
 import tomllib
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
-
-import tomli_w
 
 from .exceptions import ConfigurationError
-from .runtime import ContainerRuntime, validate_runtime
-
-CONFIG_DIR_NAME = ".agent-circus"
-
-COMPOSE_FILE_NAME = "compose.yaml"
-
-COMPOSE_SHADOW_FILE_NAME = "compose.shadow.json"
-
-COMPOSE_AGENT_CONFIGS_FILE_NAME = "compose.agent-configs.json"
-
-COMPOSE_AGENT_CONFIG_MOUNTS_FILE_NAME = "compose.agent-config-mounts.json"
-
-COMPOSE_HOST_CREDENTIALS_FILE_NAME = "compose.host-credentials.json"
-
-COMPOSE_MCP_FILE_NAME = "compose.mcp.json"
-
-COMPOSE_ADDITIONAL_DIRS_FILE_NAME = "compose.additional-dirs.json"
-
-COMPOSE_SSH_FILE_NAME = "compose.ssh.json"
-
-COMPOSE_GIT_FILE_NAME = "compose.git.json"
-
-COMPOSE_HOSTS_FILE_NAME = "compose.hosts.json"
-
-COMPOSE_CA_CERTS_FILE_NAME = "compose.ca-certs.json"
-
-COMPOSE_ENV_PASSTHROUGH_FILE_NAME = "compose.env-passthrough.json"
-
-COMPOSE_STARTUP_HOOK_FILE_NAME = "compose.startup-hook.json"
-
-COMPOSE_GIT_WORKTREE_MIRROR_FILE_NAME = "compose.git-worktree-mirror.json"
-
-COMPOSE_DATA_STORE_FILE_NAME = "compose.data-store.json"
-
-COMPOSE_PORT_FORWARDS_FILE_NAME = "compose.port-forwards.json"
-
-COMPOSE_LLAMA_CPP_FILE_NAME = "compose.llama-cpp.json"
-
-COMPOSE_CLAUDE_MEM_FILE_NAME = "compose.claude-mem.json"
-
-COMPOSE_PODMAN_RUNTIME_FILE_NAME = "compose.podman-runtime.json"
-
-LLAMA_CPP_IMAGE = "ghcr.io/ggml-org/llama.cpp:server"
-LLAMA_CPP_DEFAULT_MODEL = "ggml-org/gemma-3-1b-it-GGUF/gemma-3-1b-it-Q4_K_M.gguf"
-LLAMA_CPP_DEFAULT_MODELS_CACHE = "${HOME}/.cache/huggingface"
-LLAMA_CPP_DEFAULT_CONTEXT_SIZE = 2048
-LLAMA_CPP_CONTAINER_MODELS_PATH = "/models"
-LLAMA_CPP_PORT = 8080
-
-DATA_STORE_DEFAULT_MOUNT_BASE = "/home/node/.local/share/agent-circus"
-
-CLAUDE_MEM_CONTAINER_DATA_DIR = "/home/node/.claude-mem"
-
-CLAUDE_MEM_SUPPORTED_SERVICES = ["claude-code"]
-
-DATA_STORE_SEED_MODES = {"once"}
-
-CA_CERTS_DEFAULT_DIR = "/usr/local/share/ca-certificates"
-
-CONFIG_FILE_NAME = "config.toml"
-
-DOCKERFILE_NAME = "Dockerfile"
-
-HOOKS_DIR_NAME = "hooks"
-
-AVAILABLE_SERVICES = ["claude-code", "codex", "mistral-vibe", "opencode", "pi"]
-
-DEFAULT_AGENT_CONFIG_MOUNTS: dict[str, dict[str, str]] = {
-    "claude-code": {
-        "host": "${HOME}/.claude",
-        "container": "/home/node/.claude",
-    },
-    "codex": {
-        "host": "${HOME}/.codex",
-        "container": "/home/node/.codex",
-    },
-    "mistral-vibe": {
-        "host": "${HOME}/.vibe",
-        "container": "/home/node/.vibe",
-    },
-    "opencode": {
-        "host": "${HOME}/.config/opencode",
-        "container": "/home/node/.config/opencode",
-    },
-    # ``.pi`` rather than ``.pi/agent`` because the pi-acp adapter keeps its
-    # session map in ``~/.pi/pi-acp`` (see ``pi_acp/paths.ts``); mounting the
-    # parent persists agent state and adapter state together.
-    "pi": {
-        "host": "${HOME}/.pi",
-        "container": "/home/node/.pi",
-    },
-}
-
-AGENT_CREDENTIAL_PATHS: dict[str, dict[str, str]] = {
-    "claude-code": {
-        "host": "${HOME}/.claude/.credentials.json",
-        "container": "/home/node/.claude/.credentials.json",
-    },
-    "codex": {
-        "host": "${HOME}/.codex/auth.json",
-        "container": "/home/node/.codex/auth.json",
-    },
-    "mistral-vibe": {
-        "host": "${HOME}/.vibe/.env",
-        "container": "/home/node/.vibe/.env",
-    },
-    "opencode": {
-        "host": "${HOME}/.local/share/opencode/auth.json",
-        "container": "/home/node/.local/share/opencode/auth.json",
-    },
-    "pi": {
-        "host": "${HOME}/.pi/agent/auth.json",
-        "container": "/home/node/.pi/agent/auth.json",
-    },
-}
-
-#: Relative paths that seeding copies out of :data:`DEFAULT_AGENT_CONFIG_MOUNTS`
-#: ``host`` into a project-local agent config store.
-#:
-#: Pi is restricted deliberately. A host ``~/.pi`` holds roughly 400 MB, the
-#: bulk of it in ``agent/npm`` (installed pi packages) and ``agent/install``
-#: (managed pi releases). Both hold code that would execute inside the
-#: container, and ``agent/sessions`` holds host-side transcripts, so none of
-#: them are seeded. Everything else keeps the default whole-directory seeding.
-AGENT_CONFIG_SEED_PATHS: dict[str, list[str]] = {
-    "pi": ["agent/settings.json", "agent/models.json"],
-}
-
-VCS_MARKERS: tuple[str, ...] = (".git", ".hg", ".svn", ".bzr", "_darcs")
-
-PROJECT_FILE_MARKERS: tuple[str, ...] = (
-    ".projectile",
-    "pyproject.toml",
-    "setup.py",
-    "setup.cfg",
-    "Pipfile",
-    "package.json",
-    "Cargo.toml",
-    "go.mod",
-    "pom.xml",
-    "build.gradle",
-    "build.gradle.kts",
-    "Gemfile",
-    "mix.exs",
-    "composer.json",
-)
-
-DEFAULT_CONFIG: dict[str, Any] = {
-    "shadow": [],
-    "mcp_servers": [],
-    "env": {},
-    "additional_dirs": [],
-    "data_stores": [],
-    "port_forwards": [],
-    "ssh": None,
-    "git": None,
-    "hosts": None,
-    "ca_certs": None,
-    "env_passthrough": [],
-    "hooks": None,
-    "logging": {"level": "INFO", "file": None},
-    "runtime": None,
-    "llama_cpp": None,
-    "claude_mem": None,
-    "host_credentials": None,
-}
+from .system_skills import expand_store_path
 
 logger = logging.getLogger(__name__)
 
+#: Keys already reported by :func:`warn_unsupported_keys` in this process.
+_WARNED_KEYS: set[str] = set()
 
-def sanitize_project_name(name: str) -> str:
-    """Sanitize a name for use as a Docker Compose project name.
+#: Whether the 1.x deploy-mode warning was already shown in this process.
+_DEPLOY_MODE_WARNED = False
 
-    Docker Compose requires project names to consist only of lowercase
-    alphanumeric characters, hyphens, and underscores, and to start with
-    a letter or number.
+CONFIG_DIR_NAME = ".agent-circus"
+CONFIG_FILE_NAME = "config.toml"
 
-    :param name: Raw project name (typically ``workspace.name``).
-    :type name: str
-    :returns: Sanitized project name.
-    :rtype: str
+USER_CONFIG_DIR_ENV_VAR = "XDG_CONFIG_HOME"
+
+#: Top-level config keys interpreted by agent-circus; everything else warns
+#: (1.x keys) or raises (unknown keys).
+SUPPORTED_TOP_LEVEL_KEYS: frozenset[str] = frozenset(
+    {
+        "msb",
+        "logging",
+        "env",
+        "env_passthrough",
+        "additional_dirs",
+        "port_forwards",
+        "git",
+        "ssh",
+        "hosts",
+        "image",
+        "agent",
+        "tracing",
+        "skills",
+        "daemons",
+        "hooks",
+    }
+)
+
+#: Keys allowed under ``[msb]``: settings that map directly to the msb
+#: binary.
+MSB_TABLE_KEYS: frozenset[str] = frozenset({"binary", "sandbox", "network", "mounts"})
+
+#: agent-circus settings that used to live under ``[msb]`` and the
+#: top-level table they moved to.
+MSB_MOVED_KEYS: dict[str, str] = {
+    "image": "[image]",
+    "agent": "[agent]",
+    "tracing": "[tracing]",
+    "skills": "[skills]",
+    "daemons": "[[daemons]]",
+    "hooks": "[hooks]",
+    "env": "[env]",
+}
+
+DEFAULT_IMAGE_TAG = "docker.io/library/msb-agents:26"
+DEFAULT_MEMORY = "4G"
+DEFAULT_INIT = "auto"
+"""Default ``--init`` value: msb detects s6-overlay's ``/init``."""
+
+INIT_NONE = "none"
+"""``[msb.sandbox] init`` value that sends no ``--init`` flag."""
+
+DEFAULT_STOP_TIMEOUT = 45
+"""Seconds agent-circus waits for an s6 shutdown before forcing a stop."""
+
+DEFAULT_DOCKER_STOP_TIMEOUT = 20
+"""Seconds dockerd may take to stop containers at shutdown."""
+
+DEFAULT_NETWORK_MODE = "public,private"
+DEFAULT_AGENT_COMMAND: tuple[str, ...] = ("pi",)
+DEFAULT_WORKDIR = "/workspace"
+#: Default host bind address for published ports (msb's own default too).
+DEFAULT_PORT_HOST = "127.0.0.1"
+DEFAULT_SANDBOX_NAME_PREFIX = "agents"
+DEFAULT_MOUNTS: dict[str, str] = {".": "/workspace"}
+ADDITIONAL_DIRS_GUEST_BASE = "/workspaces"
+
+#: Default of ``[git] worktree_mirror`` when the key is not set.
+DEFAULT_WORKTREE_MIRROR = True
+
+#: Suffix of the persistent docker volume name (see
+#: :func:`docker_volume_name_for_workspace`).
+DOCKER_VOLUME_SUFFIX = "-docker"
+
+#: vsock port the host SSH agent is exposed on (guest connects to CID 2).
+SSH_AGENT_VSOCK_PORT = 22022
+#: Guest path of the bridged SSH agent socket.
+SSH_AGENT_GUEST_SOCKET = "/run/ssh-agent.sock"
+#: Sandbox env var telling the image's s6 services to start the bridge.
+#: Not prefixed with ``MSB_``: msb reserves that prefix for its own env
+#: vars and rejects ``--env`` values using it.
+SSH_AGENT_PORT_ENV_VAR = "CIRCUS_SSH_AGENT_VSOCK_PORT"
+#: Guest directory for copied SSH config files (the guest runs as root).
+SSH_GUEST_DIR = "/root/.ssh"
+
+#: Guest home directory. The guest runs as root, but msb does not
+#: guarantee ``HOME`` in the VM boot environment that s6 services (and
+#: thus daemons) inherit. Daemons get this as a default ``HOME`` so
+#: harnesses resolve their config below ``$HOME`` like in an interactive
+#: ``agent-circus exec`` shell.
+GUEST_HOME = "/root"
+
+#: Sandbox env var read by the image's dockerd service (seconds at
+#: shutdown). Not prefixed with ``MSB_``: msb reserves that prefix.
+DOCKERD_SHUTDOWN_TIMEOUT_ENV_VAR = "CIRCUS_DOCKERD_SHUTDOWN_TIMEOUT"
+
+#: Host file that ``[hosts]`` entries are read from.
+DEFAULT_HOSTS_FILE = "/etc/hosts"
+
+#: Guest TCP port of the circus-router s6 service (one per sandbox).
+ROUTER_GUEST_PORT = 7780
+#: Default host port of ``agent-circus proxy``.
+DEFAULT_PROXY_PORT = 7700
+#: Host environment variable that overrides the proxy port.
+PROXY_PORT_ENV_VAR = "AGENT_CIRCUS_PROXY_PORT"
+#: Domain suffix of proxy URLs (browsers resolve *.localhost to loopback).
+PROXY_DOMAIN = "localhost"
+
+#: Host header value of the guest router's own status endpoint. The
+#: underscore keeps it out of the daemon name grammar.
+ROUTER_STATUS_HOST = "_circus"
+#: Path of the guest router's status endpoint.
+ROUTER_STATUS_PATH = "/status"
+#: Version of the router status JSON. Bump on incompatible changes.
+ROUTER_STATUS_API = 1
+
+#: Read-write bind mounts of host agent harness config directories into the
+#: guest, mirroring agent-circus's ``DEFAULT_AGENT_CONFIG_MOUNTS``. Values
+#: are ``(directory below $HOME, guest path)``; the guest runs as root, so
+#: the guest paths live under ``/root``. The mount carries the harness's
+#: credentials file (``.credentials.json`` / ``auth.json``) so token
+#: refreshes persist to the host, and is applied at sandbox creation when
+#: the host directory exists (missing directories are skipped with a
+#: warning). msb fixes mounts at creation, so changes require a re-create.
+AGENT_CONFIG_DIR_MOUNTS: dict[str, tuple[str, str]] = {
+    "claude-code": (".claude", "/root/.claude"),
+    "codex": (".codex", "/root/.codex"),
+}
+
+#: Host agent harness config files copied into the guest (one-way) after
+#: every boot or start. Entries are ``(harness, path below $HOME, guest
+#: path)``. Missing host files are skipped silently; a failed copy warns.
+#: Unlike :data:`AGENT_CONFIG_DIR_MOUNTS` these copies do not round-trip:
+#: guest-side edits are lost on the next refresh.
+AGENT_CONFIG_FILE_COPIES: tuple[tuple[str, str, str], ...] = (
+    (
+        "claude-code",
+        ".claude.json",
+        "/root/.claude.json",
+    ),
+    ("pi", ".pi/agent/settings.json", "/root/.pi/agent/settings.json"),
+    ("pi", ".pi/agent/models.json", "/root/.pi/agent/models.json"),
+    (
+        "opencode",
+        ".config/opencode/opencode.json",
+        "/root/.config/opencode/opencode.json",
+    ),
+)
+
+#: Read-only bind mounts of host user skill directories into the guest.
+#: Entries are ``(directory below $HOME, guest path)``. Read-only keeps
+#: agents in the sandbox from changing skills that also run on the host;
+#: install user skills on the host, or project skills in the workspace.
+#: Missing host directories are skipped (debug log only). msb fixes
+#: mounts at creation, so a directory created later needs a re-create.
+#: opencode 2.2.7 reads both ``skill`` and ``skills`` below its config
+#: directory; it also reads ``~/.agents/skills`` and ``~/.claude/skills``.
+#: Host ``~/.agents/skills`` is deliberately not mounted: that guest path
+#: belongs to the read-only system skill store (see
+#: :mod:`agent_circus.system_skills`), so user skills must live in one of
+#: the directories below.
+AGENT_SKILL_DIR_MOUNTS: tuple[tuple[str, str], ...] = (
+    (".pi/agent/skills", "/root/.pi/agent/skills"),
+    (".config/opencode/skills", "/root/.config/opencode/skills"),
+    (".config/opencode/skill", "/root/.config/opencode/skill"),
+)
+
+
+@dataclass(frozen=True)
+class ImageConfig:
+    """Image build/import settings (``[image]``).
+
+    :ivar tag: Full image reference to build and import.
+    :ivar dockerfile: Dockerfile path relative to the workspace; ``None``
+        selects the bundled template.
+    :ivar platform: Target platform (e.g. ``linux/amd64``); ``None`` lets
+        the host builder pick the native architecture.
     """
-    name = name.lower()
-    name = re.sub(r"[^a-z0-9_-]", "-", name)
-    name = re.sub(r"^[^a-z0-9]+", "", name)
-    return name or "project"
+
+    tag: str = DEFAULT_IMAGE_TAG
+    dockerfile: str | None = None
+    platform: str | None = None
 
 
-def find_project_root(start: Path) -> Path:
-    """Walk up from *start* and return the nearest project root.
+@dataclass(frozen=True)
+class SandboxConfig:
+    """Sandbox resource settings (``[msb.sandbox]``).
 
-    A directory is considered a project root when it contains at least one
-    VCS directory or known project-file marker (see :data:`VCS_MARKERS` and
-    :data:`PROJECT_FILE_MARKERS`).  Falls back to *start* when no marker is
-    found anywhere in the ancestor chain.
+    The sandbox name itself is derived from the workspace directory, not
+    configured: ``agents-<sanitized project name>``.
 
-    :param start: Directory to begin the upward search from.
-    :type start: Path
-    :returns: Nearest ancestor directory recognised as a project root,
-              or *start* if none is found.
-    :rtype: Path
+    :ivar memory: Memory limit string passed to ``msb`` verbatim.
+    :ivar cpus: Optional CPU count.
+    :ivar root_disk: Optional ``--root-disk`` spec (e.g. ``"flat:32G"``);
+        ``None`` keeps msb's managed default root.
+    :ivar docker_disk: Optional size of a dedicated ext4 disk mounted at
+        ``/var/lib/docker`` (the docker opt-in); ``None`` disables docker.
+    :ivar docker_disk_persist: Keep the docker data disk in a named msb
+        volume that survives sandbox removal; requires ``docker_disk``.
+    :ivar init: Value for ``--init`` at sandbox creation (``"auto"``,
+        ``"none"`` sends no flag, or an absolute path to another init);
+        applies at creation only.
+    :ivar stop_timeout: Host-side seconds agent-circus waits for an s6
+        shutdown before forcing the stop.
+    :ivar docker_stop_timeout: Seconds dockerd may take to stop
+        containers at shutdown; sent as sandbox env at creation.
     """
-    current = start.resolve()
-    all_markers = VCS_MARKERS + PROJECT_FILE_MARKERS
-    while True:
-        if any((current / m).exists() for m in all_markers):
-            return current
-        parent = current.parent
-        if parent == current:  # reached filesystem root
-            return start
-        current = parent
+
+    memory: str = DEFAULT_MEMORY
+    cpus: int | None = None
+    root_disk: str | None = None
+    docker_disk: str | None = None
+    docker_disk_persist: bool = False
+    init: str = DEFAULT_INIT
+    stop_timeout: int = DEFAULT_STOP_TIMEOUT
+    docker_stop_timeout: int = DEFAULT_DOCKER_STOP_TIMEOUT
 
 
-def get_workspace_path() -> Path:
-    """Get the current workspace path.
+def docker_enabled(config: AgentCircusConfig) -> bool:
+    """Return whether the sandbox provides a usable docker storage backend.
 
-    Discovers the project root by walking up from the current working
-    directory, using the same marker-based heuristic as Emacs Projectile.
-    Falls back to the current directory when no marker is found.
+    Docker 29 needs a real filesystem under ``/var/lib/docker``. That is
+    the case when a dedicated docker disk is requested, or when the root
+    disk is a flat (non-overlayfs) root.
 
-    :returns: Absolute path to workspace directory.
-    :rtype: Path
+    :param config: Resolved agent-circus configuration.
+    :returns: ``True`` when dockerd can create containers in the sandbox.
     """
-    return find_project_root(Path.cwd().resolve())
+    if config.sandbox.docker_disk is not None:
+        return True
+    root_disk = config.sandbox.root_disk
+    return root_disk is not None and root_disk.startswith("flat:")
 
 
-def get_config_dir(workspace: Path | None = None) -> Path:
-    """Get the agent-circus configuration directory.
+@dataclass(frozen=True)
+class NetworkConfig:
+    """Network profile settings (``[msb.network]``).
 
-    :param workspace: Workspace path, defaults to current directory.
-    :type workspace: Path | None
-    :returns: Path to configuration directory.
-    :rtype: Path
+    :ivar mode: Network profile passed as ``--net``.
+    :ivar trust_host_cas: Ship the host's trusted CAs into the guest
+        (``--trust-host-cas``); applied at sandbox creation only.
     """
-    if workspace is None:
-        workspace = get_workspace_path()
-    return workspace / CONFIG_DIR_NAME
+
+    mode: str = DEFAULT_NETWORK_MODE
+    trust_host_cas: bool = False
 
 
-def get_compose_file(workspace: Path | None = None) -> Path:
-    """Get the path to the compose.yaml file.
+@dataclass(frozen=True)
+class SkillsConfig:
+    """System skill store settings (``[skills]``).
 
-    :param workspace: Workspace path, defaults to current directory.
-    :type workspace: Path | None
-    :returns: Path to compose.yaml file.
-    :rtype: Path
+    :ivar store: Host path of the system skill store, or ``None`` for
+        the default location (see :func:`agent_circus.system_skills.system_skills_store`);
+        ``~`` is allowed and expanded there.
     """
-    return get_config_dir(workspace) / COMPOSE_FILE_NAME
+
+    store: str | None = None
 
 
-def get_dockerfile(workspace: Path | None = None) -> Path:
-    """Get the path to the Dockerfile.
+@dataclass(frozen=True)
+class AgentConfig:
+    """Default exec target (``[agent]``).
 
-    :param workspace: Workspace path, defaults to current directory.
-    :type workspace: Path | None
-    :returns: Path to Dockerfile.
-    :rtype: Path
+    :ivar workdir: Explicit guest working directory, or None when unset
+        (see resolve_agent_workdir).
     """
-    return get_config_dir(workspace) / DOCKERFILE_NAME
+
+    command: tuple[str, ...] = DEFAULT_AGENT_COMMAND
+    workdir: str | None = None
 
 
-def config_exists(workspace: Path | None = None) -> bool:
-    """Check if agent-circus configuration exists.
+@dataclass(frozen=True)
+class TracingConfig:
+    """Trace settings for agent executions (``[tracing]``).
 
-    :param workspace: Workspace path, defaults to current directory.
-    :type workspace: Path | None
-    :returns: True if configuration directory and compose file exist.
-    :rtype: bool
+    :ivar enabled: Enable tracing for every ``exec`` command.
+    :ivar directory: Host trace root. Relative paths use the workspace as base.
+    :ivar sample_interval: Interval in seconds for resource samples.
+    :ivar repetition_threshold: Number of equal bytes that creates an event.
+    :ivar capture_payloads: Save raw ACP streams when ``True``.
+    :ivar max_payload_bytes: Maximum bytes saved for each raw ACP stream.
     """
-    config_dir = get_config_dir(workspace)
-    compose_file = get_compose_file(workspace)
-    return config_dir.is_dir() and compose_file.is_file()
+
+    enabled: bool = False
+    directory: str = ".agent-circus/traces"
+    sample_interval: float = 1.0
+    repetition_threshold: int = 64
+    capture_payloads: bool = False
+    max_payload_bytes: int = 100 * 1024 * 1024
 
 
-def resolve_config(workspace: Path) -> Path | None:
-    """Resolve the effective configuration directory.
+@dataclass(frozen=True)
+class PortForward:
+    """An entry of the ``[[port_forwards]]`` array.
 
-    Checks whether a deployed ``.agent-circus/`` directory exists in the
-    workspace.  Returns the config directory path when found, or ``None``
-    to indicate that the caller should use :func:`template_dir_context`
-    from the templates module instead (instant mode).
+    Publishes a guest port on the host. The field names follow
+    agent-circus (``container_port``) so the same table works in both
+    tools; ``guest_port`` is accepted as an msb-native alias. The
+    ``service`` field of agent-circus entries is accepted but ignored:
+    agent-circus runs one sandbox per workspace, so there is nothing to
+    select a service from.
 
-    :param workspace: Workspace path.
-    :type workspace: Path
-    :returns: Path to the deployed config directory, or ``None``.
-    :rtype: Path | None
+    :ivar guest_port: Port inside the sandbox.
+    :ivar host_port: Port on the host; defaults to ``guest_port``.
+    :ivar host: Host bind address; defaults to ``127.0.0.1`` (msb's own
+        default, keeping published ports off the network by default).
+    :ivar protocol: ``"tcp"`` or ``"udp"``.
     """
-    config_dir = workspace / CONFIG_DIR_NAME
-    if config_dir.is_dir() and (config_dir / COMPOSE_FILE_NAME).is_file():
-        return config_dir
-    return None
+
+    guest_port: int
+    host_port: int
+    host: str = DEFAULT_PORT_HOST
+    protocol: str = "tcp"
 
 
-def get_user_config_path() -> Path:
-    """Get the path to the user-global configuration file.
+#: Allowed daemon names: lowercase letters, digits and "-", starting with
+#: a letter or digit, at most 40 characters. The name is used in guest
+#: paths, so it must stay filesystem- and shell-safe.
+DAEMON_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 
-    Follows the XDG Base Directory Specification: uses
-    ``$XDG_CONFIG_HOME/agent-circus/config.toml``, falling back to
-    ``~/.config/agent-circus/config.toml`` when the environment
-    variable is unset or empty.
+#: Valid environment variable names (POSIX shell identifiers).
+_ENV_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-    :returns: Path to the user-global config file.
-    :rtype: Path
+
+@dataclass(frozen=True)
+class DaemonConfig:
+    """A long-running process supervised in the sandbox (``[[daemons]]``).
+
+    :ivar name: Unique daemon name (see :data:`DAEMON_NAME_PATTERN`).
+    :ivar command: Command and arguments, run without a shell.
+    :ivar autostart: Start the daemon on every sandbox boot.
+    :ivar port: Optional guest TCP port the daemon listens on; used to
+        wait for readiness and to show a URL. It does not forward a port.
+    :ivar expose: Route the daemon's port through the central proxy (only
+        effective with a port).
+    :ivar workdir: Optional guest working directory.
+    :ivar env: Extra environment variables for the daemon.
+    :ivar env_passthrough: Host environment variables passed to the
+        daemon (same matching rules as the top-level ``env_passthrough``).
     """
-    xdg = os.environ.get("XDG_CONFIG_HOME")
-    base = Path(xdg) if xdg else Path.home() / ".config"
-    return base / "agent-circus" / CONFIG_FILE_NAME
+
+    name: str
+    command: tuple[str, ...]
+    autostart: bool = True
+    port: int | None = None
+    expose: bool = True
+    workdir: str | None = None
+    env: dict[str, str] = field(default_factory=dict)
+    env_passthrough: tuple[str, ...] = ()
+
+
+#: Hook names in run order.
+HOOK_NAMES: tuple[str, ...] = ("provision", "startup")
+
+#: Largest accepted hook script in bytes (UTF-8). The script travels as one
+#: ``msb exec`` argument, and Linux limits one argument to 128 KiB.
+MAX_HOOK_SCRIPT_BYTES = 64 * 1024
+
+#: Default of ``required`` per hook name.
+HOOK_REQUIRED_DEFAULTS: dict[str, bool] = {"provision": True, "startup": False}
+
+
+@dataclass(frozen=True)
+class HookConfig:
+    """A project hook (``[hooks]`` ``provision`` or ``startup``).
+
+    :ivar name: ``provision`` or ``startup``.
+    :ivar script: Inline script, or ``None`` when *file* is set.
+    :ivar file: Host path of the script file, or ``None`` when *script* is set.
+        Relative paths are resolved against the workspace root.
+    :ivar required: Fail the command when the hook fails.
+    :ivar timeout: Guest timeout in seconds, or ``None`` for no timeout.
+    :ivar workdir: Guest working directory, or ``None`` for the agent workdir.
+    :ivar env: Extra environment variables for the hook.
+    :ivar env_passthrough: Extra host variables for the hook (same matching
+        rules as the top-level ``env_passthrough``).
+    """
+
+    name: str
+    script: str | None = None
+    file: str | None = None
+    required: bool = False
+    timeout: int | None = None
+    workdir: str | None = None
+    env: dict[str, str] = field(default_factory=dict)
+    env_passthrough: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class HooksConfig:
+    """Project hooks (``[hooks]``).
+
+    :ivar provision: Hook run once per sandbox and when its script changes.
+    :ivar startup: Hook run once per guest boot.
+    """
+
+    provision: HookConfig | None = None
+    startup: HookConfig | None = None
+
+
+@dataclass(frozen=True)
+class AdditionalDir:
+    """An entry of the ``[[additional_dirs]]`` array.
+
+    Mirrors the agent-circus semantics: an extra host directory mounted
+    into the guest under ``/workspaces/<name>``.
+
+    :ivar path: Absolute path on the host.
+    :ivar name: Guest mount name (``/workspaces/<name>``).
+    :ivar readonly: Mount read-only when ``True``.
+    """
+
+    path: str
+    name: str
+    readonly: bool = False
+
+
+@dataclass(frozen=True)
+class SshConfig:
+    """SSH agent forwarding settings (``[ssh]``, agent-circus compatible).
+
+    :ivar config_path: Absolute host path of an SSH config file copied
+        to ``/root/.ssh/config``, or ``None``.
+    :ivar known_hosts_path: Absolute host path of a known_hosts file
+        copied to ``/root/.ssh/known_hosts``, or ``None``.
+    """
+
+    config_path: str | None = None
+    known_hosts_path: str | None = None
+
+
+@dataclass(frozen=True)
+class GitConfig:
+    """Git settings (``[git]``, agent-circus compatible).
+
+    :ivar worktree_mirror: Mount the workspace a second time at its
+        host absolute path. Defaults to ``True`` when the key is not set.
+    :ivar worktree_mirror_explicit: Whether the configuration sets
+        ``worktree_mirror``.
+    :ivar config_path: Explicit absolute host path of the gitconfig to
+        forward, or ``None`` to search the default locations.
+    :ivar signing_key_path: Absolute host path of an SSH public key used
+        for commit signing, or ``None``.
+    """
+
+    worktree_mirror: bool = DEFAULT_WORKTREE_MIRROR
+    worktree_mirror_explicit: bool = False
+    config_path: str | None = None
+    signing_key_path: str | None = None
+
+
+@dataclass(frozen=True)
+class HostsConfig:
+    """Host entry forwarding settings (``[hosts]``, agent-circus compatible).
+
+    Selected lines of the host's hosts file are written into the guest's
+    ``/etc/hosts`` after every boot, start, and reuse, so matching names
+    resolve inside the sandbox without a DNS change.
+
+    :ivar patterns: fnmatch globs or ``re:``-prefixed regexes matched
+        case-insensitively against host names. When any name of a hosts
+        line matches, all names of that line are forwarded.
+    :ivar file: Host path of the hosts file to read.
+    """
+
+    patterns: tuple[str, ...] = ()
+    file: str = DEFAULT_HOSTS_FILE
+
+
+@dataclass(frozen=True)
+class AgentCircusConfig:
+    """Resolved agent-circus configuration.
+
+    :ivar binary: Optional explicit path to the ``msb`` binary.
+    :ivar image: Image build/import settings.
+    :ivar sandbox: Sandbox resource settings.
+    :ivar network: Network profile settings.
+    :ivar skills: System skill store settings.
+    :ivar agent: Default exec target.
+    :ivar tracing: Trace settings for agent executions.
+    :ivar mounts: Host path -> guest path mapping (options may be appended
+        to the guest path, e.g. ``"/workspace:ro"``). Defaults to mounting
+        the workspace at ``/workspace`` per the documented workflow.
+    :ivar additional_dirs: Extra host directories mounted under
+        ``/workspaces/<name>`` (agent-circus compatible).
+    :ivar port_forwards: Guest ports published on the host
+        (``[[port_forwards]]``, agent-circus compatible).
+    :ivar daemons: Long-running processes supervised in the sandbox
+        (``[[daemons]]``).
+    :ivar hooks: Project hooks (``[hooks]``).
+    :ivar env: Non-secret variables from ``[env]``; set at
+        sandbox creation and passed with every exec, hook and daemon.
+    :ivar env_passthrough: Host environment variables to pass into the
+        sandbox. Literal names are required to exist on the host; entries
+        are otherwise treated as glob or ``re:``-prefixed regex patterns
+        (like agent-circus's ``filter_env``).
+    :ivar git_worktree_mirror: Mount the workspace a second time at its
+        exact host absolute path (``[git] worktree_mirror``) so Git's
+        recorded paths stay valid across the sandbox boundary. The
+        dataclass default is ``False``; :func:`parse_config` applies the
+        documented default of ``true`` when parsed from a configuration.
+    :ivar git_worktree_mirror_explicit: Whether ``[git] worktree_mirror``
+        is set in the configuration.
+    :ivar git: Git settings; ``None`` when the ``[git]`` table is absent.
+    :ivar ssh: SSH agent forwarding settings; ``None`` disables forwarding.
+    :ivar hosts: Host entry forwarding; ``None`` disables it.
+    :ivar logging_level: Log level for agent-circus's own logging.
+    :ivar logging_file: Optional log file path.
+    """
+
+    binary: str | None = None
+    image: ImageConfig = field(default_factory=ImageConfig)
+    sandbox: SandboxConfig = field(default_factory=SandboxConfig)
+    network: NetworkConfig = field(default_factory=NetworkConfig)
+    skills: SkillsConfig = field(default_factory=SkillsConfig)
+    agent: AgentConfig = field(default_factory=AgentConfig)
+    tracing: TracingConfig = field(default_factory=TracingConfig)
+    mounts: dict[str, str] = field(default_factory=dict)
+    additional_dirs: tuple[AdditionalDir, ...] = ()
+    port_forwards: tuple[PortForward, ...] = ()
+    daemons: tuple[DaemonConfig, ...] = ()
+    hooks: HooksConfig = field(default_factory=HooksConfig)
+    env: dict[str, str] = field(default_factory=dict)
+    env_passthrough: tuple[str, ...] = ()
+    git_worktree_mirror: bool = False
+    git_worktree_mirror_explicit: bool = False
+    git: GitConfig | None = None
+    ssh: SshConfig | None = None
+    hosts: HostsConfig | None = None
+    logging_level: str = "INFO"
+    logging_file: str | None = None
 
 
 def get_project_config_path(workspace: Path) -> Path:
-    """Get the path to the project-local configuration file.
+    """Return the project-local config file path.
 
-    :param workspace: Workspace path.
-    :type workspace: Path
-    :returns: Path to the project-local config file.
-    :rtype: Path
+    :param workspace: Workspace directory.
+    :returns: Path to ``<workspace>/.agent-circus/config.toml``.
     """
     return workspace / CONFIG_DIR_NAME / CONFIG_FILE_NAME
 
 
-def _load_toml(path: Path) -> dict[str, Any]:
-    """Load and parse a TOML file.
+def get_user_config_path(environ: dict[str, str] | None = None) -> Path:
+    """Return the user-global config file path.
 
-    :param path: Path to the TOML file.
-    :type path: Path
-    :returns: Parsed TOML contents.
-    :rtype: dict[str, Any]
-    :raises ConfigurationError: If the file contains invalid TOML.
+    Mirrors agent-circus: ``$XDG_CONFIG_HOME/agent-circus/config.toml``,
+    defaulting to ``~/.config/agent-circus/config.toml``.
+
+    :param environ: Environment mapping, defaults to :data:`os.environ`.
+    :returns: Path to the user-global config file.
+    """
+    env = os.environ if environ is None else environ
+    xdg = Path(env.get(USER_CONFIG_DIR_ENV_VAR, Path.home() / ".config"))
+    return xdg / "agent-circus" / CONFIG_FILE_NAME
+
+
+def _load_toml(path: Path) -> dict[str, Any]:
+    """Load a TOML file into a dictionary.
+
+    :param path: File to read.
+    :returns: Parsed TOML document.
+    :raises ConfigurationError: If the file cannot be read or parsed.
     """
     try:
-        with open(path, "rb") as f:
-            return tomllib.load(f)
+        with path.open("rb") as fh:
+            return tomllib.load(fh)
+    except OSError as e:
+        raise ConfigurationError(f"Cannot read config file {path}: {e}") from e
     except tomllib.TOMLDecodeError as e:
         raise ConfigurationError(f"Invalid TOML in {path}: {e}") from e
 
 
-def validate_config(config: dict[str, Any]) -> None:
-    """Validate known configuration structures and warn about unknown keys.
+def read_config_layers(
+    workspace: Path, environ: dict[str, str] | None = None
+) -> dict[str, Any]:
+    """Read and shallow-merge the config layers (project-local wins).
 
-    Logs a WARNING for every key not present in :data:`DEFAULT_CONFIG`.
-    Unknown keys are ignored rather than rejected so that older installs
-    remain compatible with config files written for newer versions.
-
-    :param config: Merged configuration dictionary.
-    :raises ConfigurationError: If a known configuration structure is invalid.
+    :param workspace: Workspace directory.
+    :param environ: Environment mapping for the XDG lookup.
+    :returns: Merged raw configuration dictionary.
+    :raises ConfigurationError: If a config file is invalid.
     """
-    known = set(DEFAULT_CONFIG)
-    for key in config:
-        if key not in known:
-            logger.warning("Unknown config key %r — ignoring", key)
-    _validate_mcp_servers(config.get("mcp_servers", []))
-    _validate_runtime_config(config.get("runtime"))
-    _validate_claude_mem(config.get("claude_mem"))
-    _validate_host_credentials(config.get("host_credentials"))
-
-
-def _validate_runtime_config(runtime_config: Any) -> None:
-    """Validate the optional runtime configuration.
-
-    :param runtime_config: Raw ``runtime`` value from merged config.
-    :raises ConfigurationError: If the runtime config is malformed.
-    """
-    if runtime_config is None:
-        return
-    if not isinstance(runtime_config, dict):
-        raise ConfigurationError("runtime must be a table")
-    engine = runtime_config.get("engine")
-    if engine is None:
-        return
-    if not isinstance(engine, str):
-        raise ConfigurationError("runtime.engine must be a string")
-    validate_runtime(engine)
-
-
-def _validate_mcp_servers(mcp_servers: Any) -> None:
-    """Validate managed, external, and stdio MCP server definitions.
-
-    :param mcp_servers: Raw ``mcp_servers`` value from merged config.
-    :raises ConfigurationError: If an entry is malformed or does not define
-        exactly one of ``image`` and ``url``.
-    """
-    if not isinstance(mcp_servers, list):
-        raise ConfigurationError("mcp_servers must be a list of tables")
-
-    for server in mcp_servers:
-        if not isinstance(server, dict):
-            raise ConfigurationError("MCP server entries must be tables")
-        name = server.get("name")
-        if not isinstance(name, str) or not name:
-            raise ConfigurationError("MCP server name must be a non-empty string")
-
-        has_image = isinstance(server.get("image"), str) and bool(server["image"])
-        has_url = isinstance(server.get("url"), str) and bool(server["url"])
-        transport = server.get("transport", "streamable-http")
-
-        if transport == "stdio":
-            if has_image or has_url:
-                raise ConfigurationError(
-                    f"Stdio MCP server {name!r} must not define 'image' or 'url'"
-                )
-            if not isinstance(server.get("command"), str) or not server["command"]:
-                raise ConfigurationError(
-                    f"Stdio MCP server {name!r} command must be a non-empty string"
-                )
-            for field in ("args", "env_vars"):
-                value = server.get(field, [])
-                if not isinstance(value, list) or not all(
-                    isinstance(item, str) for item in value
-                ):
-                    raise ConfigurationError(
-                        f"Stdio MCP server {name!r} {field} must be a list of strings"
-                    )
-            continue
-
-        if has_image == has_url:
-            raise ConfigurationError(
-                f"MCP server {name!r} must define exactly one of 'image' or 'url'"
-            )
-
-        if has_url:
-            parsed = urlparse(server["url"])
-            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-                raise ConfigurationError(
-                    f"External MCP server {name!r} URL must use http or https"
-                )
-
-
-def _validate_claude_mem(claude_mem: Any) -> None:
-    """Validate the optional ``[claude_mem]`` configuration table.
-
-    :param claude_mem: Raw ``claude_mem`` value from merged config.
-    :raises ConfigurationError: If the table has unsupported values.
-    """
-    if claude_mem is None:
-        return
-    if not isinstance(claude_mem, dict):
-        raise ConfigurationError("claude_mem must be a table")
-
-    enabled = claude_mem.get("enabled", False)
-    if not isinstance(enabled, bool):
-        raise ConfigurationError("claude_mem.enabled must be a boolean")
-
-    scope = claude_mem.get("scope", "workspace")
-    if scope != "workspace":
-        raise ConfigurationError("claude_mem.scope must be 'workspace'")
-
-    services = claude_mem.get("services", CLAUDE_MEM_SUPPORTED_SERVICES)
-    if (
-        not isinstance(services, list)
-        or not services
-        or any(not isinstance(service, str) for service in services)
-    ):
-        raise ConfigurationError("claude_mem.services must be a non-empty list")
-    unsupported = set(services) - set(CLAUDE_MEM_SUPPORTED_SERVICES)
-    if unsupported:
-        raise ConfigurationError(
-            "claude_mem.services only supports: "
-            f"{', '.join(CLAUDE_MEM_SUPPORTED_SERVICES)}"
-        )
-
-
-def _validate_host_credentials(host_credentials: Any) -> None:
-    """Validate the optional ``[host_credentials]`` configuration table.
-
-    :param host_credentials: Raw ``host_credentials`` value from merged config.
-    :raises ConfigurationError: If the table has unsupported values.
-    """
-    if host_credentials is None:
-        return
-    if not isinstance(host_credentials, dict):
-        raise ConfigurationError("host_credentials must be a table")
-
-    services = host_credentials.get("services", [])
-    if not isinstance(services, list) or any(not isinstance(s, str) for s in services):
-        raise ConfigurationError("host_credentials.services must be a list of strings")
-    unsupported = set(services) - set(AGENT_CREDENTIAL_PATHS)
-    if unsupported:
-        raise ConfigurationError(
-            "host_credentials.services contains unsupported service(s): "
-            f"{', '.join(sorted(unsupported))}. "
-            f"Available: {', '.join(AGENT_CREDENTIAL_PATHS)}"
-        )
-
-
-def get_host_credentials_services(config: dict[str, Any]) -> list[str]:
-    """Return the agent services with direct host credential mounts enabled.
-
-    :param config: Merged Agent Circus configuration.
-    :returns: Service names from ``[host_credentials].services``, or ``[]``.
-    """
-    host_credentials = config.get("host_credentials")
-    if not host_credentials:
-        return []
-    return host_credentials.get("services", [])
-
-
-def build_host_credentials_override(services: list[str]) -> str:
-    """Build a Compose override that bind-mounts each agent's auth file.
-
-    Each service's credential file (see :data:`AGENT_CREDENTIAL_PATHS`) is
-    mounted read-write directly from its real host path onto the same path
-    inside the container. Everything else in the agent's configuration
-    directory is unaffected and continues to go through the project-local
-    copy and merge pipeline.
-
-    :param services: Agent service names with host credential mounts enabled.
-    :returns: Compose override as a JSON string.
-    """
-    services_block: dict[str, Any] = {}
-    for service in services:
-        paths = AGENT_CREDENTIAL_PATHS[service]
-        services_block[service] = {
-            "volumes": [f"{paths['host']}:{paths['container']}:cached"],
-        }
-    return json.dumps({"services": services_block})
-
-
-def write_hook_script(content: str, dest: Path) -> None:
-    """Write inline hook script content to *dest*, ensuring it is executable.
-
-    Prepends ``#!/usr/bin/env bash`` if the content does not already start
-    with a shebang line.  Creates parent directories as needed.
-
-    :param content: Shell script body from ``config.toml``.
-    :param dest: Destination path for the script file.
-    """
-    if not content.startswith("#!"):
-        content = "#!/usr/bin/env bash\n" + content
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(content)
-    dest.chmod(0o755)
-
-
-def load_user_config() -> dict[str, Any]:
-    """Load the user-global configuration file.
-
-    Returns an empty dict when the file does not exist.  Unlike
-    :func:`load_config`, no defaults are applied and no project-local
-    layer is merged.
-
-    :returns: Parsed user-global config, or ``{}`` if absent.
-    :raises ConfigurationError: If the file contains invalid TOML.
-    """
-    path = get_user_config_path()
-    if not path.is_file():
-        return {}
-    return _load_toml(path)
-
-
-def load_config(workspace: Path) -> dict[str, Any]:
-    """Load and merge configuration from user-global and project-local files.
-
-    Resolution order (last wins):
-
-    1. Built-in defaults
-    2. User-global: ``$XDG_CONFIG_HOME/agent-circus/config.toml``
-    3. Project-local: ``<workspace>/.agent-circus/config.toml``
-
-    Missing files are silently skipped.  Project-local values override
-    user-global values at the top level (shallow merge).
-
-    :param workspace: Workspace path.
-    :type workspace: Path
-    :returns: Merged configuration dictionary.
-    :rtype: dict[str, Any]
-    :raises ConfigurationError: If a config file contains invalid TOML.
-    """
-    config = DEFAULT_CONFIG.copy()
-
-    for path in (get_user_config_path(), get_project_config_path(workspace)):
+    merged: dict[str, Any] = {}
+    for path in (get_user_config_path(environ), get_project_config_path(workspace)):
         if path.is_file():
-            logger.debug("Loading config from %s", path)
             layer = _load_toml(path)
-            config.update(layer)
-
-    validate_config(config)
-    return config
+            merged.update(layer)
+    return merged
 
 
-def read_project_config(workspace: Path) -> dict[str, Any]:
-    """Read the project-local config file, returning an empty dict if absent.
+def warn_unsupported_keys(config: dict[str, Any]) -> None:
+    """Log a warning for every unsupported top-level config key.
 
-    :param workspace: Workspace path.
-    :type workspace: Path
-    :returns: Parsed project config, or ``{}`` when the file does not exist.
-    :rtype: dict[str, Any]
-    :raises ConfigurationError: If the file contains invalid TOML.
+    Unsupported keys are usually left over from agent-circus 1.x. Each
+    key is reported at most once per process, because the function may
+    run more than once per command. The ``ca_certs`` key gets a
+    dedicated message that names the 2.x replacement.
+
+    :param config: Merged raw configuration dictionary.
     """
-    path = get_project_config_path(workspace)
-    if not path.is_file():
-        return {}
-    return _load_toml(path)
-
-
-def write_project_config(workspace: Path, config: dict[str, Any]) -> None:
-    """Write *config* to the project-local config file.
-
-    Creates ``.agent-circus/`` if it does not exist.  Keys whose value is
-    ``None`` are omitted because TOML has no null type; an absent key is
-    equivalent to ``None`` in the default-config fallback.
-
-    :param workspace: Workspace path.
-    :type workspace: Path
-    :param config: Configuration mapping to serialise.
-    :type config: dict[str, Any]
-    """
-    config_dir = get_config_dir(workspace)
-    config_dir.mkdir(parents=True, exist_ok=True)
-    cleaned = {k: v for k, v in config.items() if v is not None}
-    path = get_project_config_path(workspace)
-    path.write_bytes(tomli_w.dumps(cleaned).encode())
-
-
-def _mcp_server_url(name: str, server: dict) -> str:
-    """Return the configured external URL or build a sidecar URL.
-
-    :param name: MCP server name.
-    :param server: Server definition from config.
-    :returns: URL reachable from agent containers.
-    """
-    if "url" in server:
-        return server["url"]
-    port = server.get("port", 8080)
-    path = server.get("path", "/mcp")
-    return f"http://mcp-{name}:{port}{path}"
-
-
-def build_agent_config_additions(
-    config: dict,
-) -> dict[str, dict]:
-    """Build per-agent config additions from Agent Circus configuration.
-
-    Translates ``mcp_servers`` and ``llama_cpp`` from ``config.toml`` into
-    per-agent additions dicts with the correct key names and formats.
-
-    :param config: Merged Agent Circus configuration.
-    :returns: Per-agent additions, keyed by agent service name.
-    """
-    mcp_servers = config.get("mcp_servers", [])
-    llama_cpp_config = config.get("llama_cpp")
-
-    if not mcp_servers and llama_cpp_config is None:
-        return {}
-
-    additions: dict[str, dict] = {}
-
-    if mcp_servers:
-        # Claude Code: {"mcpServers": {"name": {"type": ..., "alwaysLoad": true}}}
-        claude_mcp: dict[str, dict] = {}
-        # Codex: {"mcp_servers": {"name": {"url": ...}}}
-        codex_mcp: dict[str, dict] = {}
-        # Vibe: {"mcp_servers": [{"name": ..., "transport": ..., "url": ...}]}
-        vibe_mcp: list[dict] = []
-        # OpenCode: {"mcp": {"servers": {"name": {"type": "remote", "url": ...}}}}
-        opencode_mcp: dict[str, dict] = {}
-
-        for server in mcp_servers:
-            name = server["name"]
-            transport = server.get("transport", "streamable-http")
-            if transport == "stdio":
-                command = server["command"]
-                args = server.get("args", [])
-                env_vars = server.get("env_vars", [])
-
-                claude_server: dict[str, Any] = {
-                    "type": "stdio",
-                    "command": command,
-                    "args": args,
-                    "alwaysLoad": True,
-                }
-                claude_mcp[name] = claude_server
-
-                codex_server: dict[str, Any] = {"command": command}
-                if args:
-                    codex_server["args"] = args
-                if env_vars:
-                    codex_server["env_vars"] = env_vars
-                codex_mcp[name] = codex_server
-
-                vibe_mcp.append(
-                    {
-                        "name": name,
-                        "transport": "stdio",
-                        "command": command,
-                        "args": args,
-                    }
-                )
-                opencode_mcp[name] = {
-                    "type": "local",
-                    "command": [command, *args],
-                }
-                continue
-
-            url = _mcp_server_url(name, server)
-
-            # Claude Code requires "http" transport; other agents use the
-            # configured transport (defaulting to "streamable-http").
-            claude_transport = "http" if transport == "streamable-http" else transport
-            claude_mcp[name] = {
-                "type": claude_transport,
-                "url": url,
-                "alwaysLoad": True,
-            }
-            codex_mcp[name] = {"url": url}
-            vibe_mcp.append({"name": name, "transport": transport, "url": url})
-            opencode_mcp[name] = {"type": "remote", "url": url}
-
-        additions["claude-code"] = {"mcpServers": claude_mcp}
-        additions["codex"] = {"mcp_servers": codex_mcp}
-        additions["mistral-vibe"] = {"mcp_servers": vibe_mcp}
-        additions["opencode"] = {"mcp": {"servers": opencode_mcp}}
-
-    if llama_cpp_config is not None:
-        opencode_additions = additions.setdefault("opencode", {})
-        opencode_additions["providers"] = _build_llama_cpp_opencode_provider(
-            llama_cpp_config
-        )
-
-    return additions
-
-
-def _build_llama_cpp_opencode_provider(llama_cpp_config: dict) -> dict:
-    """Build the OpenCode ``providers`` block for the llama.cpp integration.
-
-    :param llama_cpp_config: ``[llama_cpp]`` table from merged config.
-    :returns: Dict suitable for merging into the OpenCode ``providers`` key.
-    """
-    model = llama_cpp_config.get("model", LLAMA_CPP_DEFAULT_MODEL)
-    context_size = llama_cpp_config.get("context_size", LLAMA_CPP_DEFAULT_CONTEXT_SIZE)
-    model_id = Path(model).stem
-    return {
-        "llama.cpp": {
-            "package": "@opencode/ai/providers/openai-compatible",
-            "name": "llama-server (local)",
-            "settings": {
-                "baseURL": f"http://llama-cpp:{LLAMA_CPP_PORT}/v1",
-            },
-            "models": {
-                model_id: {
-                    "name": model_id,
-                    "limit": {"context": context_size, "output": context_size},
-                },
-            },
-        },
-    }
-
-
-def get_companion_services(config: dict) -> list[str]:
-    """Return companion service names active in the given config.
-
-    Companion services are non-agent sidecars injected via Compose
-    overrides: MCP servers (``mcp-<name>``) and the llama.cpp server
-    (``llama-cpp``) when configured.
-
-    :param config: Merged Agent Circus configuration.
-    :returns: Docker Compose service names, in config order.
-    """
-    services: list[str] = []
-    for server in config.get("mcp_servers", []):
-        if "image" in server:
-            services.append(f"mcp-{server['name']}")
-    if config.get("llama_cpp") is not None:
-        services.append("llama-cpp")
-    return services
-
-
-def get_claude_mem_services(claude_mem_config: dict) -> list[str]:
-    """Return validated agent services with Claude-Mem enabled.
-
-    :param claude_mem_config: ``[claude_mem]`` table from merged config.
-    :returns: Supported service names, defaulting to Claude Code.
-    """
-    return claude_mem_config.get("services", CLAUDE_MEM_SUPPORTED_SERVICES).copy()
-
-
-def validate_services(
-    services: list[str],
-    companion_services: list[str] | None = None,
-) -> list[str]:
-    """Validate and return service names.
-
-    When *services* is empty, all agent services are returned (companions
-    are excluded — they start automatically via ``depends_on``).  When
-    non-empty, names are validated against agent services plus any
-    *companion_services* active in the current configuration.
-
-    :param services: List of service names to validate.
-    :param companion_services: Additional valid service names from the
-        active config (e.g. ``["mcp-myserver", "llama-cpp"]``).
-    :returns: Validated list of services.
-    :raises ConfigurationError: If any name is invalid.
-    """
-    if not services:
-        return AVAILABLE_SERVICES.copy()
-
-    companions = companion_services or []
-    all_valid = set(AVAILABLE_SERVICES) | set(companions)
-    invalid = set(services) - all_valid
-    if invalid:
-        available = [*AVAILABLE_SERVICES, *companions]
-        raise ConfigurationError(
-            f"Invalid service(s): {', '.join(sorted(invalid))}. "
-            f"Available: {', '.join(available)}"
-        )
-    return services
-
-
-def build_env_dockerfile_lines(env: dict[str, str]) -> list[str]:
-    """Build Dockerfile ``ENV`` instruction lines from an env mapping.
-
-    Each entry is emitted as a separate ``ENV key="value"`` line so that
-    Docker treats each variable as an independent layer, which is
-    important for ``$VARNAME`` expansion (e.g. ``PATH=/foo:$PATH``
-    expands ``$PATH`` from the previous layer's value).
-
-    Values are double-quoted to prevent Docker from interpreting
-    whitespace-separated tokens as additional ``key=value`` pairs
-    (legacy multi-variable ``ENV`` syntax).
-
-    :param env: Mapping of environment variable names to values.
-    :returns: List of Dockerfile ``ENV`` instruction strings, one per variable.
-    :rtype: list[str]
-    """
-
-    def _quote(v: str) -> str:
-        return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-    return [f"ENV {key}={_quote(value)}" for key, value in env.items()]
-
-
-def build_env_profile_script(env: dict[str, str]) -> str:
-    """Build a ``/etc/profile.d`` shell script that exports env vars.
-
-    Unlike Dockerfile ``ENV`` instructions (which are evaluated at image build
-    time and discarded by login shells that re-source ``/etc/profile``), a
-    ``/etc/profile.d`` script is sourced *after* ``/etc/profile`` so it runs
-    with the login-shell PATH already in place.  Shell variable references such
-    as ``$PATH`` in the values therefore expand at container runtime against the
-    live environment — ``PATH="$PATH:/home/node/go/bin"`` correctly appends to
-    whatever PATH the login shell has set.
-
-    :param env: Mapping of environment variable names to values.
-    :returns: Shell script content suitable for ``/etc/profile.d/``.
-    :rtype: str
-    """
-
-    def _sh_quote(v: str) -> str:
-        return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-    lines = ["#!/bin/sh"]
-    lines += [f"export {key}={_sh_quote(value)}" for key, value in env.items()]
-    return "\n".join(lines) + "\n"
-
-
-def build_additional_dirs_override(additional_dirs: list[dict]) -> str:
-    """Build a Docker Compose override that bind-mounts extra host directories.
-
-    Each entry is mounted at ``/workspaces/<name>`` inside every agent
-    container, where *name* defaults to the basename of the host path.
-
-    :param additional_dirs: List of directory entries from ``config.toml``.
-        Each entry must have a ``path`` key (absolute host path) and may
-        optionally have ``readonly`` (bool, default ``False``) and ``name``
-        (str, default basename of *path*).
-    :returns: Compose override as a JSON string.
-    """
-    volumes = []
-    for entry in additional_dirs:
-        host_path = entry["path"]
-        name = entry.get("name") or Path(host_path).name
-        mode = "ro" if entry.get("readonly", False) else "cached"
-        volumes.append(f"{host_path}:/workspaces/{name}:{mode}")
-    services = {svc: {"volumes": volumes} for svc in AVAILABLE_SERVICES}
-    return json.dumps({"services": services})
-
-
-def _data_store_mount_path(entry: dict) -> str:
-    """Return the container mount path for a data store entry.
-
-    :param entry: Data store entry from ``config.toml``.
-    :returns: Explicit or default container mount path.
-    """
-    name = entry["name"]
-    return entry.get("mount_path", f"{DATA_STORE_DEFAULT_MOUNT_BASE}/{name}")
-
-
-def _data_store_services(entry: dict) -> list[str]:
-    """Return validated services for a data store entry.
-
-    :param entry: Data store entry from ``config.toml``.
-    :returns: Services the store should be mounted into.
-    :raises ConfigurationError: If ``services`` is not a list of valid services.
-    """
-    services = entry.get("services")
-    if services is None:
-        return AVAILABLE_SERVICES.copy()
-    if (
-        not isinstance(services, list)
-        or not services
-        or any(not isinstance(service, str) for service in services)
-    ):
-        raise ConfigurationError("Data store services must be a non-empty list")
-    return validate_services(services)
-
-
-def _data_store_seed_mode(entry: dict) -> str:
-    """Return the validated seed mode for a data store entry.
-
-    :param entry: Data store entry from ``config.toml``.
-    :returns: Seed mode, currently only ``"once"``.
-    :raises ConfigurationError: If the seed mode is unsupported.
-    """
-    mode = entry.get("seed_mode", "once")
-    if mode not in DATA_STORE_SEED_MODES:
-        raise ConfigurationError(
-            "Data store seed_mode must be one of: "
-            f"{', '.join(sorted(DATA_STORE_SEED_MODES))}"
-        )
-    return mode
-
-
-def _data_store_seed_from(entry: dict) -> str | None:
-    """Return the validated seed source path for a data store entry.
-
-    Docker Compose handles ``${VAR}`` interpolation but does not reliably expand
-    shell-style ``~`` in volume source paths, so tilde-prefixed paths are
-    rejected with an explicit configuration error.
-
-    :param entry: Data store entry from ``config.toml``.
-    :returns: Seed source path, or ``None`` when unset.
-    :raises ConfigurationError: If the path starts with ``~``.
-    """
-    seed_from = entry.get("seed_from")
-    if seed_from is None:
-        return None
-    if not isinstance(seed_from, str) or not seed_from:
-        raise ConfigurationError("Data store seed_from must be a non-empty string")
-    if seed_from.startswith("~"):
-        raise ConfigurationError(
-            "Data store seed_from must use an absolute path or Compose "
-            "environment interpolation like ${HOME}/.codex; '~' is not supported"
-        )
-    return seed_from
-
-
-def get_claimed_agent_config_mounts(data_stores: list[dict]) -> set[tuple[str, str]]:
-    """Return default agent config mount paths claimed by data stores.
-
-    A claim means a data store applies to a service and mounts at that service's
-    default agent configuration directory. The default host config mount is then
-    suppressed for that service/path.
-
-    :param data_stores: Data store entries from ``config.toml``.
-    :returns: ``(service, container_path)`` tuples claimed by data stores.
-    """
-    claimed: set[tuple[str, str]] = set()
-    for entry in data_stores:
-        mount_path = _data_store_mount_path(entry)
-        for service in _data_store_services(entry):
-            default_mount = DEFAULT_AGENT_CONFIG_MOUNTS.get(service)
-            if default_mount and mount_path == default_mount["container"]:
-                claimed.add((service, mount_path))
-    return claimed
-
-
-def get_agent_config_data_stores(data_stores: list[dict]) -> dict[str, str]:
-    """Return agents whose config directories are owned by data stores.
-
-    :param data_stores: Data store entries from ``config.toml``.
-    :returns: Mapping of agent service name to data store name.
-    """
-    owners: dict[str, str] = {}
-    for entry in data_stores:
-        mount_path = _data_store_mount_path(entry)
-        for service in _data_store_services(entry):
-            default_mount = DEFAULT_AGENT_CONFIG_MOUNTS.get(service)
-            if default_mount and mount_path == default_mount["container"]:
-                owners[service] = entry["name"]
-    return owners
-
-
-def build_agent_config_mounts_override(
-    store_dirs: dict[str, Path],
-    claimed_mounts: set[tuple[str, str]] | None = None,
-    runtime: ContainerRuntime = "docker",
-) -> str:
-    """Build writable project-local agent configuration directory mounts.
-
-    These mounts preserve the historical template behavior, except any
-    ``(service, container_path)`` claimed by a data store is omitted so the
-    container never receives duplicate mounts for the same agent config dir.
-    Podman-specific user namespace handling is applied by
-    :func:`build_podman_runtime_override`, so the mount syntax remains portable.
-
-    :param store_dirs: Per-service host directories containing writable config.
-    :param claimed_mounts: Service/path pairs claimed by explicit data stores.
-    :param runtime: Container runtime used for generated volume options.
-    :returns: Compose override as a JSON string.
-    """
-    claimed_mounts = claimed_mounts or set()
-    options = "cached"
-    services: dict[str, dict[str, list[str]]] = {}
-    for service in AVAILABLE_SERVICES:
-        default_mount = DEFAULT_AGENT_CONFIG_MOUNTS.get(service)
-        volumes: list[str] = []
-        if (
-            default_mount
-            and (service, default_mount["container"]) not in claimed_mounts
-        ):
-            volumes.append(
-                f"{store_dirs[service]}:{default_mount['container']}:{options}"
+    for key in config:
+        if key in _WARNED_KEYS:
+            continue
+        if key == "ca_certs":
+            logger.warning(
+                "agent-circus does not support [ca_certs]; ignoring it. Add the "
+                "certificates to the host CA store and set "
+                "msb.network.trust_host_cas = true instead; see MIGRATING.md."
             )
-        services[service] = {"volumes": volumes}
-    return json.dumps({"services": services})
+            _WARNED_KEYS.add(key)
+            continue
+        if key not in SUPPORTED_TOP_LEVEL_KEYS:
+            logger.warning(
+                "Config key [%s] is from agent-circus 1.x and has no effect "
+                "in 2.x; see MIGRATING.md",
+                key,
+            )
+            _WARNED_KEYS.add(key)
 
 
-def build_data_store_override(
-    data_stores: list[dict],
-    data_base_dir: Path,
-    runtime: ContainerRuntime = "docker",
-) -> str:
-    """Build a Docker Compose override that bind-mounts project data store directories.
+def warn_legacy_deploy_mode(workspace: Path) -> None:
+    """Warn once per process about 1.x deploy-mode files.
 
-    Each named store is mounted at its configured ``mount_path`` (or a default under
-    :data:`DATA_STORE_DEFAULT_MOUNT_BASE`) inside every agent container.  Host
-    directories are located under ``data_base_dir/<name>/``.
+    agent-circus 1.x deploy mode copied templates into
+    ``.agent-circus/``; 2.x ignores them. This check looks at files
+    only; it never calls Docker.
 
-    :param data_stores: List of data store entries from ``config.toml``.
-        Each entry must have a ``name`` key and may optionally have ``mount_path``,
-        ``services``, ``seed_from``, and ``seed_mode``.
-    :param data_base_dir: Base directory on the host under which per-store
-        subdirectories reside.
-    :param runtime: Container runtime used for generated volume options.
-    :returns: Compose override as a JSON string.
+    :param workspace: Workspace directory.
     """
-    options = "cached"
-    services = {svc: {"volumes": []} for svc in AVAILABLE_SERVICES}
-    for entry in data_stores:
-        name = entry["name"]
-        mount_path = _data_store_mount_path(entry)
-        host_path = str(data_base_dir / name)
-        store_volumes = [f"{host_path}:{mount_path}:{options}"]
-        if _data_store_seed_from(entry):
-            _data_store_seed_mode(entry)
-        for service in _data_store_services(entry):
-            services[service]["volumes"].extend(store_volumes)
-    return json.dumps({"services": services})
+    global _DEPLOY_MODE_WARNED
+    if _DEPLOY_MODE_WARNED:
+        return
+    if (workspace / ".agent-circus" / "compose.yaml").is_file():
+        logger.warning(
+            "This workspace has files from agent-circus 1.x deploy mode "
+            "(.agent-circus/compose.yaml); 2.x ignores them. See MIGRATING.md"
+        )
+        _DEPLOY_MODE_WARNED = True
 
 
-def build_podman_runtime_override() -> str:
-    """Build a Compose override for rootless Podman user namespace behavior.
+def sanitize_project_name(name: str) -> str:
+    """Sanitize a project name for use in sandbox names.
 
-    ``userns_mode: keep-id`` preserves the invoking user's UID/GID mapping
-    inside rootless Podman containers.  That keeps host-owned state directories
-    writable by the image's ``node`` user on typical UID 1000 developer systems
-    without recursively changing host ownership with Podman's ``U`` volume option.
+    Lowercases, replaces runs of non-alphanumeric characters with a single
+    hyphen, and strips leading/trailing hyphens.
 
-    :returns: Compose override as a JSON string.
+    :param name: Raw project name (usually the workspace directory name).
+    :returns: Sanitized name; empty string if nothing remains.
     """
-    services = {service: {"userns_mode": "keep-id"} for service in AVAILABLE_SERVICES}
-    return json.dumps({"services": services})
+    sanitized = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return sanitized
 
 
-def build_claude_mem_override(claude_mem_dir: Path, services: list[str]) -> str:
-    """Build a Compose override enabling workspace-scoped Claude-Mem.
+def resolve_mounts(mounts: dict[str, str], workspace: Path) -> dict[str, str]:
+    """Resolve relative host paths in mount specifications.
 
-    Enabled services receive build-time activation (the ``CLAUDE_MEM_ENABLED``
-    build arg that makes the image build install the ``claude-mem`` package)
-    plus runtime activation (environment variables and the workspace memory
-    directory mount). Only services whose Dockerfile stage consumes the build
-    arg are supported (currently ``claude-code``).
+    A host path of ``.`` is replaced with the absolute workspace path so
+    the mount is independent of the CLI's working directory.
 
-    :param claude_mem_dir: Host state directory for this workspace's memory.
-    :param services: Supported agent services that should receive Claude-Mem.
-    :returns: Compose override as a JSON string.
+    :param mounts: Raw mount mapping from configuration.
+    :param workspace: Workspace directory.
+    :returns: Mount mapping with resolved host paths.
     """
-    service_defs = {
-        service: {
-            "build": {"args": {"CLAUDE_MEM_ENABLED": "true"}},
-            "environment": {
-                "AGENT_CIRCUS_CLAUDE_MEM_ENABLED": "true",
-                "CLAUDE_MEM_DATA_DIR": CLAUDE_MEM_CONTAINER_DATA_DIR,
-            },
-            "volumes": [
-                f"{claude_mem_dir}:{CLAUDE_MEM_CONTAINER_DATA_DIR}:cached",
-            ],
-        }
-        for service in services
-    }
-    return json.dumps({"services": service_defs})
+    resolved: dict[str, str] = {}
+    for host, guest in mounts.items():
+        resolved[str(workspace) if host == "." else host] = guest
+    return resolved
 
 
-def build_git_worktree_mirror_override(workspace: Path) -> str:
-    """Build a Docker Compose override that mirrors the workspace at its host path.
+def _parse_additional_dirs(raw: Any) -> tuple[AdditionalDir, ...]:
+    """Parse the ``[[additional_dirs]]`` array.
 
-    Adds a second bind mount for the workspace at its exact host absolute path
-    inside every agent container (in addition to the standard ``/workspace``
-    mount).  This makes Git's recorded absolute paths valid inside the
-    container, enabling transparent Git worktree operations.
+    Mirrors the agent-circus fields: ``path`` (required, absolute),
+    ``readonly`` (default ``False``), and ``name`` (default: the basename
+    of *path*). Names and paths must be unique across entries.
 
-    :param workspace: Absolute host path of the workspace.
-    :returns: Compose override as a JSON string.
+    :param raw: Raw value or ``None``.
+    :returns: Tuple of parsed entries.
+    :raises ConfigurationError: If the value is malformed or ambiguous.
     """
-    host_path = str(workspace)
-    volume = f"{host_path}:{host_path}:cached"
-    services = {svc: {"volumes": [volume]} for svc in AVAILABLE_SERVICES}
-    return json.dumps({"services": services})
-
-
-def _validate_port(value: Any, field: str) -> int:
-    """Validate a TCP/UDP port number from config.
-
-    :param value: Raw config value.
-    :param field: Field name for error messages.
-    :returns: Validated port number.
-    :raises ConfigurationError: If the value is not an integer in ``1..65535``.
-    """
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ConfigurationError(f"Port forward {field} must be an integer")
-    if not 1 <= value <= 65535:
-        raise ConfigurationError(f"Port forward {field} must be in range 1..65535")
-    return value
-
-
-def build_port_forwards_override(port_forwards: list[dict]) -> str:
-    """Build a Docker Compose override that publishes container ports.
-
-    :param port_forwards: Port forward entries from ``config.toml``.
-    :returns: Compose override as a JSON string.
-    :raises ConfigurationError: If an entry is invalid.
-    """
-    services: dict[str, dict[str, list[str]]] = {}
-
-    for entry in port_forwards:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ConfigurationError(
+            "additional_dirs must be an array of tables ([[additional_dirs]])"
+        )
+    dirs: list[AdditionalDir] = []
+    names: set[str] = set()
+    paths: set[str] = set()
+    for index, entry in enumerate(raw):
         if not isinstance(entry, dict):
-            raise ConfigurationError("Port forward entries must be tables")
-
-        service = entry.get("service")
-        if not service:
-            raise ConfigurationError("Port forward service is required")
-        if service not in AVAILABLE_SERVICES:
+            raise ConfigurationError(f"additional_dirs[{index}] must be a table")
+        path = entry.get("path")
+        if not isinstance(path, str) or not path:
             raise ConfigurationError(
-                f"Invalid port forward service: {service}. "
-                f"Available: {', '.join(AVAILABLE_SERVICES)}"
+                f"additional_dirs[{index}].path must be a non-empty string"
             )
+        if not os.path.isabs(path):
+            raise ConfigurationError(
+                f"additional_dirs[{index}].path must be an absolute path"
+            )
+        readonly = entry.get("readonly", False)
+        if not isinstance(readonly, bool):
+            raise ConfigurationError(
+                f"additional_dirs[{index}].readonly must be a boolean"
+            )
+        name = entry.get("name", os.path.basename(os.path.normpath(path)))
+        if not isinstance(name, str) or not name:
+            raise ConfigurationError(
+                f"additional_dirs[{index}].name must be a non-empty string"
+            )
+        if name in names:
+            raise ConfigurationError(
+                f"additional_dirs[{index}].name {name!r} duplicates an earlier entry"
+            )
+        if path in paths:
+            raise ConfigurationError(
+                f"additional_dirs[{index}].path {path!r} duplicates an earlier entry"
+            )
+        names.add(name)
+        paths.add(path)
+        dirs.append(AdditionalDir(path=path, name=name, readonly=readonly))
+    return tuple(dirs)
 
-        if "container_port" not in entry:
-            raise ConfigurationError("Port forward container_port is required")
-        container_port = _validate_port(entry["container_port"], "container_port")
-        host_port = _validate_port(entry.get("host_port", container_port), "host_port")
 
-        host = entry.get("host", "127.0.0.1")
-        if not isinstance(host, str) or not host:
-            raise ConfigurationError("Port forward host must be a non-empty string")
+def effective_mounts(
+    config: AgentCircusConfig, workspace: Path
+) -> list[tuple[str, str]]:
+    """Combine ``[msb.mounts]``, the git worktree mirror, and
+    ``additional_dirs`` into msb volumes.
 
-        protocol = entry.get("protocol", "tcp")
-        if protocol not in ("tcp", "udp"):
-            raise ConfigurationError("Port forward protocol must be 'tcp' or 'udp'")
+    Resolves the ``.`` workspace mount to the absolute workspace path,
+    optionally adds the git worktree mirror (the workspace mounted a
+    second time at its exact host absolute path), and appends every
+    additional directory as ``/workspaces/<name>``, read-only when the
+    entry says so.
 
-        service_config = services.setdefault(service, {"ports": []})
-        service_config["ports"].append(
-            f"{host}:{host_port}:{container_port}/{protocol}"
+    :param config: Resolved agent-circus configuration.
+    :param workspace: Workspace directory.
+    :returns: ``(host path, guest mount specification)`` pairs. A list
+        because the same host path may appear at several guest targets.
+    :raises ConfigurationError: If a guest target collides with another.
+    """
+    resolved = resolve_mounts(config.mounts, workspace)
+    mounts: list[tuple[str, str]] = list(resolved.items())
+    taken = {guest.split(":", 1)[0] for guest in resolved.values()}
+    if config.git_worktree_mirror:
+        host_path = str(workspace)
+        if host_path in taken:
+            raise ConfigurationError(
+                f"git.worktree_mirror cannot mount the workspace at {host_path!r}: "
+                "the path is already used as a mount target"
+            )
+        mounts.append((host_path, host_path))
+        taken.add(host_path)
+    for entry in config.additional_dirs:
+        guest = f"{ADDITIONAL_DIRS_GUEST_BASE}/{entry.name}"
+        if guest in taken:
+            raise ConfigurationError(
+                f"additional_dirs entry {entry.name!r} conflicts with the "
+                f"existing mount target {guest}"
+            )
+        taken.add(guest)
+        mounts.append((entry.path, f"{guest}:ro" if entry.readonly else guest))
+    return mounts
+
+
+def resolve_agent_workdir(config: AgentCircusConfig, workspace: Path) -> str:
+    """Return the guest working directory for agent commands.
+
+    An explicit ``[agent] workdir`` wins. Otherwise the host path of
+    the workspace is used when the git worktree mirror is on, so Git
+    records paths that are valid on the host, and ``/workspace`` when
+    it is off.
+
+    :param config: Resolved agent-circus configuration.
+    :param workspace: Workspace directory (absolute host path).
+    :returns: Guest working directory.
+    """
+    if config.agent.workdir is not None:
+        return config.agent.workdir
+    if config.git_worktree_mirror:
+        return str(workspace)
+    return DEFAULT_WORKDIR
+
+
+def resolve_agent_config_mounts(
+    environ: dict[str, str] | None = None,
+    *,
+    warn_missing: bool = True,
+) -> list[tuple[str, str]]:
+    """Return bind mounts for existing agent harness config directories.
+
+    Iterates :data:`AGENT_CONFIG_DIR_MOUNTS`, keeps every entry whose host
+    directory (``$HOME/<dir>``) exists, and logs a warning for each missing
+    one so silent skips stay visible. Guest paths assume the agent-circus
+    image's root user.
+
+    :param environ: Environment mapping for the ``$HOME`` lookup, defaults
+        to :data:`os.environ`.
+    :param warn_missing: Log a warning for each missing directory; callers
+        that only need the mount list pass ``False``.
+    :returns: ``(host directory, guest path)`` pairs in declaration order.
+    """
+    env = os.environ if environ is None else environ
+    home = Path(env.get("HOME", str(Path.home())))
+    mounts: list[tuple[str, str]] = []
+    for harness, (below_home, guest) in AGENT_CONFIG_DIR_MOUNTS.items():
+        host_dir = home / below_home
+        if not host_dir.is_dir():
+            if warn_missing:
+                logger.warning(
+                    "Host config directory %s for %s not found; skipping its "
+                    "sandbox mount (the harness starts without host config and "
+                    "credentials). Log in inside the guest or create the "
+                    "directory, then re-create the sandbox: agent-circus rm -f "
+                    "&& agent-circus up.",
+                    host_dir,
+                    harness,
+                )
+            continue
+        mounts.append((str(host_dir), guest))
+    return mounts
+
+
+def resolve_agent_skill_mounts(
+    environ: dict[str, str] | None = None,
+) -> list[tuple[str, str]]:
+    """Return read-only bind mounts for existing user skill directories.
+
+    Iterates :data:`AGENT_SKILL_DIR_MOUNTS`, keeps every entry whose host
+    directory (``$HOME/<dir>``) exists, and appends ``:ro`` to the guest
+    path so agents in the sandbox cannot change skills that also run on
+    the host. A missing directory is normal and only logged at debug
+    level. Guest paths assume the agent-circus image's root user.
+
+    :param environ: Environment mapping for the ``$HOME`` lookup, defaults
+        to :data:`os.environ`.
+    :returns: ``(host directory, guest path)`` pairs in declaration order;
+        each guest path carries the ``:ro`` read-only option.
+    """
+    env = os.environ if environ is None else environ
+    home = Path(env.get("HOME", str(Path.home())))
+    mounts: list[tuple[str, str]] = []
+    for below_home, guest in AGENT_SKILL_DIR_MOUNTS:
+        host_dir = home / below_home
+        if not host_dir.is_dir():
+            logger.debug(
+                "Host skill directory %s not found; skipping its sandbox mount.",
+                host_dir,
+            )
+            continue
+        mounts.append((str(host_dir), f"{guest}:ro"))
+    return mounts
+
+
+def sandbox_name_for_workspace(workspace: Path) -> str:
+    """Derive the sandbox name for a workspace.
+
+    :param workspace: Workspace directory.
+    :returns: ``agents-<sanitized project name>``.
+    :raises ConfigurationError: If the sanitized name is empty.
+    """
+    project = sanitize_project_name(workspace.name)
+    if not project:
+        raise ConfigurationError(
+            f"Cannot derive a sandbox name from workspace {str(workspace)!r}"
+        )
+    return f"{DEFAULT_SANDBOX_NAME_PREFIX}-{project}"
+
+
+def docker_volume_name_for_workspace(workspace: Path) -> str:
+    """Derive the persistent docker volume name for a workspace.
+
+    :param workspace: Workspace directory.
+    :returns: ``agents-<sanitized project name>-docker``.
+    :raises ConfigurationError: If the sanitized name is empty.
+    """
+    return f"{sandbox_name_for_workspace(workspace)}{DOCKER_VOLUME_SUFFIX}"
+
+
+def _parse_image(raw: Any) -> ImageConfig:
+    """Parse the ``[image]`` table.
+
+    :param raw: Raw table value or ``None``.
+    :returns: Parsed image config.
+    :raises ConfigurationError: If the table is malformed.
+    """
+    if raw is None:
+        return ImageConfig()
+    if not isinstance(raw, dict):
+        raise ConfigurationError("image must be a table")
+    _reject_unknown_keys(raw, "image", ("tag", "dockerfile", "platform"))
+    tag = raw.get("tag", DEFAULT_IMAGE_TAG)
+    if not isinstance(tag, str) or not tag:
+        raise ConfigurationError("image.tag must be a non-empty string")
+    dockerfile = raw.get("dockerfile")
+    if dockerfile is not None and not isinstance(dockerfile, str):
+        raise ConfigurationError("image.dockerfile must be a string")
+    platform = raw.get("platform")
+    if platform is not None and not isinstance(platform, str):
+        raise ConfigurationError("image.platform must be a string")
+    return ImageConfig(tag=tag, dockerfile=dockerfile, platform=platform)
+
+
+def _parse_sandbox(raw: Any) -> SandboxConfig:
+    """Parse the ``[msb.sandbox]`` table.
+
+    :param raw: Raw table value or ``None``.
+    :returns: Parsed sandbox config.
+    :raises ConfigurationError: If the table is malformed.
+    """
+    if raw is None:
+        return SandboxConfig()
+    if not isinstance(raw, dict):
+        raise ConfigurationError("msb.sandbox must be a table")
+    _reject_unknown_keys(
+        raw,
+        "msb.sandbox",
+        (
+            "memory",
+            "cpus",
+            "root_disk",
+            "docker_disk",
+            "docker_disk_persist",
+            "init",
+            "stop_timeout",
+            "docker_stop_timeout",
+        ),
+    )
+    memory = raw.get("memory", DEFAULT_MEMORY)
+    if not isinstance(memory, str) or not memory:
+        raise ConfigurationError("msb.sandbox.memory must be a non-empty string")
+    cpus = raw.get("cpus")
+    if cpus is not None and not isinstance(cpus, int):
+        raise ConfigurationError("msb.sandbox.cpus must be an integer")
+
+    # Size/spec strings are passed to msb verbatim: msb is the authority on
+    # the grammar and validates it at sandbox creation.
+    root_disk = raw.get("root_disk")
+    if root_disk is not None and (not isinstance(root_disk, str) or not root_disk):
+        raise ConfigurationError(
+            'msb.sandbox.root_disk must be a non-empty string (e.g. "flat:32G")'
+        )
+    docker_disk = raw.get("docker_disk")
+    if docker_disk is not None and (
+        not isinstance(docker_disk, str) or not docker_disk
+    ):
+        raise ConfigurationError(
+            'msb.sandbox.docker_disk must be a non-empty string (e.g. "10G")'
+        )
+    docker_disk_persist = raw.get("docker_disk_persist", False)
+    if not isinstance(docker_disk_persist, bool):
+        raise ConfigurationError("msb.sandbox.docker_disk_persist must be a boolean")
+    if docker_disk_persist and docker_disk is None:
+        raise ConfigurationError(
+            "msb.sandbox.docker_disk_persist requires msb.sandbox.docker_disk "
+            '(e.g. "20G")'
+        )
+    init = raw.get("init", DEFAULT_INIT)
+    if (
+        not isinstance(init, str)
+        or not init
+        or not (init in ("auto", "none") or init.startswith("/"))
+    ):
+        raise ConfigurationError(
+            'msb.sandbox.init must be "auto", "none" or an absolute path'
         )
 
-    return json.dumps({"services": services})
-
-
-def build_ssh_override(
-    config_path: str | None = None,
-    known_hosts_path: str | None = None,
-) -> str:
-    """Build a Docker Compose override for SSH agent forwarding and config files.
-
-    Always mounts the host's SSH agent socket (``${SSH_AUTH_SOCK}``) at
-    ``/run/ssh-agent.sock`` inside every agent container and sets
-    ``SSH_AUTH_SOCK`` accordingly.  The socket path is resolved by
-    Docker Compose via environment variable substitution at runtime —
-    no key material is copied into the container.
-
-    Optionally mounts ``~/.ssh/config`` and/or ``~/.ssh/known_hosts`` at
-    intermediate read-only paths (``/run/ssh-host/config`` and
-    ``/run/ssh-host/known_hosts``).  The container entrypoint copies these
-    files into ``/home/node/.ssh/`` at startup with correct ownership.
-
-    The caller is responsible for verifying that ``SSH_AUTH_SOCK`` is
-    set in the host environment before calling this function.
-
-    :param config_path: Absolute host path to an SSH config file, or ``None``.
-    :param known_hosts_path: Absolute host path to a known_hosts file, or ``None``.
-    :returns: Compose override as a JSON string.
-    """
-    volumes = ["${SSH_AUTH_SOCK}:/run/ssh-agent.sock:ro"]
-    if config_path:
-        volumes.append(f"{config_path}:/run/ssh-host/config:ro")
-    if known_hosts_path:
-        volumes.append(f"{known_hosts_path}:/run/ssh-host/known_hosts:ro")
-    env = {"SSH_AUTH_SOCK": "/run/ssh-agent.sock"}
-    services = {
-        svc: {"volumes": volumes, "environment": env} for svc in AVAILABLE_SERVICES
-    }
-    return json.dumps({"services": services})
-
-
-def build_git_override(
-    config_path: str,
-    signing_key_path: str | None = None,
-) -> str:
-    """Build a Docker Compose override that forwards the host Git configuration.
-
-    Mounts the host gitconfig at ``/run/git-host/config:ro``.  When
-    *signing_key_path* is provided, the signing public key is also mounted at
-    ``/run/git-host/signingkey.pub:ro``.  ``GIT_CONFIG_GLOBAL`` is set to
-    ``/home/node/.gitconfig`` so that the container entrypoint's generated
-    file (which includes the host config and overrides path-dependent values)
-    is used by Git.
-
-    :param config_path: Absolute host path to the gitconfig file.
-    :param signing_key_path: Absolute host path to the SSH signing public key,
-        or ``None``.
-    :returns: Compose override as a JSON string.
-    """
-    volumes = [f"{config_path}:/run/git-host/config:ro"]
-    if signing_key_path:
-        volumes.append(f"{signing_key_path}:/run/git-host/signingkey.pub:ro")
-    env = {"GIT_CONFIG_GLOBAL": "/home/node/.gitconfig"}
-    services = {
-        svc: {"volumes": volumes, "environment": env} for svc in AVAILABLE_SERVICES
-    }
-    return json.dumps({"services": services})
-
-
-def parse_hosts_file(path: str = "/etc/hosts") -> list[tuple[str, list[str]]]:
-    """Parse a hosts file into a list of ``(ip, [name, ...])`` tuples.
-
-    Blank lines and lines starting with ``#`` are skipped.  Each
-    remaining line must begin with an IP address followed by one or
-    more hostnames (primary + optional aliases).
-
-    :param path: Path to the hosts file.  Defaults to ``/etc/hosts``.
-    :type path: str
-    :returns: List of ``(ip, names)`` tuples, one per non-comment line.
-    :rtype: list[tuple[str, list[str]]]
-    """
-    entries: list[tuple[str, list[str]]] = []
-    try:
-        with open(path) as f:
-            for line in f:
-                line = line.split("#", 1)[0].strip()
-                if not line:
-                    continue
-                parts = line.split()
-                if len(parts) < 2:
-                    continue
-                ip, names = parts[0], parts[1:]
-                entries.append((ip, names))
-    except OSError:
-        pass
-    return entries
-
-
-def _compile_patterns(
-    patterns: list[str],
-) -> tuple[list[str], list[re.Pattern[str]]]:
-    """Split *patterns* into fnmatch globs and compiled regex objects.
-
-    Patterns prefixed with ``re:`` are compiled as case-insensitive regular
-    expressions.  All other patterns are lowercased for case-insensitive
-    fnmatch matching.
-
-    :param patterns: Raw pattern list from config.
-    :returns: ``(glob_patterns, compiled_re)`` tuple.
-    """
-    glob_patterns: list[str] = []
-    compiled_re: list[re.Pattern[str]] = []
-    for p in patterns:
-        if p.startswith("re:"):
-            compiled_re.append(re.compile(p[3:], re.IGNORECASE))
-        else:
-            glob_patterns.append(p.lower())
-    return glob_patterns, compiled_re
-
-
-def _match_pattern(
-    name: str,
-    glob_patterns: list[str],
-    compiled_re: list[re.Pattern[str]],
-) -> bool:
-    """Return ``True`` if *name* matches any glob or regex pattern.
-
-    :param name: String to test (hostname or filename).
-    :param glob_patterns: Pre-lowercased fnmatch glob strings.
-    :param compiled_re: Pre-compiled regex patterns.
-    :returns: ``True`` when at least one pattern matches.
-    """
-    name_lower = name.lower()
-    for pat in glob_patterns:
-        if fnmatch.fnmatch(name_lower, pat):
-            return True
-    return any(rx.search(name) for rx in compiled_re)
-
-
-def filter_hosts(
-    entries: list[tuple[str, list[str]]],
-    patterns: list[str],
-) -> list[str]:
-    """Filter host entries by patterns and return ``hostname:ip`` strings.
-
-    Each pattern is matched case-insensitively against every name on a
-    line.  If any name matches, **all** names from that line are included
-    in the output (preserving alias semantics).
-
-    Pattern syntax:
-
-    - Plain patterns are treated as **fnmatch globs** (``*`` matches any
-      sequence of characters, ``?`` matches a single character).
-    - Patterns prefixed with ``re:`` are matched as Python **regular
-      expressions** using :func:`re.search` (unanchored).
-
-    :param entries: Parsed host entries from :func:`parse_hosts_file`.
-    :param patterns: List of glob or ``re:``-prefixed regex patterns.
-    :returns: Deduplicated list of ``"hostname:ip"`` strings.
-    :rtype: list[str]
-    """
-    result: list[str] = []
-    seen: set[str] = set()
-    glob_patterns, compiled_re = _compile_patterns(patterns)
-
-    for ip, names in entries:
-        if any(_match_pattern(n, glob_patterns, compiled_re) for n in names):
-            for name in names:
-                entry = f"{name}:{ip}"
-                if entry not in seen:
-                    seen.add(entry)
-                    result.append(entry)
-
-    return result
-
-
-def match_files(directory: str, patterns: list[str]) -> list[str]:
-    """Return absolute paths of files in *directory* whose name matches *patterns*.
-
-    Only regular files (not subdirectories or symlinks to directories) are
-    returned.  Returns an empty list when *directory* does not exist.
-
-    Pattern syntax: same as :func:`filter_hosts` — fnmatch glob by default,
-    ``re:`` prefix for Python regex matched against the basename.
-
-    :param directory: Absolute path to the directory to scan.
-    :param patterns: List of glob or ``re:``-prefixed regex patterns.
-    :returns: Sorted list of absolute file paths whose basename matches.
-    :rtype: list[str]
-    """
-    try:
-        entries = list(Path(directory).iterdir())
-    except OSError:
-        return []
-    glob_patterns, compiled_re = _compile_patterns(patterns)
-    result = []
-    for entry in entries:
-        if entry.is_file() and _match_pattern(entry.name, glob_patterns, compiled_re):
-            result.append(str(entry))
-    return sorted(result)
-
-
-def build_ca_certs_override(
-    cert_paths: list[str], additional_services: list[str] | None = None
-) -> str:
-    """Build a Docker Compose override that bind-mounts CA certificate files.
-
-    Each certificate is mounted read-only at
-    ``/run/ca-host/<basename>`` inside every agent container and any
-    explicitly supplied companion services.  The agent container entrypoint
-    copies them into the system certificate store and runs
-    ``update-ca-certificates`` at startup.
-
-    :param cert_paths: Absolute host paths to ``.crt`` files to forward.
-    :type cert_paths: list[str]
-    :param additional_services: Additional Compose services that should receive
-        the certificate mounts.
-    :returns: Compose override as a JSON string.
-    :rtype: str
-    """
-    volumes = [f"{p}:/run/ca-host/{Path(p).name}:ro" for p in cert_paths]
-    service_names = [*AVAILABLE_SERVICES, *(additional_services or [])]
-    services = {svc: {"volumes": volumes} for svc in service_names}
-    return json.dumps({"services": services})
-
-
-def filter_env(environ: dict[str, str], patterns: list[str]) -> list[str]:
-    """Return environment variable names from *environ* that match *patterns*.
-
-    Only the **names** are returned — values are never read or stored, so
-    they remain on the host and are resolved by Docker Compose at container
-    start time.
-
-    Pattern syntax: same as :func:`filter_hosts` — fnmatch glob by default,
-    ``re:`` prefix for Python regex matched case-insensitively against the
-    variable name.
-
-    :param environ: Mapping of variable names to values (typically
-        :data:`os.environ`).
-    :param patterns: List of glob or ``re:``-prefixed regex patterns.
-    :returns: Sorted, deduplicated list of matching variable names.
-    :rtype: list[str]
-    """
-    glob_patterns, compiled_re = _compile_patterns(patterns)
-    return sorted(
-        {name for name in environ if _match_pattern(name, glob_patterns, compiled_re)}
+    timeouts: dict[str, int] = {}
+    for key in ("stop_timeout", "docker_stop_timeout"):
+        value = raw.get(
+            key,
+            DEFAULT_STOP_TIMEOUT
+            if key == "stop_timeout"
+            else DEFAULT_DOCKER_STOP_TIMEOUT,
+        )
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ConfigurationError(
+                f"msb.sandbox.{key} must be a positive integer (seconds)"
+            )
+        timeouts[key] = value
+    if timeouts["stop_timeout"] <= timeouts["docker_stop_timeout"]:
+        raise ConfigurationError(
+            "msb.sandbox.stop_timeout must be greater than "
+            "msb.sandbox.docker_stop_timeout"
+        )
+    return SandboxConfig(
+        memory=memory,
+        cpus=cpus,
+        root_disk=root_disk,
+        docker_disk=docker_disk,
+        docker_disk_persist=docker_disk_persist,
+        init=init,
+        stop_timeout=timeouts["stop_timeout"],
+        docker_stop_timeout=timeouts["docker_stop_timeout"],
     )
 
 
-def build_env_passthrough_override(var_names: list[str]) -> str:
-    """Build a Docker Compose override that passes host env vars into containers.
+def _parse_network(raw: Any) -> NetworkConfig:
+    """Parse the ``[msb.network]`` table.
 
-    Each variable uses Compose interpolation so its value is resolved from the
-    invoking environment at container creation time. Only placeholders are
-    written to disk; values never appear in the override file.
-
-    :param var_names: Environment variable names to forward.
-    :type var_names: list[str]
-    :returns: Compose override as a JSON string.
-    :rtype: str
+    :param raw: Raw table value or ``None``.
+    :returns: Parsed network config.
+    :raises ConfigurationError: If the table is malformed.
     """
-    env_map = {name: f"${{{name}}}" for name in var_names}
-    services = {svc: {"environment": env_map} for svc in AVAILABLE_SERVICES}
-    return json.dumps({"services": services})
+    if raw is None:
+        return NetworkConfig()
+    if not isinstance(raw, dict):
+        raise ConfigurationError("msb.network must be a table")
+    _reject_unknown_keys(raw, "msb.network", ("mode", "trust_host_cas"))
+    mode = raw.get("mode", DEFAULT_NETWORK_MODE)
+    if not isinstance(mode, str) or not mode:
+        raise ConfigurationError("msb.network.mode must be a non-empty string")
+    trust_host_cas = raw.get("trust_host_cas", False)
+    if not isinstance(trust_host_cas, bool):
+        raise ConfigurationError("msb.network.trust_host_cas must be a boolean")
+    return NetworkConfig(mode=mode, trust_host_cas=trust_host_cas)
 
 
-def build_hosts_override(
-    extra_hosts: list[str], additional_services: list[str] | None = None
-) -> str:
-    """Build a Docker Compose override that injects extra ``/etc/hosts`` entries.
+def _parse_skills(raw: Any) -> SkillsConfig:
+    """Parse the ``[skills]`` table.
 
-    Applies the same ``extra_hosts`` list to every agent service and any
-    explicitly supplied companion services so that selected host entries from
-    the host machine are resolvable inside containers.
+    The store path is validated here (absolute after ``~`` expansion),
+    so a bad value fails at config load; it is kept unexpanded and
+    ``system_skills_store()`` expands it again on use.
 
-    :param extra_hosts: List of ``"hostname:ip"`` strings to inject.
-    :type extra_hosts: list[str]
-    :param additional_services: Additional Compose services that should receive
-        the host entries.
-    :returns: Compose override as a JSON string.
-    :rtype: str
+    :param raw: Raw table value or ``None``.
+    :returns: Parsed skills config.
+    :raises ConfigurationError: If the table is malformed.
     """
-    service_names = [*AVAILABLE_SERVICES, *(additional_services or [])]
-    services = {svc: {"extra_hosts": extra_hosts} for svc in service_names}
-    return json.dumps({"services": services})
+    if raw is None:
+        return SkillsConfig()
+    if not isinstance(raw, dict):
+        raise ConfigurationError("skills must be a table")
+    _reject_unknown_keys(raw, "skills", ("store",))
+    store = raw.get("store")
+    if store is not None:
+        if not isinstance(store, str) or not store:
+            raise ConfigurationError("skills.store must be a non-empty string")
+        expand_store_path(store)
+    return SkillsConfig(store=store)
 
 
-def build_shadow_override(shadow: list[str]) -> str:
-    """Build a Docker Compose override that shadows paths with ``/dev/null``.
+def _parse_tracing(raw: Any) -> TracingConfig:
+    """Parse the ``[tracing]`` table.
 
-    For each path in *shadow*, every service gets a read-only bind mount
-    of ``/dev/null`` over ``/workspace/<path>``.
-
-    :param shadow: Workspace-relative paths to shadow.
-    :returns: Compose override as a JSON string.
+    :param raw: Raw table value or ``None``.
+    :returns: Parsed trace settings.
+    :raises ConfigurationError: If the table is malformed.
     """
-    volumes = [f"/dev/null:/workspace/{p}:ro" for p in shadow]
-    services = {name: {"volumes": volumes} for name in AVAILABLE_SERVICES}
-    return json.dumps({"services": services})
+    if raw is None:
+        return TracingConfig()
+    if not isinstance(raw, dict):
+        raise ConfigurationError("tracing must be a table")
+    _reject_unknown_keys(
+        raw,
+        "tracing",
+        (
+            "enabled",
+            "directory",
+            "sample_interval",
+            "repetition_threshold",
+            "capture_payloads",
+            "max_payload_bytes",
+        ),
+    )
+    enabled = raw.get("enabled", False)
+    directory = raw.get("directory", ".agent-circus/traces")
+    sample_interval = raw.get("sample_interval", 1.0)
+    repetition_threshold = raw.get("repetition_threshold", 64)
+    capture_payloads = raw.get("capture_payloads", False)
+    max_payload_bytes = raw.get("max_payload_bytes", 100 * 1024 * 1024)
 
-
-def build_startup_hook_override(startup_script_path: Path) -> str:
-    """Build a Docker Compose override that bind-mounts a startup hook script.
-
-    Mounts *startup_script_path* read-only at ``/run/startup-hook/startup.sh``
-    inside every agent container.  The target lives in the container's own
-    filesystem (under ``/run``, alongside the other intermediate read-only
-    mounts such as ``/run/ssh-host``), *not* in the host-shared workspace
-    bind-mount.  Mounting into the workspace would make the container runtime
-    create a zero-byte placeholder file on the host whenever it does not
-    already exist; mounting under ``/run`` avoids that entirely, so the hook
-    never leaves stray files in the project directory.
-
-    The entrypoint runs this script in preference to any project-authored
-    ``.agent-circus/hooks/startup.sh`` file, so ``config.toml`` wins.
-
-    :param startup_script_path: Absolute host path to the startup script
-        (typically in the XDG state directory).
-    :returns: Compose override as a JSON string.
-    :rtype: str
-    """
-    volume = f"{startup_script_path}:/run/startup-hook/startup.sh:ro"
-    services = {svc: {"volumes": [volume]} for svc in AVAILABLE_SERVICES}
-    return json.dumps({"services": services})
-
-
-def build_llama_cpp_override(llama_cpp_config: dict) -> str:
-    """Build a Docker Compose override that adds a llama.cpp server sidecar.
-
-    Defines a ``llama-cpp`` service running the official llama.cpp server
-    image and injects a ``depends_on`` into the ``opencode`` service so it
-    waits for the sidecar to start.
-
-    Non-absolute model values are treated as HuggingFace references and
-    split at the last ``/`` into ``--hf-repo`` and ``--hf-file`` flags,
-    which work with the standard CPU server image.  Absolute paths
-    (starting with ``/``) are passed through unchanged via ``-m``.
-
-    Server configuration (host, port, context size) is applied via
-    ``LLAMA_ARG_*`` environment variables rather than CLI flags to avoid
-    conflicts with defaults already set in the upstream Docker image.
-
-    :param llama_cpp_config: ``[llama_cpp]`` table from merged config.
-    :returns: Compose override as a JSON string.
-    :raises ConfigurationError: If ``models_cache`` starts with ``~``.
-    """
-    model = llama_cpp_config.get("model", LLAMA_CPP_DEFAULT_MODEL)
-    models_cache = llama_cpp_config.get("models_cache", LLAMA_CPP_DEFAULT_MODELS_CACHE)
-    context_size = llama_cpp_config.get("context_size", LLAMA_CPP_DEFAULT_CONTEXT_SIZE)
-    extra_args: list[str] = llama_cpp_config.get("extra_args", [])
-
-    if isinstance(models_cache, str) and models_cache.startswith("~"):
+    if not isinstance(enabled, bool):
+        raise ConfigurationError("tracing.enabled must be a boolean")
+    if not isinstance(directory, str) or not directory:
+        raise ConfigurationError("tracing.directory must be a non-empty string")
+    if (
+        isinstance(sample_interval, bool)
+        or not isinstance(sample_interval, int | float)
+        or sample_interval <= 0
+    ):
+        raise ConfigurationError("tracing.sample_interval must be greater than zero")
+    if (
+        isinstance(repetition_threshold, bool)
+        or not isinstance(repetition_threshold, int)
+        or repetition_threshold < 2
+    ):
         raise ConfigurationError(
-            "llama_cpp models_cache must use an absolute path or Compose "
-            "environment interpolation like ${HOME}/.cache/huggingface; "
-            "'~' is not supported"
+            "tracing.repetition_threshold must be an integer of at least 2"
+        )
+    if not isinstance(capture_payloads, bool):
+        raise ConfigurationError("tracing.capture_payloads must be a boolean")
+    if (
+        isinstance(max_payload_bytes, bool)
+        or not isinstance(max_payload_bytes, int)
+        or max_payload_bytes < 1
+    ):
+        raise ConfigurationError("tracing.max_payload_bytes must be a positive integer")
+    return TracingConfig(
+        enabled=enabled,
+        directory=directory,
+        sample_interval=float(sample_interval),
+        repetition_threshold=repetition_threshold,
+        capture_payloads=capture_payloads,
+        max_payload_bytes=max_payload_bytes,
+    )
+
+
+def _validate_port(value: Any, label: str) -> int:
+    """Validate a port number.
+
+    :param value: Raw value from the configuration.
+    :param label: Field name used in the error message.
+    :returns: The validated port number.
+    :raises ConfigurationError: If the value is not an integer in
+        ``1..65535``.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConfigurationError(f"{label} must be an integer")
+    if not 1 <= value <= 65535:
+        raise ConfigurationError(f"{label} must be in range 1..65535")
+    return value
+
+
+def _parse_port_forwards(raw: Any) -> tuple[PortForward, ...]:
+    """Parse the ``[[port_forwards]]`` array.
+
+    Accepts agent-circus entries (``container_port`` plus an ignored
+    ``service``) and msb-native entries (``guest_port``). ``host``,
+    ``host_port``, and ``protocol`` are optional.
+
+    :param raw: Raw array value or ``None``.
+    :returns: Tuple of validated port forwards.
+    :raises ConfigurationError: If an entry is malformed.
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ConfigurationError("port_forwards must be a list of tables")
+    forwards: list[PortForward] = []
+    for index, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            raise ConfigurationError(f"port_forwards[{index}] must be a table")
+        guest_port = entry.get("guest_port", entry.get("container_port"))
+        if guest_port is None:
+            raise ConfigurationError(
+                f"port_forwards[{index}] needs a guest_port (or container_port)"
+            )
+        guest_port = _validate_port(guest_port, f"port_forwards[{index}] guest_port")
+        host_port = entry.get("host_port", guest_port)
+        host_port = _validate_port(host_port, f"port_forwards[{index}] host_port")
+        host = entry.get("host", DEFAULT_PORT_HOST)
+        if not isinstance(host, str) or not host:
+            raise ConfigurationError(
+                f"port_forwards[{index}] host must be a non-empty string"
+            )
+        protocol = entry.get("protocol", "tcp")
+        if protocol not in ("tcp", "udp"):
+            raise ConfigurationError(
+                f"port_forwards[{index}] protocol must be 'tcp' or 'udp'"
+            )
+        if guest_port == ROUTER_GUEST_PORT and protocol == "tcp":
+            raise ConfigurationError(
+                f"port_forwards[{index}] guest_port {ROUTER_GUEST_PORT} is "
+                "reserved for the agent-circus router"
+            )
+        forwards.append(
+            PortForward(
+                guest_port=guest_port,
+                host_port=host_port,
+                host=host,
+                protocol=protocol,
+            )
+        )
+    return tuple(forwards)
+
+
+def _parse_daemons(raw: Any) -> tuple[DaemonConfig, ...]:
+    """Parse the ``[[daemons]]`` array.
+
+    Each entry needs a unique ``name`` matching
+    :data:`DAEMON_NAME_PATTERN` and a non-empty ``command`` list. All
+    other fields are optional.
+
+    :param raw: Raw array value or ``None``.
+    :returns: Tuple of parsed daemon configs in configuration order.
+    :raises ConfigurationError: If an entry is malformed or a name is
+        used twice.
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ConfigurationError("daemons must be a list of tables")
+    daemons: list[DaemonConfig] = []
+    names: set[str] = set()
+    for index, entry in enumerate(raw):
+        label = f"daemons[{index}]"
+        if not isinstance(entry, dict):
+            raise ConfigurationError(f"{label} must be a table")
+        known_keys = (
+            "name",
+            "command",
+            "autostart",
+            "port",
+            "expose",
+            "workdir",
+            "env",
+            "env_passthrough",
+        )
+        unknown = sorted(key for key in entry if key not in known_keys)
+        if unknown:
+            raise ConfigurationError(
+                f"{label} has unknown key(s): {', '.join(unknown)}"
+            )
+        name = entry.get("name")
+        if not isinstance(name, str) or not DAEMON_NAME_PATTERN.fullmatch(name):
+            raise ConfigurationError(
+                f"{label}.name must match [a-z0-9][a-z0-9-]* (at most 40 characters)"
+            )
+        if name in names:
+            raise ConfigurationError(f"{label}.name {name!r} is used more than once")
+        names.add(name)
+        command = entry.get("command")
+        if (
+            not isinstance(command, list)
+            or not command
+            or not all(isinstance(part, str) and part for part in command)
+        ):
+            raise ConfigurationError(
+                f"{label}.command must be a non-empty list of strings"
+            )
+        autostart = entry.get("autostart", True)
+        if not isinstance(autostart, bool):
+            raise ConfigurationError(f"{label}.autostart must be true or false")
+        port = entry.get("port")
+        if port is not None:
+            port = _validate_port(port, f"{label}.port")
+        if port == ROUTER_GUEST_PORT:
+            raise ConfigurationError(
+                f"{label}.port {ROUTER_GUEST_PORT} is reserved for the "
+                "agent-circus router"
+            )
+        expose = entry.get("expose", True)
+        if not isinstance(expose, bool):
+            raise ConfigurationError(f"{label}.expose must be true or false")
+        if "expose" in entry and expose and port is None:
+            raise ConfigurationError(f"{label}.expose needs a port")
+        workdir = entry.get("workdir")
+        if workdir is not None and (not isinstance(workdir, str) or not workdir):
+            raise ConfigurationError(f"{label}.workdir must be a non-empty string")
+        env = _parse_string_dict(entry.get("env"), f"{label}.env")
+        for key in env:
+            if not _ENV_NAME_PATTERN.fullmatch(key):
+                raise ConfigurationError(
+                    f"{label}.env key {key!r} is not a valid environment variable name"
+                )
+        env_passthrough = entry.get("env_passthrough")
+        if env_passthrough is None:
+            env_passthrough = ()
+        elif not isinstance(env_passthrough, list) or not all(
+            isinstance(item, str) and item for item in env_passthrough
+        ):
+            raise ConfigurationError(
+                f"{label}.env_passthrough must be a list of non-empty strings"
+            )
+        daemons.append(
+            DaemonConfig(
+                name=name,
+                command=tuple(command),
+                autostart=autostart,
+                port=port,
+                expose=expose,
+                workdir=workdir,
+                env=env,
+                env_passthrough=tuple(env_passthrough),
+            )
+        )
+    return tuple(daemons)
+
+
+def exposed_routes(daemons: Sequence[DaemonConfig]) -> dict[str, int]:
+    """Return the daemon routes for the guest router.
+
+    :param daemons: Configured daemons.
+    :returns: Mapping of daemon name to guest TCP port, for every daemon
+        with a port and ``expose`` set, in configuration order.
+    """
+    return {
+        daemon.name: daemon.port
+        for daemon in daemons
+        if daemon.port is not None and daemon.expose
+    }
+
+
+def resolve_proxy_port(
+    cli_value: int | None, environ: Mapping[str, str] | None = None
+) -> int:
+    """Return the host port of the central proxy.
+
+    Precedence: *cli_value*, then ``AGENT_CIRCUS_PROXY_PORT``, then
+    :data:`DEFAULT_PROXY_PORT`.
+
+    :param cli_value: Port given on the command line, if any.
+    :param environ: Environment mapping, defaults to :data:`os.environ`.
+    :returns: The resolved host port.
+    :raises ConfigurationError: If the environment value is not a port
+        number in 1..65535.
+    """
+    if cli_value is not None:
+        return cli_value
+    env = os.environ if environ is None else environ
+    raw = env.get(PROXY_PORT_ENV_VAR)
+    if raw is None:
+        return DEFAULT_PROXY_PORT
+    try:
+        return _validate_port(int(raw), f"{PROXY_PORT_ENV_VAR}")
+    except ValueError as e:
+        raise ConfigurationError(
+            f"{PROXY_PORT_ENV_VAR} must be an integer in range 1..65535"
+        ) from e
+
+
+def proxy_url(daemon: str, sandbox: str, port: int) -> str:
+    """Return the proxy URL of a daemon.
+
+    :param daemon: Daemon name (first subdomain label).
+    :param sandbox: Sandbox name (second subdomain label).
+    :param port: Host port of the central proxy.
+    :returns: URL like ``http://opencode-web.agents-foo.localhost:7700/``.
+    """
+    return f"http://{daemon}.{sandbox}.{PROXY_DOMAIN}:{port}/"
+
+
+def _parse_hooks(raw: Any) -> HooksConfig:
+    """Parse the ``[hooks]`` table.
+
+    Each hook accepts either a plain string (an inline script) or a table
+    with one of ``script`` / ``file`` plus optional settings. Unknown hook
+    names and unknown keys are rejected. The 1.x image-build hook names
+    ``base_root`` and ``base_user`` get a dedicated error.
+
+    :param raw: Raw table value or ``None``.
+    :returns: Parsed hooks configuration.
+    :raises ConfigurationError: If the table or a hook entry is malformed.
+    """
+    if raw is None:
+        return HooksConfig()
+    if not isinstance(raw, dict):
+        raise ConfigurationError("hooks must be a table")
+    unknown = sorted(key for key in raw if key not in HOOK_NAMES)
+    if unknown:
+        for key in unknown:
+            if key in ("base_root", "base_user"):
+                raise ConfigurationError(
+                    f"hooks.{key} is an agent-circus 1.x image-build hook. "
+                    "agent-circus 2.x has the provision and startup hooks "
+                    "instead; see MIGRATING.md"
+                )
+        raise ConfigurationError(f"hooks has unknown key(s): {', '.join(unknown)}")
+    hooks: dict[str, HookConfig | None] = {}
+    for name in HOOK_NAMES:
+        if name not in raw:
+            hooks[name] = None
+            continue
+        label = f"hooks.{name}"
+        value = raw[name]
+        if isinstance(value, str):
+            if not value.strip():
+                raise ConfigurationError(f"{label} must not be empty")
+            hook = HookConfig(
+                name=name, script=value, required=HOOK_REQUIRED_DEFAULTS[name]
+            )
+        elif isinstance(value, dict):
+            hook = _parse_hook_table(name, label, value)
+        else:
+            raise ConfigurationError(f"{label} must be a string or a table")
+        if hook.script is not None and (
+            len(hook.script.encode("utf-8")) > MAX_HOOK_SCRIPT_BYTES
+        ):
+            raise ConfigurationError(f"{label} script is larger than 64 KiB")
+        hooks[name] = hook
+    return HooksConfig(provision=hooks["provision"], startup=hooks["startup"])
+
+
+def _parse_hook_table(name: str, label: str, value: dict[str, Any]) -> HookConfig:
+    """Parse one ``[hooks.<name>]`` table.
+
+    :param name: Hook name (``provision`` or ``startup``).
+    :param label: Config key label used in error messages.
+    :param value: Raw hook table.
+    :returns: Parsed hook config.
+    :raises ConfigurationError: If the table is malformed.
+    """
+    known_keys = (
+        "script",
+        "file",
+        "required",
+        "timeout",
+        "workdir",
+        "env",
+        "env_passthrough",
+    )
+    unknown = sorted(key for key in value if key not in known_keys)
+    if unknown:
+        raise ConfigurationError(f"{label} has unknown key(s): {', '.join(unknown)}")
+    script = value.get("script")
+    file = value.get("file")
+    if script is not None and file is not None:
+        raise ConfigurationError(f"{label}: set either script or file, not both")
+    if script is None and file is None:
+        raise ConfigurationError(f"{label} needs script or file")
+    if script is not None:
+        if not isinstance(script, str) or not script.strip():
+            raise ConfigurationError(f"{label}.script must be a non-empty string")
+    else:
+        if not isinstance(file, str) or not file:
+            raise ConfigurationError(f"{label}.file must be a non-empty string")
+    required = value.get("required", HOOK_REQUIRED_DEFAULTS[name])
+    if not isinstance(required, bool):
+        raise ConfigurationError(f"{label}.required must be true or false")
+    timeout = value.get("timeout")
+    if timeout is not None and (
+        isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0
+    ):
+        raise ConfigurationError(
+            f"{label}.timeout must be a positive integer (seconds)"
+        )
+    workdir = value.get("workdir")
+    if workdir is not None and (not isinstance(workdir, str) or not workdir):
+        raise ConfigurationError(f"{label}.workdir must be a non-empty string")
+    env = _parse_string_dict(value.get("env"), f"{label}.env")
+    for key in env:
+        if not _ENV_NAME_PATTERN.fullmatch(key):
+            raise ConfigurationError(
+                f"{label}.env key {key!r} is not a valid environment variable name"
+            )
+    env_passthrough = value.get("env_passthrough")
+    if env_passthrough is None:
+        env_passthrough = ()
+    elif not isinstance(env_passthrough, list) or not all(
+        isinstance(item, str) and item for item in env_passthrough
+    ):
+        raise ConfigurationError(
+            f"{label}.env_passthrough must be a list of non-empty strings"
+        )
+    return HookConfig(
+        name=name,
+        script=script,
+        file=file,
+        required=required,
+        timeout=timeout,
+        workdir=workdir,
+        env=env,
+        env_passthrough=tuple(env_passthrough),
+    )
+
+
+def load_hook_script(hook: HookConfig, workspace: Path) -> str:
+    """Return the hook script text for a hook.
+
+    Inline scripts are returned verbatim; ``file`` hooks are read from the
+    host. Relative file paths resolve against *workspace*.
+
+    :param hook: Parsed hook configuration.
+    :param workspace: Workspace directory used to resolve relative paths.
+    :returns: The hook script text.
+    :raises ConfigurationError: If the file cannot be read, is too large,
+        is not UTF-8 text, or is empty.
+    """
+    if hook.script is not None:
+        return hook.script
+    if hook.file is None:
+        raise ConfigurationError(f"hooks.{hook.name} needs script or file")
+    path = Path(hook.file).expanduser()
+    if not path.is_absolute():
+        path = workspace / path
+    try:
+        data = path.read_bytes()
+    except OSError as e:
+        raise ConfigurationError(
+            f"hooks.{hook.name}.file {str(path)!r} cannot be read: {e}"
+        ) from e
+    if len(data) > MAX_HOOK_SCRIPT_BYTES:
+        raise ConfigurationError(
+            f"hooks.{hook.name}.file {str(path)!r} is larger than 64 KiB"
+        )
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise ConfigurationError(
+            f"hooks.{hook.name}.file {str(path)!r} is not UTF-8 text"
+        ) from e
+    if not text.strip():
+        raise ConfigurationError(f"hooks.{hook.name}.file {str(path)!r} is empty")
+    return text
+
+
+def _parse_agent(raw: Any) -> AgentConfig:
+    """Parse the ``[agent]`` table.
+
+    :param raw: Raw table value or ``None``.
+    :returns: Parsed agent config.
+    :raises ConfigurationError: If the table is malformed.
+    """
+    if raw is None:
+        return AgentConfig()
+    if not isinstance(raw, dict):
+        raise ConfigurationError("agent must be a table")
+    _reject_unknown_keys(raw, "agent", ("command", "workdir"))
+    command = raw.get("command")
+    if command is None:
+        command = list(DEFAULT_AGENT_COMMAND)
+    if (
+        not isinstance(command, list)
+        or not command
+        or not all(isinstance(part, str) and part for part in command)
+    ):
+        raise ConfigurationError("agent.command must be a non-empty list of strings")
+    workdir = raw.get("workdir")
+    if workdir is not None and (not isinstance(workdir, str) or not workdir):
+        raise ConfigurationError("agent.workdir must be a non-empty string")
+    return AgentConfig(command=tuple(command), workdir=workdir)
+
+
+def _parse_git(raw: Any) -> GitConfig | None:
+    """Parse the ``[git]`` table.
+
+    All three keys are interpreted (``worktree_mirror``, ``config_path``,
+    ``signing_key_path``); unknown keys raise. File existence is checked
+    later and never raises here.
+
+    :param raw: Raw table value or ``None``.
+    :returns: Parsed settings, or ``None`` when the table is absent.
+    :raises ConfigurationError: If the table or a path is malformed.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ConfigurationError("git must be a table")
+    raw_mirror = raw.get("worktree_mirror")
+    if raw_mirror is not None and not isinstance(raw_mirror, bool):
+        raise ConfigurationError("git.worktree_mirror must be a boolean")
+    worktree_mirror = DEFAULT_WORKTREE_MIRROR if raw_mirror is None else raw_mirror
+
+    paths: dict[str, str | None] = {}
+    for key in ("config_path", "signing_key_path"):
+        value = raw.get(key)
+        if value is None:
+            paths[key] = None
+            continue
+        if not isinstance(value, str) or not value:
+            raise ConfigurationError(f"git.{key} must be a non-empty string")
+        expanded = os.path.expanduser(value)
+        if not os.path.isabs(expanded):
+            raise ConfigurationError(f"git.{key} must be an absolute path")
+        paths[key] = expanded
+
+    _reject_unknown_keys(
+        raw, "git", ("worktree_mirror", "config_path", "signing_key_path")
+    )
+    return GitConfig(
+        worktree_mirror=worktree_mirror,
+        worktree_mirror_explicit=raw_mirror is not None,
+        config_path=paths["config_path"],
+        signing_key_path=paths["signing_key_path"],
+    )
+
+
+def _parse_ssh(raw: Any) -> SshConfig | None:
+    """Parse the ``[ssh]`` table.
+
+    The table's presence enables SSH agent forwarding, even when empty.
+    ``config_path`` and ``known_hosts_path`` are optional; ``~`` is
+    expanded. Unknown keys raise.
+
+    :param raw: Raw table value or ``None``.
+    :returns: Parsed settings, or ``None`` when the table is absent.
+    :raises ConfigurationError: If the table or a path is malformed.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ConfigurationError("ssh must be a table")
+
+    paths: dict[str, str | None] = {}
+    for key in ("config_path", "known_hosts_path"):
+        value = raw.get(key)
+        if value is None:
+            paths[key] = None
+            continue
+        if not isinstance(value, str) or not value:
+            raise ConfigurationError(f"ssh.{key} must be a non-empty string")
+        expanded = os.path.expanduser(value)
+        if not os.path.isabs(expanded):
+            raise ConfigurationError(f"ssh.{key} must be an absolute path")
+        paths[key] = expanded
+
+    _reject_unknown_keys(raw, "ssh", ("config_path", "known_hosts_path"))
+    return SshConfig(
+        config_path=paths["config_path"],
+        known_hosts_path=paths["known_hosts_path"],
+    )
+
+
+def _parse_hosts(raw: Any) -> HostsConfig | None:
+    """Parse the ``[hosts]`` table.
+
+    ``patterns`` is a list of non-empty strings; ``re:``-prefixed entries
+    must compile as regexes. ``file`` defaults to :data:`DEFAULT_HOSTS_FILE`
+    and must be an absolute host path (``~`` is expanded). Unknown keys
+    raise.
+
+    :param raw: Raw table value or ``None``.
+    :returns: Parsed settings, or ``None`` when the table is absent.
+    :raises ConfigurationError: If the table or a field is malformed.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ConfigurationError("hosts must be a table")
+
+    patterns = raw.get("patterns", [])
+    if not isinstance(patterns, list) or not all(
+        isinstance(p, str) and p for p in patterns
+    ):
+        raise ConfigurationError("hosts.patterns must be a list of non-empty strings")
+    for p in patterns:
+        if p.startswith("re:"):
+            try:
+                re.compile(p[3:], re.IGNORECASE)
+            except re.error as e:
+                raise ConfigurationError(
+                    f"hosts.patterns entry {p!r} is not a valid regular expression: {e}"
+                ) from e
+
+    file = raw.get("file", DEFAULT_HOSTS_FILE)
+    if not isinstance(file, str) or not file:
+        raise ConfigurationError("hosts.file must be a non-empty string")
+    file = os.path.expanduser(file)
+    if not os.path.isabs(file):
+        raise ConfigurationError("hosts.file must be an absolute path")
+
+    _reject_unknown_keys(raw, "hosts", ("patterns", "file"))
+    return HostsConfig(patterns=tuple(patterns), file=file)
+
+
+def _reject_unknown_keys(
+    raw: dict[str, Any], label: str, known: frozenset[str] | tuple[str, ...]
+) -> None:
+    """Raise when *raw* contains a key outside *known*.
+
+    :param raw: Raw table from the configuration.
+    :param label: Config key label used in the error message.
+    :param known: Keys the table accepts.
+    :raises ConfigurationError: If an unknown key is present.
+    """
+    unknown = sorted(key for key in raw if key not in known)
+    if unknown:
+        raise ConfigurationError(f"{label} has unknown key(s): {', '.join(unknown)}")
+
+
+def _parse_string_dict(raw: Any, label: str) -> dict[str, str]:
+    """Parse a ``KEY = "value"`` table into a plain string dict.
+
+    :param raw: Raw table value or ``None``.
+    :param label: Config key label used in error messages.
+    :returns: Parsed string mapping.
+    :raises ConfigurationError: If the table is malformed.
+    """
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ConfigurationError(f"{label} must be a table")
+    result: dict[str, str] = {}
+    for key, value in raw.items():
+        if not isinstance(value, str):
+            raise ConfigurationError(f"{label}.{key} must be a string")
+        result[key] = value
+    return result
+
+
+def _parse_env(raw: Any) -> dict[str, str]:
+    """Parse the top-level ``[env]`` table.
+
+    Values are passed through verbatim: values containing ``$`` are
+    guest shell words that expand when a guest shell evaluates them.
+
+    :param raw: Raw ``[env]`` table or ``None``.
+    :returns: Parsed variables.
+    :raises ConfigurationError: If the table is malformed, a name is not
+        a valid environment variable name, or a name starts with
+        ``MSB_``.
+    """
+    merged = _parse_string_dict(raw, "env")
+    for key in merged:
+        if not _ENV_NAME_PATTERN.fullmatch(key):
+            raise ConfigurationError(
+                f"env key {key!r} is not a valid environment variable name"
+            )
+        if key.startswith("MSB_"):
+            raise ConfigurationError(
+                f"env key {key!r} uses the MSB_ prefix, which msb reserves"
+            )
+    return merged
+
+
+def _parse_env_passthrough(raw: Any) -> tuple[str, ...]:
+    """Parse the ``env_passthrough`` list.
+
+    :param raw: Raw value or ``None``.
+    :returns: Tuple of variable names.
+    :raises ConfigurationError: If the value is malformed.
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or not all(
+        isinstance(name, str) and name for name in raw
+    ):
+        raise ConfigurationError("env_passthrough must be a list of non-empty strings")
+    return tuple(raw)
+
+
+def _parse_logging(raw: Any) -> tuple[str, str | None]:
+    """Parse the ``[logging]`` table.
+
+    :param raw: Raw table value or ``None``.
+    :returns: Tuple of ``(level, file)``.
+    :raises ConfigurationError: If the table is malformed.
+    """
+    if raw is None:
+        return "INFO", None
+    if not isinstance(raw, dict):
+        raise ConfigurationError("logging must be a table")
+    _reject_unknown_keys(raw, "logging", ("level", "file"))
+    level = raw.get("level", "INFO")
+    if not isinstance(level, str) or not level:
+        raise ConfigurationError("logging.level must be a non-empty string")
+    log_file = raw.get("file")
+    if log_file is not None and not isinstance(log_file, str):
+        raise ConfigurationError("logging.file must be a string")
+    return level, log_file
+
+
+def parse_config(config: dict[str, Any]) -> AgentCircusConfig:
+    """Parse and validate a merged raw configuration.
+
+    :param config: Merged raw configuration dictionary.
+    :returns: Validated :class:`AgentCircusConfig`.
+    :raises ConfigurationError: If any supported key is malformed or a
+        key is misplaced.
+    """
+    warn_unsupported_keys(config)
+    msb_raw = config.get("msb")
+    if msb_raw is not None and not isinstance(msb_raw, dict):
+        raise ConfigurationError("msb must be a table")
+    msb_raw = msb_raw or {}
+    for key in msb_raw:
+        if key in MSB_TABLE_KEYS:
+            continue
+        if key in MSB_MOVED_KEYS:
+            raise ConfigurationError(
+                f"msb.{key} is not supported; use {MSB_MOVED_KEYS[key]}"
+            )
+        raise ConfigurationError(
+            f"msb.{key} is not a supported key; allowed: "
+            f"{', '.join(sorted(MSB_TABLE_KEYS))}"
+        )
+    binary = msb_raw.get("binary")
+    if binary is not None and not isinstance(binary, str):
+        raise ConfigurationError("msb.binary must be a string")
+    level, log_file = _parse_logging(config.get("logging"))
+    git = _parse_git(config.get("git"))
+    return AgentCircusConfig(
+        binary=binary,
+        image=_parse_image(config.get("image")),
+        sandbox=_parse_sandbox(msb_raw.get("sandbox")),
+        network=_parse_network(msb_raw.get("network")),
+        skills=_parse_skills(config.get("skills")),
+        agent=_parse_agent(config.get("agent")),
+        tracing=_parse_tracing(config.get("tracing")),
+        mounts=(
+            _parse_string_dict(msb_raw.get("mounts"), "msb.mounts") or DEFAULT_MOUNTS
+        ),
+        additional_dirs=_parse_additional_dirs(config.get("additional_dirs")),
+        port_forwards=_parse_port_forwards(config.get("port_forwards")),
+        daemons=_parse_daemons(config.get("daemons")),
+        hooks=_parse_hooks(config.get("hooks")),
+        env=_parse_env(config.get("env")),
+        env_passthrough=_parse_env_passthrough(config.get("env_passthrough")),
+        git_worktree_mirror=(
+            git.worktree_mirror if git is not None else DEFAULT_WORKTREE_MIRROR
+        ),
+        git_worktree_mirror_explicit=(
+            git.worktree_mirror_explicit if git is not None else False
+        ),
+        git=git,
+        ssh=_parse_ssh(config.get("ssh")),
+        hosts=_parse_hosts(config.get("hosts")),
+        logging_level=level,
+        logging_file=log_file,
+    )
+
+
+def apply_worktree_mirror_default(
+    config: AgentCircusConfig, workspace: Path
+) -> AgentCircusConfig:
+    """Turn off a default worktree mirror that cannot be mounted.
+
+    The mirror mounts the workspace at its host path. When that path is
+    already a guest mount target (for example a workspace whose host path
+    is ``/workspace``) or an ``additional_dirs`` target, or is ``/``, a
+    default mirror is turned off with an INFO message. An explicit
+    ``worktree_mirror = true`` is returned unchanged, so
+    :func:`effective_mounts` still reports the conflict.
+
+    :param config: Parsed configuration.
+    :param workspace: Workspace directory (absolute host path).
+    :returns: The configuration, with the mirror turned off if needed.
+    """
+    if not config.git_worktree_mirror or config.git_worktree_mirror_explicit:
+        return config
+    host = str(workspace)
+    targets = {
+        guest.split(":", 1)[0]
+        for guest in resolve_mounts(config.mounts, workspace).values()
+    }
+    targets.update(
+        f"{ADDITIONAL_DIRS_GUEST_BASE}/{entry.name}" for entry in config.additional_dirs
+    )
+    if host == "/" or host in targets:
+        logger.info(
+            "Not mounting the git worktree mirror: the workspace path %s is "
+            "already used in the sandbox. Set [git] worktree_mirror = false "
+            "to silence this message.",
+            host,
+        )
+        return replace(config, git_worktree_mirror=False)
+    return config
+
+
+def load_user_skills_config(
+    environ: dict[str, str] | None = None,
+) -> SkillsConfig:
+    """Read ``[skills]`` from the user-global config only.
+
+    The system skill store is the same for all projects, so the project
+    config is deliberately not consulted (a ``[skills]`` table there
+    raises; see :func:`_reject_project_skills`). Config layers merge
+    shallowly (a project ``[skills]`` table would replace the whole
+    user table), so reading ``[skills]`` from the merged layers would
+    lose a user-global store whenever a project sets it.
+
+    :param environ: Environment mapping for the XDG lookup.
+    :returns: Parsed skills settings; the default when there is no user
+        config file.
+    """
+    path = get_user_config_path(environ)
+    if not path.is_file():
+        return SkillsConfig()
+    document = _load_toml(path)
+    return _parse_skills(document.get("skills"))
+
+
+def _reject_project_skills(
+    workspace: Path, environ: dict[str, str] | None = None
+) -> None:
+    """Raise when the project config tries to set ``[skills]``.
+
+    A malformed project config is reported by the normal load, so only
+    a parseable document is checked here.
+
+    :param workspace: Workspace directory holding the project config.
+    :param environ: Environment mapping for the XDG lookup.
+    :raises ConfigurationError: If the project config sets ``[skills]``.
+    """
+    project_path = get_project_config_path(workspace)
+    if not project_path.is_file():
+        return
+    try:
+        document = _load_toml(project_path)
+    except ConfigurationError:
+        return
+    if "skills" in document:
+        raise ConfigurationError(
+            f"[skills] in {project_path} is not supported. Set it in the "
+            f"user config {get_user_config_path(environ)}; the system skill "
+            "store is the same for all projects."
         )
 
-    if model.startswith("/"):
-        # Absolute local path: pass directly to -m.
-        model_args: list[str] = ["-m", model]
-    elif model.endswith(".gguf"):
-        # "owner/repo/file.gguf": split at last slash into repo + file.
-        hf_repo, _, hf_file = model.rpartition("/")
-        model_args = ["--hf-repo", hf_repo, "--hf-file", hf_file]
-    else:
-        # Bare HF repo "owner/repo": let llama-server pick the best file.
-        model_args = ["--hf-repo", model]
-    command = [*model_args, *extra_args]
 
-    services: dict[str, Any] = {
-        "llama-cpp": {
-            "image": LLAMA_CPP_IMAGE,
-            "command": command,
-            "volumes": [
-                f"{models_cache}:{LLAMA_CPP_CONTAINER_MODELS_PATH}:cached",
-            ],
-            "environment": {
-                "HF_HOME": LLAMA_CPP_CONTAINER_MODELS_PATH,
-                "LLAMA_ARG_HOST": "0.0.0.0",
-                "LLAMA_ARG_PORT": str(LLAMA_CPP_PORT),
-                "LLAMA_ARG_CTX_SIZE": str(context_size),
-            },
-        },
-        "opencode": {
-            "depends_on": ["llama-cpp"],
-        },
-    }
-    return json.dumps({"services": services})
+def load_config(
+    workspace: Path, environ: dict[str, str] | None = None
+) -> AgentCircusConfig:
+    """Load, merge, and validate agent-circus configuration.
+
+    ``[skills]`` is taken from the user-global config only (see
+    :func:`load_user_skills_config`); a ``[skills]`` table in the
+    project config raises. Shortcoming: the project
+    file is read twice per ``load_config`` (here and in
+    :func:`read_config_layers`); the files are small.
+
+    :param workspace: Workspace directory.
+    :param environ: Environment mapping for the XDG lookup.
+    :returns: Resolved configuration.
+    :raises ConfigurationError: If a config file is invalid.
+    """
+    _reject_project_skills(workspace, environ)
+    warn_legacy_deploy_mode(workspace)
+    config = apply_worktree_mirror_default(
+        parse_config(read_config_layers(workspace, environ)), workspace
+    )
+    return replace(config, skills=load_user_skills_config(environ))
