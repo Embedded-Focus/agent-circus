@@ -619,10 +619,36 @@ def _load_toml(path: Path) -> dict[str, Any]:
         raise ConfigurationError(f"Invalid TOML in {path}: {e}") from e
 
 
+def _merge_layers(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Merge two config layers key by key, *override* winning.
+
+    Tables (``dict`` values) merge recursively, so a table in the
+    override keeps the untouched keys of the base table. Everything
+    else — arrays of tables (``[[daemons]]``, ...), plain lists, scalars
+    — is replaced as a whole by the override value. Neither input is
+    modified.
+
+    :param base: Lower-precedence layer (the user config).
+    :param override: Higher-precedence layer (the project config).
+    :returns: New merged dictionary.
+    """
+    merged: dict[str, Any] = dict(base)
+    for key, value in override.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _merge_layers(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def read_config_layers(
     workspace: Path, environ: dict[str, str] | None = None
 ) -> dict[str, Any]:
-    """Read and shallow-merge the config layers (project-local wins).
+    """Read and merge the config layers (project-local wins).
+
+    Tables merge key by key (the project value wins, other user keys
+    stay); arrays of tables, lists, and scalars are replaced as a whole
+    by the project value (see :func:`_merge_layers`).
 
     :param workspace: Workspace directory.
     :param environ: Environment mapping for the XDG lookup.
@@ -632,8 +658,7 @@ def read_config_layers(
     merged: dict[str, Any] = {}
     for path in (get_user_config_path(environ), get_project_config_path(workspace)):
         if path.is_file():
-            layer = _load_toml(path)
-            merged.update(layer)
+            merged = _merge_layers(merged, _load_toml(path))
     return merged
 
 
@@ -1924,10 +1949,9 @@ def load_user_skills_config(
 
     The system skill store is the same for all projects, so the project
     config is deliberately not consulted (a ``[skills]`` table there
-    raises; see :func:`_reject_project_skills`). Config layers merge
-    shallowly (a project ``[skills]`` table would replace the whole
-    user table), so reading ``[skills]`` from the merged layers would
-    lose a user-global store whenever a project sets it.
+    raises; see :func:`_reject_project_skills`). Reading ``[skills]``
+    from the merged layers would also lose the distinction between the
+    two files, because the merge cannot tell where a key came from.
 
     :param environ: Environment mapping for the XDG lookup.
     :returns: Parsed skills settings; the default when there is no user

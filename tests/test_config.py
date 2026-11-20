@@ -249,9 +249,9 @@ def test_load_config_merges_user_global_and_project_layers(tmp_path, monkeypatch
     )
     environ = {"XDG_CONFIG_HOME": str(user_dir)}
     config = load_config(project_dir, environ)
-    # Shallow top-level merge (agent-circus semantics): the project's [msb]
-    # table and env_passthrough list replace the user-global ones wholesale.
-    assert config.binary is None
+    # Per-key merge (D21): tables merge recursively, so the user's
+    # msb.binary survives; arrays are replaced as a whole.
+    assert config.binary == "/global/msb"
     assert config.sandbox.memory == "8G"
     assert config.env_passthrough == ("A", "B")
 
@@ -643,3 +643,72 @@ def test_parse_config_accepts_1x_style_port_forward():
     )
     assert config.port_forwards[0].guest_port == 4096
     assert config.port_forwards[0].host_port == 4097
+
+
+def test_merge_layers_merges_tables_and_keeps_user_keys(tmp_path):
+    """User msb.binary applies alongside a project [msb.sandbox]."""
+    user_dir = tmp_path / "userconfig"
+    (user_dir / "agent-circus").mkdir(parents=True)
+    (user_dir / "agent-circus" / "config.toml").write_bytes(
+        b'[msb]\nbinary = "/user/msb"\n'
+    )
+    project_dir = tmp_path / "project"
+    (project_dir / ".agent-circus").mkdir(parents=True)
+    (project_dir / ".agent-circus" / "config.toml").write_bytes(
+        b'[msb.sandbox]\nmemory = "2G"\n'
+    )
+    environ = {"XDG_CONFIG_HOME": str(user_dir)}
+    config = load_config(project_dir, environ)
+    assert config.binary == "/user/msb"
+    assert config.sandbox.memory == "2G"
+
+
+def test_merge_layers_env_keys_from_both_files_project_wins(tmp_path):
+    """[env] merges per key; the project value wins for the same key."""
+    user_dir = tmp_path / "userconfig"
+    (user_dir / "agent-circus").mkdir(parents=True)
+    (user_dir / "agent-circus" / "config.toml").write_bytes(
+        b'[env]\nA = "user"\nB = "user"\n'
+    )
+    project_dir = tmp_path / "project"
+    (project_dir / ".agent-circus").mkdir(parents=True)
+    (project_dir / ".agent-circus" / "config.toml").write_bytes(
+        b'[env]\nB = "project"\n'
+    )
+    environ = {"XDG_CONFIG_HOME": str(user_dir)}
+    config = load_config(project_dir, environ)
+    assert config.env == {"A": "user", "B": "project"}
+
+
+def test_merge_layers_project_daemons_replace_user_array(tmp_path):
+    """A [[daemons]] array in the project config replaces the user array."""
+    user_dir = tmp_path / "userconfig"
+    (user_dir / "agent-circus").mkdir(parents=True)
+    (user_dir / "agent-circus" / "config.toml").write_bytes(
+        b'[[daemons]]\nname = "user-daemon"\ncommand = ["sleep", "1"]\n'
+    )
+    project_dir = tmp_path / "project"
+    (project_dir / ".agent-circus").mkdir(parents=True)
+    (project_dir / ".agent-circus" / "config.toml").write_bytes(
+        b'[[daemons]]\nname = "project-daemon"\ncommand = ["sleep", "2"]\n'
+    )
+    environ = {"XDG_CONFIG_HOME": str(user_dir)}
+    config = load_config(project_dir, environ)
+    assert [d.name for d in config.daemons] == ["project-daemon"]
+
+
+def test_merge_layers_does_not_change_inputs():
+    """The helper returns a new dict and leaves its inputs untouched."""
+    from agent_circus.config import _merge_layers
+
+    base = {"msb": {"binary": "/user/msb", "sandbox": {"memory": "4G"}}}
+    override = {"msb": {"sandbox": {"cpus": 2}}}
+    base_before = repr(base)
+    override_before = repr(override)
+    merged = _merge_layers(base, override)
+    assert repr(base) == base_before
+    assert repr(override) == override_before
+    assert merged == {
+        "msb": {"binary": "/user/msb", "sandbox": {"memory": "4G", "cpus": 2}}
+    }
+    assert merged["msb"] is not base["msb"]
