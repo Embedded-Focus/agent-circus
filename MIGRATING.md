@@ -33,6 +33,38 @@ but only supports a subset of the keys. Unsupported 1.x keys produce a
 warning and no effect; unknown or misplaced keys stop the command with
 an error.
 
+### Where Settings Live in 2.x
+
+The table moved compared to earlier 2.0 development versions. The
+fields inside the tables do not change; only the table name moves.
+Update your config by hand:
+
+| Old place (error now) | New place |
+|---|---|
+| `msb.binary` | stays |
+| `[msb.sandbox]` | stays |
+| `[msb.network]` | stays |
+| `[msb.mounts]` | stays |
+| `[msb.image]` | `[image]` |
+| `[msb.agent]` | `[agent]` |
+| `[msb.tracing]` | `[tracing]` |
+| `[msb.skills]` | `[skills]` (user config only) |
+| `[[msb.daemons]]` | `[[daemons]]` |
+| `[msb.hooks]` | `[hooks]` |
+| `[msb.env]` | removed — use `[env]` |
+
+The stricter rules behind this layout:
+
+- Unknown or misplaced keys now **fail the command** (they were warned
+  about or ignored before).
+- Under `[msb]`, only `binary`, `sandbox`, `network`, `mounts` are
+  allowed.
+- Unknown keys inside any table (`[image]`, `[git]`, `[ssh]`, ...) fail.
+- `[skills]` may only be set in the user config
+  (`~/.config/agent-circus/config.toml`), not in the project config.
+
+### Keys From 1.x
+
 | 1.x key | 2.x replacement |
 |---|---|
 | `[hooks]` | `[hooks]` (see below) |
