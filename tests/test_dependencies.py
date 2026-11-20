@@ -14,9 +14,9 @@ from typer.testing import CliRunner
 
 from agent_circus import dependencies as deps
 from agent_circus.cli import app
+from agent_circus.dependencies import PINS, apply_version
 from agent_circus.exceptions import ConfigurationError
 from agent_circus.templates import deploy_templates, template_dir_context
-from agent_circus.update_versions import PINS, apply_version
 
 
 @pytest.fixture

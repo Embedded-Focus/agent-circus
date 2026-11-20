@@ -1,20 +1,18 @@
-"""Refresh pinned tool versions in the bundled agent templates.
+"""Refresh pinned tool versions in the bundled msb-agents Dockerfile.
 
-Covers the ``templates/agent-circus`` template (Dockerfile, compose.yaml,
-pyproject.toml) and the msb-agents Dockerfile
-(``src/msb_circus/templates/Dockerfile.msb-agents``). Looks up the latest
-release for each pinned component and rewrites the corresponding version
-string. Most components are backed by GitHub releases; npm-packaged
+Covers ``src/msb_circus/templates/Dockerfile.msb-agents``. Looks up the
+latest release for each pinned component and rewrites the corresponding
+version string. Most components are backed by GitHub releases; npm-packaged
 components (npm itself, the OpenCode CLI) are resolved from the npm registry;
 container image pins are resolved through the registry API, so a new tag is
 always accompanied by its fresh multi-arch manifest-list digest.
 
 Installed as its own console script (``agent-circus-update-templates``),
-separate from the ``agent-circus`` CLI, since it edits template *source*
-rather than acting on a deployed workspace.
+separate from the ``msb-circus`` CLI, since it edits the Dockerfile
+*source* rather than acting on a deployed workspace.
 
-Shortcomings: template directories are derived from this module's own file
-location, so they only resolve to the real template sources when run against
+Shortcomings: the Dockerfile is derived from this module's own file
+location, so it only resolves to the real template source when run against
 an editable/source checkout (e.g. via ``uv run``). Running it from an
 installed wheel would edit the installed copy, not the repository. The node
 base image in the msb-agents Dockerfile is digest-refreshed in place; its
@@ -29,7 +27,6 @@ the updater's non-zero exit names the failed pin.
 import json
 import os
 import re
-import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -41,13 +38,8 @@ import typer
 from github import Auth, Github
 from github.GithubException import GithubException
 
-TEMPLATE_DIR = Path(__file__).resolve().parent / "templates" / "agent-circus"
-
 MSB_AGENTS_DOCKERFILE = (
-    Path(__file__).resolve().parent.parent
-    / "msb_circus"
-    / "templates"
-    / "Dockerfile.msb-agents"
+    Path(__file__).resolve().parent / "templates" / "Dockerfile.msb-agents"
 )
 
 
@@ -90,107 +82,8 @@ class VersionPin:
     ] = "github"
 
 
-PINS: list[VersionPin] = [
-    VersionPin(
-        name="npm",
-        repo="npm",
-        file=TEMPLATE_DIR / "compose.yaml",
-        pattern=re.compile(r"NPM_VERSION:\s*(\S+)"),
-        source="npm",
-    ),
-    VersionPin(
-        name="yq",
-        repo="mikefarah/yq",
-        file=TEMPLATE_DIR / "Dockerfile",
-        pattern=re.compile(r"mikefarah/yq/releases/download/(v[0-9.]+)/yq_linux_amd64"),
-    ),
-    VersionPin(
-        name="uv",
-        repo="astral-sh/uv",
-        file=TEMPLATE_DIR / "Dockerfile",
-        pattern=re.compile(r"ghcr\.io/astral-sh/uv:(\S+)"),
-    ),
-    VersionPin(
-        name="claude-code",
-        repo="anthropics/claude-code",
-        file=TEMPLATE_DIR / "compose.yaml",
-        pattern=re.compile(r"CLAUDE_CODE_VERSION:\s*(\S+)"),
-        strip_prefix="v",
-    ),
-    VersionPin(
-        name="claude-agent-acp",
-        repo="agentclientprotocol/claude-agent-acp",
-        file=TEMPLATE_DIR / "compose.yaml",
-        pattern=re.compile(r"CLAUDE_AGENT_ACP_VERSION:\s*(\S+)"),
-        strip_prefix="v",
-    ),
-    VersionPin(
-        name="bun",
-        repo="oven-sh/bun",
-        file=TEMPLATE_DIR / "compose.yaml",
-        pattern=re.compile(r"BUN_VERSION:\s*(\S+)"),
-        strip_prefix="bun-v",
-    ),
-    VersionPin(
-        name="claude-mem",
-        repo="thedotmack/claude-mem",
-        file=TEMPLATE_DIR / "compose.yaml",
-        pattern=re.compile(r"CLAUDE_MEM_VERSION:\s*(\S+)"),
-        strip_prefix="v",
-    ),
-    VersionPin(
-        name="codex",
-        repo="openai/codex",
-        file=TEMPLATE_DIR / "compose.yaml",
-        pattern=re.compile(r"CODEX_VERSION:\s*(\S+)"),
-        strip_prefix="rust-v",
-    ),
-    VersionPin(
-        name="codex-acp",
-        repo="agentclientprotocol/codex-acp",
-        file=TEMPLATE_DIR / "compose.yaml",
-        pattern=re.compile(r"CODEX_ACP_VERSION:\s*(\S+)"),
-        strip_prefix="v",
-    ),
-    # Resolved from npm rather than GitHub: the template installs
-    # @opencode/cli, and the repo's GitHub "latest release" still tracks the
-    # v1 line even after the v2 series shipped.
-    VersionPin(
-        name="opencode",
-        repo="@opencode/cli",
-        file=TEMPLATE_DIR / "compose.yaml",
-        pattern=re.compile(r"OPENCODE_VERSION:\s*(\S+)"),
-        source="npm",
-    ),
-    VersionPin(
-        name="mistral-vibe",
-        repo="mistralai/mistral-vibe",
-        file=TEMPLATE_DIR / "pyproject.toml",
-        pattern=re.compile(r"mistral-vibe>=([0-9.]+)"),
-        strip_prefix="v",
-    ),
-    # Resolved from npm: the image installs the published CLI, not a GitHub
-    # release, and pi-acp is published without version tags.
-    VersionPin(
-        name="pi",
-        repo="@earendil-works/pi-coding-agent",
-        file=TEMPLATE_DIR / "compose.yaml",
-        pattern=re.compile(r"PI_VERSION:\s*(\S+)"),
-        source="npm",
-    ),
-    VersionPin(
-        name="pi-acp",
-        repo="pi-acp",
-        file=TEMPLATE_DIR / "compose.yaml",
-        pattern=re.compile(r"PI_ACP_VERSION:\s*(\S+)"),
-        source="npm",
-    ),
-]
-
-# Pins in the msb-agents Dockerfile (src/msb_circus/templates/). Kept separate
-# from PINS: agent-circus dependency management (dependencies.py) resolves
-# pins by filename inside the agent-circus template directory, which does not
-# contain the msb-agents Dockerfile. The updater (see ALL_PINS) covers both.
+# Pins in the msb-agents Dockerfile (src/msb_circus/templates/). This is the
+# updater's only target (see ALL_PINS).
 MSB_AGENTS_PINS: list[VersionPin] = [
     # The node base image is digest-pinned only: the multi-arch manifest-list
     # digest is refreshed in place, but the node major tag (26-slim) itself is
@@ -324,10 +217,8 @@ MSB_AGENTS_PINS: list[VersionPin] = [
     ),
 ]
 
-# Every tracked pin, in report order: the agent-circus template first, then
-# the msb-agents Dockerfile. This is what the updater checks; PINS alone
-# remains the agent-circus recipe used by dependency management.
-ALL_PINS: list[VersionPin] = [*PINS, *MSB_AGENTS_PINS]
+# Every tracked pin, in report order: all pins of the msb-agents Dockerfile.
+ALL_PINS: list[VersionPin] = [*MSB_AGENTS_PINS]
 
 
 def normalize_tag(tag_name: str, strip_prefix: str) -> str:
@@ -640,28 +531,6 @@ def apply_changes(results: list[PinResult]) -> list[Path]:
     return changed
 
 
-def sync_template_lockfile(template_dir: Path = TEMPLATE_DIR) -> None:
-    """Upgrade the template lockfile and sync its environment.
-
-    ``UV_PROJECT_ENVIRONMENT``/``VIRTUAL_ENV`` are stripped from the
-    subprocess environment: dev shells for *this* repo (e.g. devenv) commonly
-    export one of these pointing at the main project's own venv.  Strip them so
-    uv operates only on the template project in *template_dir*.
-
-    :param template_dir: Directory containing the template's own
-        ``pyproject.toml``/``uv.lock`` pair.
-    :raises subprocess.CalledProcessError: If ``uv lock -U`` or ``uv sync``
-        exits non-zero.
-    """
-    env = {
-        k: v
-        for k, v in os.environ.items()
-        if k not in {"UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"}
-    }
-    subprocess.run(["uv", "lock", "-U"], cwd=template_dir, check=True, env=env)
-    subprocess.run(["uv", "sync"], cwd=template_dir, check=True, env=env)
-
-
 def format_report(results: list[PinResult]) -> str:
     """Render a plain-text table of current vs. latest versions.
 
@@ -690,7 +559,7 @@ def main(
         ),
     ] = False,
 ) -> None:
-    """Check and optionally update pinned versions in the bundled templates."""
+    """Check and optionally update pinned versions in the msb-agents Dockerfile."""
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     auth = Auth.Token(token) if token else None
     # PyGithub's default retry policy backs off and blocks for minutes on a
@@ -705,15 +574,6 @@ def main(
     if apply:
         changed = apply_changes(results)
         typer.echo(f"\nUpdated {len(changed)} file(s).")
-
-        typer.echo(
-            "Updating template lockfile (uv lock -U) and environment (uv sync)..."
-        )
-        try:
-            sync_template_lockfile()
-        except subprocess.CalledProcessError as e:
-            typer.echo(f"Template lockfile/environment update failed: {e}", err=True)
-            raise typer.Exit(code=1) from e
 
     if any(r.error for r in results):
         raise typer.Exit(code=1)

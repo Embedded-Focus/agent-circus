@@ -1,25 +1,16 @@
 """Tests for the agent-circus-update-templates maintainer script."""
 
 import re
-import shutil
-import subprocess
 import urllib.error
-from dataclasses import replace
-from pathlib import Path
 from typing import Self
 from unittest.mock import MagicMock
 
 import pytest
-import typer
 
-from agent_circus.update_versions import (
+from msb_circus.update_versions import (
     ALL_PINS,
     MSB_AGENTS_PINS,
-    PINS,
-    TEMPLATE_DIR,
-    PinResult,
     VersionPin,
-    apply_changes,
     apply_version,
     build_report,
     fetch_latest_docker_digest,
@@ -27,10 +18,8 @@ from agent_circus.update_versions import (
     fetch_latest_npm_version,
     fetch_latest_tag,
     fetch_latest_version,
-    main,
     normalize_tag,
     read_current_version,
-    sync_template_lockfile,
 )
 
 
@@ -120,18 +109,10 @@ def test_apply_version_round_trips_without_other_changes(pin: VersionPin) -> Non
     )
 
 
-def test_apply_version_raises_when_pattern_missing(tmp_path: Path) -> None:
-    pin = PINS[0]
-    with pytest.raises(ValueError, match=pin.name):
+def test_apply_version_raises_when_pattern_missing() -> None:
+    pin = MSB_AGENTS_PINS[0]
+    with pytest.raises(ValueError, match=r"node \(msb-agents\)"):
         apply_version("no version here", pin, "1.0.0")
-
-
-def test_opencode_pin_resolves_v2_from_npm() -> None:
-    # The repo's GitHub "latest release" still tracks the v1 line, so the
-    # OpenCode pin must be resolved from npm's latest dist-tag to pick up v2.
-    pin = next(pin for pin in PINS if pin.name == "opencode")
-    assert pin.source == "npm"
-    assert pin.repo == "@opencode/cli"
 
 
 def test_msb_pins_cover_every_pinned_component_in_msb_dockerfile() -> None:
@@ -188,7 +169,7 @@ def test_fetch_latest_docker_digest_returns_hub_api_digest(
         b'{"digest": "sha256:' + b"a" * 64 + b'", "tag": "26-slim"}'
     )
     urlopen = MagicMock(return_value=response)
-    monkeypatch.setattr("agent_circus.update_versions.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("msb_circus.update_versions.urllib.request.urlopen", urlopen)
 
     digest = fetch_latest_docker_digest("docker.io/library/node", "26-slim")
 
@@ -204,7 +185,7 @@ def test_fetch_latest_docker_digest_raises_without_hub_digest(
     response.__enter__.return_value = response
     response.read.return_value = b'{"tag": "26-slim"}'
     urlopen = MagicMock(return_value=response)
-    monkeypatch.setattr("agent_circus.update_versions.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("msb_circus.update_versions.urllib.request.urlopen", urlopen)
 
     with pytest.raises(ValueError, match="no digest"):
         fetch_latest_docker_digest("docker.io/library/node", "26-slim")
@@ -220,7 +201,7 @@ def test_fetch_ghcr_digest_returns_multiarch_content_digest(
     manifest_response.__enter__.return_value = manifest_response
     manifest_response.headers.get.return_value = "sha256:" + "a" * 64
     urlopen = MagicMock(side_effect=[token_response, manifest_response])
-    monkeypatch.setattr("agent_circus.update_versions.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("msb_circus.update_versions.urllib.request.urlopen", urlopen)
 
     digest = fetch_latest_docker_digest("ghcr.io/astral-sh/uv", "0.13.6")
 
@@ -254,7 +235,7 @@ def test_fetch_ghcr_digest_raises_without_digest_header(
     manifest_response.__enter__.return_value = manifest_response
     manifest_response.headers.get.return_value = None
     urlopen = MagicMock(side_effect=[token_response, manifest_response])
-    monkeypatch.setattr("agent_circus.update_versions.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("msb_circus.update_versions.urllib.request.urlopen", urlopen)
 
     with pytest.raises(ValueError, match="no digest"):
         fetch_latest_docker_digest("ghcr.io/astral-sh/uv", "0.13.6")
@@ -266,7 +247,7 @@ def test_fetch_latest_version_routes_registry_digest_pin(
     pin = next(pin for pin in ALL_PINS if pin.name == "node (msb-agents)")
     digest_mock = MagicMock(return_value="sha256:" + "b" * 64)
     monkeypatch.setattr(
-        "agent_circus.update_versions.fetch_latest_docker_digest", digest_mock
+        "msb_circus.update_versions.fetch_latest_docker_digest", digest_mock
     )
 
     latest = fetch_latest_version(MagicMock(), pin)
@@ -280,12 +261,12 @@ def test_fetch_latest_version_routes_github_image_pin(
 ) -> None:
     pin = next(pin for pin in ALL_PINS if pin.name == "docker (msb-agents)")
     monkeypatch.setattr(
-        "agent_circus.update_versions.fetch_latest_tag",
+        "msb_circus.update_versions.fetch_latest_tag",
         lambda gh, repo: "docker-v29.9.2",
     )
     digest_mock = MagicMock(return_value="sha256:" + "c" * 64)
     monkeypatch.setattr(
-        "agent_circus.update_versions.fetch_latest_docker_digest", digest_mock
+        "msb_circus.update_versions.fetch_latest_docker_digest", digest_mock
     )
 
     latest = fetch_latest_version(MagicMock(), pin)
@@ -321,7 +302,7 @@ def test_fetch_latest_github_asset_sha256_parses_release_asset(
             return b"" + b"a" * 64 + b"  s6-overlay-noarch.tar.xz\n"
 
     urlopen = MagicMock(return_value=Response())
-    monkeypatch.setattr("agent_circus.update_versions.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("msb_circus.update_versions.urllib.request.urlopen", urlopen)
 
     digest = fetch_latest_github_asset_sha256(
         gh, "just-containers/s6-overlay", "s6-overlay-noarch.tar.xz.sha256"
@@ -352,7 +333,7 @@ def test_fetch_latest_github_asset_sha256_rejects_malformed_asset(
             return b"not a sha256sum line\n"
 
     urlopen = MagicMock(return_value=Response())
-    monkeypatch.setattr("agent_circus.update_versions.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("msb_circus.update_versions.urllib.request.urlopen", urlopen)
 
     with pytest.raises(ValueError, match="not a sha256sum line"):
         fetch_latest_github_asset_sha256(
@@ -371,7 +352,7 @@ def test_fetch_latest_version_routes_github_asset_sha256_pin(
     )
     fetch = MagicMock(return_value="a" * 64)
     monkeypatch.setattr(
-        "agent_circus.update_versions.fetch_latest_github_asset_sha256", fetch
+        "msb_circus.update_versions.fetch_latest_github_asset_sha256", fetch
     )
 
     latest = fetch_latest_version(MagicMock(), pin)
@@ -397,7 +378,7 @@ def test_fetch_latest_npm_version_returns_latest_dist_tag(
             return b'{"dist-tags": {"latest": "12.0.2"}}'
 
     urlopen = MagicMock(return_value=Response())
-    monkeypatch.setattr("agent_circus.update_versions.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("msb_circus.update_versions.urllib.request.urlopen", urlopen)
 
     latest = fetch_latest_npm_version("npm")
 
@@ -408,14 +389,14 @@ def test_fetch_latest_npm_version_returns_latest_dist_tag(
 def test_fetch_latest_version_routes_npm_pin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    npm_pin = next(pin for pin in PINS if pin.name == "npm")
-    fetch = MagicMock(return_value="12.0.2")
-    monkeypatch.setattr("agent_circus.update_versions.fetch_latest_npm_version", fetch)
+    npm_pin = next(pin for pin in MSB_AGENTS_PINS if pin.source == "npm")
+    fetch = MagicMock(return_value="2.3.2")
+    monkeypatch.setattr("msb_circus.update_versions.fetch_latest_npm_version", fetch)
 
     latest = fetch_latest_version(MagicMock(), npm_pin)
 
-    assert latest == "12.0.2"
-    fetch.assert_called_once_with("npm")
+    assert latest == "2.3.2"
+    fetch.assert_called_once_with(npm_pin.repo)
 
 
 def test_build_report_records_error_and_continues(
@@ -429,7 +410,7 @@ def test_build_report_records_error_and_continues(
             raise urllib.error.URLError("Not Found")
         return normalize_tag("v9.9.9", pin.strip_prefix)
 
-    monkeypatch.setattr("agent_circus.update_versions.fetch_latest_version", fake_fetch)
+    monkeypatch.setattr("msb_circus.update_versions.fetch_latest_version", fake_fetch)
 
     results = build_report(ALL_PINS, gh=MagicMock())
 
@@ -444,136 +425,3 @@ def test_build_report_records_error_and_continues(
     for pin, result in zip(ALL_PINS[1:], results[1:], strict=True):
         assert result.error is None
         assert result.latest == normalize_tag("v9.9.9", pin.strip_prefix)
-
-
-def test_apply_changes_only_writes_outdated_files(tmp_path: Path) -> None:
-    shutil.copytree(
-        TEMPLATE_DIR,
-        tmp_path / "agent-circus",
-        ignore=shutil.ignore_patterns(".venv"),
-    )
-    dockerfile = tmp_path / "agent-circus" / "Dockerfile"
-    compose = tmp_path / "agent-circus" / "compose.yaml"
-
-    yq_pin = next(p for p in PINS if p.name == "yq")
-    opencode_pin = next(p for p in PINS if p.name == "opencode")
-
-    local_yq_pin = replace(yq_pin, file=dockerfile)
-    local_opencode_pin = replace(opencode_pin, file=compose)
-
-    current_yq = read_current_version(dockerfile.read_text(), local_yq_pin)
-    current_opencode = read_current_version(compose.read_text(), local_opencode_pin)
-
-    results = [
-        PinResult(pin=local_yq_pin, current=current_yq, latest=current_yq),  # unchanged
-        PinResult(
-            pin=local_opencode_pin, current=current_opencode, latest="999.0.0"
-        ),  # outdated
-    ]
-
-    dockerfile_mtime_before = dockerfile.read_text()
-    changed = apply_changes(results)
-
-    assert changed == [compose]
-    assert dockerfile.read_text() == dockerfile_mtime_before
-    assert read_current_version(compose.read_text(), local_opencode_pin) == "999.0.0"
-
-
-def test_sync_template_lockfile_invokes_uv_lock_upgrade_and_sync_in_template_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    mock_run = MagicMock()
-    monkeypatch.setattr("agent_circus.update_versions.subprocess.run", mock_run)
-
-    sync_template_lockfile(tmp_path)
-
-    assert mock_run.call_count == 2
-    assert mock_run.call_args_list[0].args == (["uv", "lock", "-U"],)
-    assert mock_run.call_args_list[1].args == (["uv", "sync"],)
-    for call in mock_run.call_args_list:
-        assert call.kwargs["cwd"] == tmp_path
-        assert call.kwargs["check"] is True
-
-
-def test_sync_template_lockfile_strips_ambient_project_environment(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # A dev shell for *this* repo (e.g. devenv) commonly exports one of these
-    # pointing at the main project's own venv. Strip them so uv only operates
-    # on the template project.
-    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", "/somewhere/main-project/venv")
-    monkeypatch.setenv("VIRTUAL_ENV", "/somewhere/main-project/venv")
-    mock_run = MagicMock()
-    monkeypatch.setattr("agent_circus.update_versions.subprocess.run", mock_run)
-
-    sync_template_lockfile(tmp_path)
-
-    for call in mock_run.call_args_list:
-        passed_env = call.kwargs["env"]
-        assert "UV_PROJECT_ENVIRONMENT" not in passed_env
-        assert "VIRTUAL_ENV" not in passed_env
-
-
-def test_main_updates_lockfile_when_applying_changes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    dummy_result = PinResult(pin=PINS[-1], current="1.0.0", latest="1.0.1")
-    monkeypatch.setattr(
-        "agent_circus.update_versions.build_report", lambda pins, gh: [dummy_result]
-    )
-    monkeypatch.setattr(
-        "agent_circus.update_versions.apply_changes",
-        lambda results: [TEMPLATE_DIR / "pyproject.toml"],
-    )
-    sync_mock = MagicMock()
-    monkeypatch.setattr(
-        "agent_circus.update_versions.sync_template_lockfile", sync_mock
-    )
-
-    main(apply=True)
-
-    sync_mock.assert_called_once_with()
-
-
-def test_main_updates_lockfile_even_when_pyproject_unchanged(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    dummy_result = PinResult(pin=PINS[0], current="1.0.0", latest="1.0.1")
-    monkeypatch.setattr(
-        "agent_circus.update_versions.build_report", lambda pins, gh: [dummy_result]
-    )
-    monkeypatch.setattr(
-        "agent_circus.update_versions.apply_changes",
-        lambda results: [TEMPLATE_DIR / "Dockerfile"],
-    )
-    sync_mock = MagicMock()
-    monkeypatch.setattr(
-        "agent_circus.update_versions.sync_template_lockfile", sync_mock
-    )
-
-    main(apply=True)
-
-    sync_mock.assert_called_once_with()
-
-
-def test_main_exits_with_error_when_sync_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    dummy_result = PinResult(pin=PINS[-1], current="1.0.0", latest="1.0.1")
-    monkeypatch.setattr(
-        "agent_circus.update_versions.build_report", lambda pins, gh: [dummy_result]
-    )
-    monkeypatch.setattr(
-        "agent_circus.update_versions.apply_changes",
-        lambda results: [TEMPLATE_DIR / "pyproject.toml"],
-    )
-
-    def failing_sync() -> None:
-        raise subprocess.CalledProcessError(returncode=1, cmd=["uv", "lock", "-U"])
-
-    monkeypatch.setattr(
-        "agent_circus.update_versions.sync_template_lockfile", failing_sync
-    )
-
-    with pytest.raises(typer.Exit):
-        main(apply=True)

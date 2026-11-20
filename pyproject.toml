@@ -50,7 +50,7 @@ Issues = "https://github.com/Embedded-Focus/agent-circus/issues"
 
 [project.scripts]
 agent-circus = "agent_circus.cli:run_cli"
-agent-circus-update-templates = "agent_circus.update_versions:run"
+agent-circus-update-templates = "msb_circus.update_versions:run"
 msb-circus = "msb_circus.cli:run_cli"
 
 [tool.hatch.build.targets.wheel]

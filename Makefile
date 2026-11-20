@@ -25,15 +25,14 @@ check: check-format lint type-check test ## Run all checks
 
 audit: ## Audit locked Python dependencies
 	uv audit --locked
-	uv --directory src/agent_circus/templates/agent-circus audit --locked
 
 pre-commit: ## Run pre-commit hooks on all tracked files
 	uv run pre-commit run --all-files
 
-update-templates-dryrun: ## Print current vs. latest pinned versions in the agent-circus and msb-agents templates
+update-templates-dryrun: ## Print current vs. latest pinned versions in the msb-agents template
 	uv run agent-circus-update-templates
 
-update-templates: ## Write latest pinned versions into the agent-circus and msb-agents templates
+update-templates: ## Write latest pinned versions into the msb-agents template
 	uv run agent-circus-update-templates --apply
 
 sops-edit: ## Edit a SOPS-encrypted file

@@ -22,15 +22,116 @@ from github.GithubException import GithubException
 from packaging.version import Version
 from requests.exceptions import RequestException
 
-from .config import AVAILABLE_SERVICES, resolve_config
-from .exceptions import ConfigurationError
-from .templates import IGNORED_TEMPLATE_NAMES, template_dir_context
-from .update_versions import (
-    PINS,
+from msb_circus.update_versions import (
+    VersionPin,
     apply_version,
     fetch_latest_version,
     read_current_version,
 )
+
+from .config import AVAILABLE_SERVICES, resolve_config
+from .exceptions import ConfigurationError
+from .templates import IGNORED_TEMPLATE_NAMES, template_dir_context
+
+TEMPLATE_DIR = Path(__file__).resolve().parent / "templates" / "agent-circus"
+
+PINS: list[VersionPin] = [
+    VersionPin(
+        name="npm",
+        repo="npm",
+        file=TEMPLATE_DIR / "compose.yaml",
+        pattern=re.compile(r"NPM_VERSION:\s*(\S+)"),
+        source="npm",
+    ),
+    VersionPin(
+        name="yq",
+        repo="mikefarah/yq",
+        file=TEMPLATE_DIR / "Dockerfile",
+        pattern=re.compile(r"mikefarah/yq/releases/download/(v[0-9.]+)/yq_linux_amd64"),
+    ),
+    VersionPin(
+        name="uv",
+        repo="astral-sh/uv",
+        file=TEMPLATE_DIR / "Dockerfile",
+        pattern=re.compile(r"ghcr\.io/astral-sh/uv:(\S+)"),
+    ),
+    VersionPin(
+        name="claude-code",
+        repo="anthropics/claude-code",
+        file=TEMPLATE_DIR / "compose.yaml",
+        pattern=re.compile(r"CLAUDE_CODE_VERSION:\s*(\S+)"),
+        strip_prefix="v",
+    ),
+    VersionPin(
+        name="claude-agent-acp",
+        repo="agentclientprotocol/claude-agent-acp",
+        file=TEMPLATE_DIR / "compose.yaml",
+        pattern=re.compile(r"CLAUDE_AGENT_ACP_VERSION:\s*(\S+)"),
+        strip_prefix="v",
+    ),
+    VersionPin(
+        name="bun",
+        repo="oven-sh/bun",
+        file=TEMPLATE_DIR / "compose.yaml",
+        pattern=re.compile(r"BUN_VERSION:\s*(\S+)"),
+        strip_prefix="bun-v",
+    ),
+    VersionPin(
+        name="claude-mem",
+        repo="thedotmack/claude-mem",
+        file=TEMPLATE_DIR / "compose.yaml",
+        pattern=re.compile(r"CLAUDE_MEM_VERSION:\s*(\S+)"),
+        strip_prefix="v",
+    ),
+    VersionPin(
+        name="codex",
+        repo="openai/codex",
+        file=TEMPLATE_DIR / "compose.yaml",
+        pattern=re.compile(r"CODEX_VERSION:\s*(\S+)"),
+        strip_prefix="rust-v",
+    ),
+    VersionPin(
+        name="codex-acp",
+        repo="agentclientprotocol/codex-acp",
+        file=TEMPLATE_DIR / "compose.yaml",
+        pattern=re.compile(r"CODEX_ACP_VERSION:\s*(\S+)"),
+        strip_prefix="v",
+    ),
+    # Resolved from npm rather than GitHub: the template installs
+    # @opencode/cli, and the repo's GitHub "latest release" still tracks the
+    # v1 line even after the v2 series shipped.
+    VersionPin(
+        name="opencode",
+        repo="@opencode/cli",
+        file=TEMPLATE_DIR / "compose.yaml",
+        pattern=re.compile(r"OPENCODE_VERSION:\s*(\S+)"),
+        source="npm",
+    ),
+    VersionPin(
+        name="mistral-vibe",
+        repo="mistralai/mistral-vibe",
+        file=TEMPLATE_DIR / "pyproject.toml",
+        pattern=re.compile(r"mistral-vibe>=([0-9.]+)"),
+        strip_prefix="v",
+    ),
+    # Resolved from npm: the image installs the published CLI, not a GitHub
+    # release, and pi-acp is published without version tags.
+    VersionPin(
+        name="pi",
+        repo="@earendil-works/pi-coding-agent",
+        file=TEMPLATE_DIR / "compose.yaml",
+        pattern=re.compile(r"PI_VERSION:\s*(\S+)"),
+        source="npm",
+    ),
+    VersionPin(
+        name="pi-acp",
+        repo="pi-acp",
+        file=TEMPLATE_DIR / "compose.yaml",
+        pattern=re.compile(r"PI_ACP_VERSION:\s*(\S+)"),
+        source="npm",
+    ),
+]
+
 
 logger = logging.getLogger(__name__)
 
