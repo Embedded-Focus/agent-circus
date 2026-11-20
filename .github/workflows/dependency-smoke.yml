@@ -6,7 +6,7 @@ on:
       - develop
       - main
     paths:
-      - src/msb_circus/templates/Dockerfile.msb-agents
+      - src/agent_circus/templates/Dockerfile.msb-agents
   workflow_dispatch:
 
 permissions:
@@ -25,8 +25,8 @@ jobs:
       - name: Build msb-agents image (agents target)
         uses: docker/build-push-action@v6
         with:
-          context: src/msb_circus/templates
-          file: src/msb_circus/templates/Dockerfile.msb-agents
+          context: src/agent_circus/templates
+          file: src/agent_circus/templates/Dockerfile.msb-agents
           target: agents
           tags: msb-agents:smoke
           load: true

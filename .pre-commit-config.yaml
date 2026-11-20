@@ -5,14 +5,14 @@ repos:
   - id: ruff-check
     args:
     - --fix
-    exclude: ^src/msb_circus/templates/dashboard/vendor/
+    exclude: ^src/agent_circus/templates/dashboard/vendor/
   - id: ruff-format
-    exclude: ^src/msb_circus/templates/dashboard/vendor/
+    exclude: ^src/agent_circus/templates/dashboard/vendor/
 - repo: https://github.com/astral-sh/ty-pre-commit
   rev: v0.0.95
   hooks:
   - id: ty
-    exclude: ^src/msb_circus/templates/dashboard/vendor/
+    exclude: ^src/agent_circus/templates/dashboard/vendor/
 - repo: local
   hooks:
   - id: pytest

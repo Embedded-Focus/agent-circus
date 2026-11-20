@@ -30,7 +30,7 @@ COPY --from=docker.io/library/docker:29.10.0-dind@sha256:4bbc7223f81db790097c6de
 # startup. bubblewrap is codex's Linux sandboxing backend (codex falls back
 # to its bundled copy, but the distro package is the supported path).
 # openssh-client provides git-over-SSH inside the guest; socat provides the
-# guest end of the SSH agent bridge (see plan-msb-ssh-agent-forwarding.md).
+# guest end of the SSH agent bridge.
 # This is the only apt layer (apt has no digest pinning); everything
 # else is hash-referenced.
 RUN apt-get update \
@@ -55,7 +55,7 @@ RUN apt-get update \
 # s6-overlay: init system and service supervisor (PID 1 via
 # `msb run --init auto`, which recognizes /init). Pinned by version and
 # sha256; both architecture tarballs are fetched and the matching one is
-# installed (uname -m is x86_64 or aarch64). See plan-msb-s6.md.
+# installed (uname -m is x86_64 or aarch64).
 ADD https://github.com/just-containers/s6-overlay/releases/download/v3.2.3.2/s6-overlay-noarch.tar.xz /tmp/s6/
 ADD https://github.com/just-containers/s6-overlay/releases/download/v3.2.3.2/s6-overlay-x86_64.tar.xz /tmp/s6/
 ADD https://github.com/just-containers/s6-overlay/releases/download/v3.2.3.2/s6-overlay-aarch64.tar.xz /tmp/s6/

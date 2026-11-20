@@ -53,7 +53,7 @@ Read this section before running `git commit`.
 
 This repository uses Conventional Commit prefixes on the subject line
 (`feat:`, `fix:`, `refactor:`, `test:`, `chore:`, ...), with an optional
-scope such as `(msb-circus)` or `(agent-circus)`. Follow the established
+scope such as `(agent-circus)`. Follow the established
 style of recent commits.
 
 Message shape (adapt the words, keep the shape):

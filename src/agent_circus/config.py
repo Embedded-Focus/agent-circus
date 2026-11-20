@@ -1,10 +1,13 @@
 """Configuration loading and validation for agent-circus.
 
-agent-circus reads the project ``.agent-circus/config.toml`` file. Only
-the keys this tool supports are interpreted
-(:data:`SUPPORTED_TOP_LEVEL_KEYS`); every other top-level key is logged
-as unsupported and ignored.  agent-circus-specific settings live under the
-``[msb]`` table, which agent-circus in turn warns-and-ignores.
+agent-circus reads the project ``.agent-circus/config.toml`` file, plus a
+user-global config. The ``[msb]`` table holds the settings that map
+directly to the msb binary: ``msb.binary``, ``[msb.sandbox]``,
+``[msb.network]``, and ``[msb.mounts]``. All other agent-circus settings
+live in top-level tables (``[image]``, ``[agent]``, ``[tracing]``,
+``[skills]``, ``[[daemons]``, ``[hooks]``, ``[env]``). Unknown or
+misplaced config keys stop the command with a
+:class:`ConfigurationError`.
 """
 
 from __future__ import annotations
@@ -1664,7 +1667,7 @@ def _parse_env_tables(top_raw: Any, msb_raw: Any) -> dict[str, str]:
 
     ``[msb.env]`` wins for a key set in both. Values are passed through
     verbatim: values containing ``$`` are guest shell words that expand
-    when a guest shell evaluates them (see ``plan-agent-circus-env-expand.md``).
+    when a guest shell evaluates them.
 
     :param top_raw: Raw ``[env]`` table or ``None``.
     :param msb_raw: Raw ``[msb.env]`` table or ``None``.

@@ -1138,12 +1138,12 @@ per login session):
 
 ``` shell
 agent-circus proxy
-agent-circus proxy --port 7701        # or: MSB_CIRCUS_PROXY_PORT=7701
+agent-circus proxy --port 7701        # or: AGENT_CIRCUS_PROXY_PORT=7701
 agent-circus proxy --shell            # also allow browser shells (see below)
 ```
 
 The proxy port is not a config file key. The order is: `--port`, then
-`MSB_CIRCUS_PROXY_PORT`, then `7700`.
+`AGENT_CIRCUS_PROXY_PORT`, then `7700`.
 
 To keep the proxy running in the background, see
 [Run as a systemd user service](#run-as-a-systemd-user-service).
@@ -1199,7 +1199,7 @@ Notes on the unit file:
   only picks the config.
 - `%h` is your home directory. Use it instead of `~`: systemd does not
   expand `~` in `ExecStart`.
-- Set the port with `Environment=MSB_CIRCUS_PROXY_PORT=7701`, or add
+- Set the port with `Environment=AGENT_CIRCUS_PROXY_PORT=7701`, or add
   `--port 7701` to the command line.
 
 Enable and start it:
