@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from agent_circus.cli import _warn_on_broken_skill_links
-from agent_circus.config import DEFAULT_MOUNTS, MsbConfig
+from agent_circus.config import DEFAULT_MOUNTS, AgentCircusConfig
 from agent_circus.skills import BrokenSkillLink, LinkProblem, find_broken_skill_links
 
 
@@ -125,7 +125,9 @@ def test_warn_on_broken_skill_links_logs_absolute_link(
     monkeypatch.setenv("HOME", str(home))
     (workspace / ".claude/skills/user").symlink_to(home / ".agents/skills/user")
     with caplog.at_level(logging.WARNING):
-        _warn_on_broken_skill_links(MsbConfig(mounts=dict(DEFAULT_MOUNTS)), workspace)
+        _warn_on_broken_skill_links(
+            AgentCircusConfig(mounts=dict(DEFAULT_MOUNTS)), workspace
+        )
     assert "These skill links do not work in the sandbox" in caplog.text
     assert "target not visible in the sandbox" in caplog.text
     assert "Host config directory" not in caplog.text
@@ -144,7 +146,9 @@ def test_warn_on_broken_skill_links_silent_for_relative_links(
     (home / ".pi/agent/skills/user").mkdir()
     os.symlink("../../.pi/agent/skills/user", home / ".claude/skills/user")
     with caplog.at_level(logging.WARNING):
-        _warn_on_broken_skill_links(MsbConfig(mounts=dict(DEFAULT_MOUNTS)), workspace)
+        _warn_on_broken_skill_links(
+            AgentCircusConfig(mounts=dict(DEFAULT_MOUNTS)), workspace
+        )
     assert caplog.text == ""
 
 
@@ -160,7 +164,9 @@ def test_warn_on_broken_skill_links_reports_host_agents_skills_link(
     monkeypatch.setenv("HOME", str(home))
     os.symlink("../../.agents/skills/user", home / ".claude/skills/user")
     with caplog.at_level(logging.WARNING):
-        _warn_on_broken_skill_links(MsbConfig(mounts=dict(DEFAULT_MOUNTS)), workspace)
+        _warn_on_broken_skill_links(
+            AgentCircusConfig(mounts=dict(DEFAULT_MOUNTS)), workspace
+        )
     assert "These skill links do not work in the sandbox" in caplog.text
     assert "target not visible in the sandbox" in caplog.text
 
@@ -176,7 +182,9 @@ def test_warn_on_broken_skill_links_checks_system_store(
     skills_dir.mkdir(parents=True)
     (skills_dir / "gone").symlink_to("../../missing/gone")
     with caplog.at_level(logging.WARNING):
-        _warn_on_broken_skill_links(MsbConfig(mounts=dict(DEFAULT_MOUNTS)), workspace)
+        _warn_on_broken_skill_links(
+            AgentCircusConfig(mounts=dict(DEFAULT_MOUNTS)), workspace
+        )
     assert "These skill links do not work in the sandbox" in caplog.text
     assert str(skills_dir / "gone") in caplog.text
 
@@ -192,6 +200,8 @@ def test_warn_on_broken_skill_links_lists_store_link_once(
     skills_dir.mkdir(parents=True)
     (skills_dir / "gone").symlink_to("../../missing/gone")
     with caplog.at_level(logging.WARNING):
-        _warn_on_broken_skill_links(MsbConfig(mounts=dict(DEFAULT_MOUNTS)), workspace)
+        _warn_on_broken_skill_links(
+            AgentCircusConfig(mounts=dict(DEFAULT_MOUNTS)), workspace
+        )
     assert "These skill links do not work in the sandbox" in caplog.text
     assert caplog.text.count(str(skills_dir / "gone")) == 1

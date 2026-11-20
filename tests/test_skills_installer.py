@@ -10,7 +10,7 @@ from typing import ClassVar, cast
 import pytest
 
 from agent_circus import skills_installer
-from agent_circus.config import ImageConfig, MsbConfig, SkillsConfig
+from agent_circus.config import AgentCircusConfig, ImageConfig, SkillsConfig
 from agent_circus.exceptions import MsbCommandError
 from agent_circus.msb import MsbInvoker
 from agent_circus.skills_installer import InstallerError, run_skills_installer
@@ -58,7 +58,7 @@ def installer(tmp_path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
     monkeypatch.setattr(skills_installer, "MsbInvoker", FakeInvoker)
-    config = MsbConfig(
+    config = AgentCircusConfig(
         image=ImageConfig(tag="img:1"), skills=SkillsConfig(store=str(store))
     )
     calls = FakeInvoker.behavior["calls"] = []

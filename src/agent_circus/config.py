@@ -226,7 +226,7 @@ class SandboxConfig:
     docker_stop_timeout: int = DEFAULT_DOCKER_STOP_TIMEOUT
 
 
-def docker_enabled(config: MsbConfig) -> bool:
+def docker_enabled(config: AgentCircusConfig) -> bool:
     """Return whether the sandbox provides a usable docker storage backend.
 
     Docker 29 needs a real filesystem under ``/var/lib/docker``. That is
@@ -478,7 +478,7 @@ class HostsConfig:
 
 
 @dataclass(frozen=True)
-class MsbConfig:
+class AgentCircusConfig:
     """Resolved agent-circus configuration.
 
     :ivar binary: Optional explicit path to the ``msb`` binary.
@@ -742,7 +742,9 @@ def _parse_additional_dirs(raw: Any) -> tuple[AdditionalDir, ...]:
     return tuple(dirs)
 
 
-def effective_mounts(config: MsbConfig, workspace: Path) -> list[tuple[str, str]]:
+def effective_mounts(
+    config: AgentCircusConfig, workspace: Path
+) -> list[tuple[str, str]]:
     """Combine ``[msb.mounts]``, the git worktree mirror, and
     ``additional_dirs`` into msb volumes.
 
@@ -782,7 +784,7 @@ def effective_mounts(config: MsbConfig, workspace: Path) -> list[tuple[str, str]
     return mounts
 
 
-def resolve_agent_workdir(config: MsbConfig, workspace: Path) -> str:
+def resolve_agent_workdir(config: AgentCircusConfig, workspace: Path) -> str:
     """Return the guest working directory for agent commands.
 
     An explicit ``[msb.agent] workdir`` wins. Otherwise the host path of
@@ -1727,11 +1729,11 @@ def _parse_logging(raw: Any) -> tuple[str, str | None]:
     return level, log_file
 
 
-def parse_config(config: dict[str, Any]) -> MsbConfig:
+def parse_config(config: dict[str, Any]) -> AgentCircusConfig:
     """Parse and validate a merged raw configuration.
 
     :param config: Merged raw configuration dictionary.
-    :returns: Validated :class:`MsbConfig`.
+    :returns: Validated :class:`AgentCircusConfig`.
     :raises ConfigurationError: If any supported key is malformed.
     """
     warn_unsupported_keys(config)
@@ -1744,7 +1746,7 @@ def parse_config(config: dict[str, Any]) -> MsbConfig:
         raise ConfigurationError("msb.binary must be a string")
     level, log_file = _parse_logging(config.get("logging"))
     git = _parse_git(config.get("git"))
-    return MsbConfig(
+    return AgentCircusConfig(
         binary=binary,
         image=_parse_image(msb_raw.get("image")),
         sandbox=_parse_sandbox(msb_raw.get("sandbox")),
@@ -1775,7 +1777,9 @@ def parse_config(config: dict[str, Any]) -> MsbConfig:
     )
 
 
-def apply_worktree_mirror_default(config: MsbConfig, workspace: Path) -> MsbConfig:
+def apply_worktree_mirror_default(
+    config: AgentCircusConfig, workspace: Path
+) -> AgentCircusConfig:
     """Turn off a default worktree mirror that cannot be mounted.
 
     The mirror mounts the workspace at its host path. When that path is
@@ -1860,7 +1864,9 @@ def _warn_on_project_skills(workspace: Path) -> None:
         )
 
 
-def load_config(workspace: Path, environ: dict[str, str] | None = None) -> MsbConfig:
+def load_config(
+    workspace: Path, environ: dict[str, str] | None = None
+) -> AgentCircusConfig:
     """Load, merge, and validate agent-circus configuration.
 
     ``[msb.skills]`` is taken from the user-global config only (see

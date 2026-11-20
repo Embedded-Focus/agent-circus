@@ -72,7 +72,7 @@ def find_occupied_ports(
 ) -> list[PortForward]:
     """Return the forwards whose host port is already bound on this host.
 
-    :param forwards: Port forwards from :class:`agent_circus.config.MsbConfig`.
+    :param forwards: Port forwards from :class:`agent_circus.config.AgentCircusConfig`.
     :returns: Subset of *forwards* whose ``host:``:attr:`PortForward.host_port`
         pair cannot be bound right now.
     """

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, BinaryIO, TextIO, cast
 
 from . import __version__
-from .config import MsbConfig, TracingConfig
+from .config import AgentCircusConfig, TracingConfig
 
 TRACE_FORMAT_VERSION = 1
 
@@ -208,7 +208,7 @@ class TraceSession:
         workspace: Path,
         root: Path,
         config: TracingConfig,
-        msb_config: MsbConfig,
+        msb_config: AgentCircusConfig,
         sandbox: str,
         command: list[str],
         acp: bool,

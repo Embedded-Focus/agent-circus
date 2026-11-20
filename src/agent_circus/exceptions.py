@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 
-class MsbCircusError(Exception):
+class AgentCircusError(Exception):
     """Base class for all agent-circus errors."""
 
 
-class ConfigurationError(MsbCircusError):
+class ConfigurationError(AgentCircusError):
     """Raised when configuration is missing, malformed, or contradictory."""
 
 
-class MsbNotFoundError(MsbCircusError):
+class MsbNotFoundError(AgentCircusError):
     """Raised when no usable ``msb`` binary can be located."""
 
 
-class MsbCommandError(MsbCircusError):
+class MsbCommandError(AgentCircusError):
     """Raised when an ``msb`` invocation fails.
 
     :ivar returncode: Exit status of the failed process.

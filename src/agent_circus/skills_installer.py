@@ -18,8 +18,8 @@ from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 
-from .config import INIT_NONE, MsbConfig
-from .exceptions import MsbCircusError
+from .config import INIT_NONE, AgentCircusConfig
+from .exceptions import AgentCircusError
 from .exec_ import build_exec_args
 from .images import build_image_inspect_args
 from .msb import MsbInvoker
@@ -42,7 +42,7 @@ from .system_skills import (
 logger = logging.getLogger(__name__)
 
 
-class InstallerError(MsbCircusError):
+class InstallerError(AgentCircusError):
     """A skills installer step failed; carries the CLI exit code.
 
     :ivar exit_code: Exit code for the CLI (1 or 2).
@@ -91,7 +91,7 @@ def installer_lock(path: Path) -> Generator[None, None, None]:
 
 
 def run_skills_installer(
-    invoker: MsbInvoker, config: MsbConfig, args: Sequence[str]
+    invoker: MsbInvoker, config: AgentCircusConfig, args: Sequence[str]
 ) -> int:
     """Run the ``skills`` CLI in the short-lived installer sandbox.
 
@@ -131,14 +131,14 @@ def run_skills_installer(
         try:
             result = invoker.run(build_list_args(running_only=False))
             sandboxes = parse_sandbox_list_output(result.stdout)
-        except MsbCircusError as e:
+        except AgentCircusError as e:
             raise InstallerError(str(e)) from e
         # The lock is held, so any leftover installer sandbox is from a
         # dead run: remove it whatever its status.
         if any(s.name == INSTALLER_SANDBOX_NAME for s in sandboxes):
             try:
                 invoker.run(build_remove_args(INSTALLER_SANDBOX_NAME, force=True))
-            except MsbCircusError as e:
+            except AgentCircusError as e:
                 raise InstallerError(
                     "cannot remove the leftover installer sandbox "
                     f"{INSTALLER_SANDBOX_NAME}: {e}"
@@ -170,7 +170,7 @@ def run_skills_installer(
                         workdir="/root",
                     )
                 )
-            except MsbCircusError as e:
+            except AgentCircusError as e:
                 raise InstallerError(
                     f"cannot boot the installer sandbox {INSTALLER_SANDBOX_NAME}: {e}"
                 ) from e
@@ -187,7 +187,7 @@ def run_skills_installer(
                 invoker.run(
                     build_remove_args(INSTALLER_SANDBOX_NAME, force=True), check=False
                 )
-            except MsbCircusError as e:
+            except AgentCircusError as e:
                 logger.debug(
                     "Removing the installer sandbox %s failed: %s",
                     INSTALLER_SANDBOX_NAME,

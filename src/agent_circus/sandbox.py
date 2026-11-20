@@ -289,7 +289,7 @@ def configured_ports(
 ) -> frozenset[tuple[str, int, int, str]]:
     """Normalize configured port forwards to the parsed-inspect shape.
 
-    :param port_forwards: Port forwards from :class:`agent_circus.config.MsbConfig`.
+    :param port_forwards: Port forwards from :class:`agent_circus.config.AgentCircusConfig`.
     :returns: Set of ``(host, host_port, guest_port, protocol)`` tuples,
         matching :func:`parse_inspect_ports`.
     """

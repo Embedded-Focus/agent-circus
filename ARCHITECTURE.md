@@ -111,7 +111,7 @@ flowchart TB
     cli["cli.py (Typer app)<br/>version, ps, rm, build, import,<br/>up, stop, start, destroy, exec"]
 
     subgraph cfg["Configuration"]
-        config["config.py<br/>layering, parse_*(), MsbConfig,<br/>effective_mounts, constants"]
+        config["config.py<br/>layering, parse_*(), AgentCircusConfig,<br/>effective_mounts, constants"]
         envs["envs.py<br/>env_passthrough, -e parsing, redaction"]
     end
 

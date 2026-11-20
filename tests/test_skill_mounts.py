@@ -9,7 +9,7 @@ from typing import cast
 import pytest
 
 from agent_circus.cli import _warn_on_agent_skill_mount_drift
-from agent_circus.config import MsbConfig, resolve_agent_skill_mounts
+from agent_circus.config import AgentCircusConfig, resolve_agent_skill_mounts
 from agent_circus.exceptions import MsbCommandError
 from agent_circus.msb import MsbInvoker
 from agent_circus.system_skills import CLAUDE_MANAGED_SKILLS_GUEST_DIR
@@ -105,7 +105,7 @@ def test_warn_on_agent_skill_mount_drift_warns_when_store_mount_missing(
     """A system store without a sandbox mount triggers a warning."""
     with caplog.at_level(logging.WARNING):
         _warn_on_agent_skill_mount_drift(
-            cast(MsbInvoker, InspectInvoker()), MsbConfig(), "agents-demo"
+            cast(MsbInvoker, InspectInvoker()), AgentCircusConfig(), "agents-demo"
         )
     assert (
         "User or system skill directory mounts (/root/.agents/skills, "
@@ -128,7 +128,7 @@ def test_warn_on_agent_skill_mount_drift_passes_when_store_mounted(
     ]
     with caplog.at_level(logging.WARNING):
         _warn_on_agent_skill_mount_drift(
-            cast(MsbInvoker, InspectInvoker(binds)), MsbConfig(), "agents-demo"
+            cast(MsbInvoker, InspectInvoker(binds)), AgentCircusConfig(), "agents-demo"
         )
     assert "skill directory mounts" not in caplog.text
 
@@ -146,7 +146,7 @@ def test_warn_on_agent_skill_mount_drift_names_claude_mount_when_missing(
     ]
     with caplog.at_level(logging.WARNING):
         _warn_on_agent_skill_mount_drift(
-            cast(MsbInvoker, InspectInvoker(binds)), MsbConfig(), "agents-demo"
+            cast(MsbInvoker, InspectInvoker(binds)), AgentCircusConfig(), "agents-demo"
         )
     assert "User or system skill directory mounts" in caplog.text
     assert CLAUDE_MANAGED_SKILLS_GUEST_DIR in caplog.text
@@ -161,7 +161,7 @@ def test_warn_on_agent_skill_mount_drift_skips_inspect_without_mounts(
     invoker = InspectInvoker()
     with caplog.at_level(logging.WARNING):
         _warn_on_agent_skill_mount_drift(
-            cast(MsbInvoker, invoker), MsbConfig(), "agents-demo"
+            cast(MsbInvoker, invoker), AgentCircusConfig(), "agents-demo"
         )
     assert invoker.calls == []
     assert caplog.text == ""
@@ -173,7 +173,9 @@ def test_warn_on_agent_skill_mount_drift_ignores_inspect_failure(
     """A failing inspect skips the check without a warning."""
     with caplog.at_level(logging.WARNING):
         _warn_on_agent_skill_mount_drift(
-            cast(MsbInvoker, InspectInvoker(fail=True)), MsbConfig(), "agents-demo"
+            cast(MsbInvoker, InspectInvoker(fail=True)),
+            AgentCircusConfig(),
+            "agents-demo",
         )
     assert caplog.text == ""
 
@@ -198,7 +200,7 @@ def test_system_skill_mounts_created_on_demand_and_expected_in_drift(
 
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
     monkeypatch.setenv("HOME", str(tmp_path))
-    config = MsbConfig()
+    config = AgentCircusConfig()
     assert _system_skill_mounts(config, create=False) == []
     mounts = _system_skill_mounts(config, create=True)
     store = tmp_path / "xdg-data" / "agent-circus" / "system-skills"
@@ -222,6 +224,6 @@ def test_system_skill_mounts_warns_and_skips_when_store_cannot_be_created(
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
     monkeypatch.setattr(cli_module, "ensure_store", fail)
     with caplog.at_level(logging.WARNING):
-        mounts = cli_module._system_skill_mounts(MsbConfig(), create=True)
+        mounts = cli_module._system_skill_mounts(AgentCircusConfig(), create=True)
     assert mounts == []
     assert "cannot create the system skill store" in caplog.text

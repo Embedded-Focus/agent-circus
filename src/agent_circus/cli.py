@@ -37,9 +37,9 @@ from .config import (
     PROXY_PORT_ENV_VAR,
     ROUTER_GUEST_PORT,
     SSH_AGENT_VSOCK_PORT,
+    AgentCircusConfig,
     DaemonConfig,
     HookConfig,
-    MsbConfig,
     PortForward,
     docker_enabled,
     docker_volume_name_for_workspace,
@@ -74,7 +74,7 @@ from .daemons import (
 from .dashboard import DashboardCollector
 from .dashboard_http import DashboardApp
 from .envs import merged_env, parse_env_assignments
-from .exceptions import ConfigurationError, MsbCircusError, MsbCommandError
+from .exceptions import AgentCircusError, ConfigurationError, MsbCommandError
 from .exec_ import (
     S6_PID1_COMM,
     build_exec_args,
@@ -314,7 +314,7 @@ def main(
         config_logger.disabled = True
         try:
             config = load_config(Path("."))
-        except MsbCircusError:
+        except AgentCircusError:
             config = None
         finally:
             config_logger.disabled = False
@@ -348,7 +348,7 @@ def version(
     config = load_config(workspace)
     try:
         binary = resolve_msb_binary(config.binary)
-    except MsbCircusError as e:
+    except AgentCircusError as e:
         print(f"msb binary: not found ({e})")
         raise typer.Exit(code=1) from e
     print(f"msb binary: {binary}")
@@ -362,7 +362,7 @@ def _list_sandboxes(invoker: MsbInvoker, *, running_only: bool) -> list[SandboxI
     :param invoker: Invoker bound to the resolved msb binary.
     :param running_only: Restrict the query to running sandboxes.
     :returns: Parsed sandbox entries.
-    :raises MsbCircusError: If the msb invocation or parsing fails.
+    :raises AgentCircusError: If the msb invocation or parsing fails.
     """
     result = invoker.run(build_list_args(running_only=running_only))
     return parse_sandbox_list_output(result.stdout)
@@ -438,7 +438,7 @@ def ps(
     invoker = MsbInvoker(binary)
     try:
         sandboxes = _list_sandboxes(invoker, running_only=running_only)
-    except MsbCircusError as e:
+    except AgentCircusError as e:
         print(f"Error: {e}")
         raise typer.Exit(code=1) from e
 
@@ -470,12 +470,12 @@ def ps(
     print(format_sandbox_table(selected))
 
 
-def _resolve_invoker(workspace: Path) -> tuple[MsbConfig, MsbInvoker]:
+def _resolve_invoker(workspace: Path) -> tuple[AgentCircusConfig, MsbInvoker]:
     """Load config for *workspace* and build an msb invoker.
 
     :param workspace: Workspace directory.
     :returns: Tuple of the parsed config and a bound invoker.
-    :raises MsbCircusError: If configuration or binary resolution fails.
+    :raises AgentCircusError: If configuration or binary resolution fails.
     """
     config = load_config(workspace)
     binary = resolve_msb_binary(config.binary)
@@ -519,7 +519,7 @@ def _finish_docker_volume(
     if delete:
         try:
             invoker.run(build_volume_remove_args(volume))
-        except MsbCircusError as e:
+        except AgentCircusError as e:
             typer.echo(f"Error: could not delete docker volume {volume}: {e}", err=True)
             raise typer.Exit(code=1) from e
         typer.echo(f"✓ Deleted docker volume {volume}")
@@ -599,7 +599,7 @@ def remove(
     for target in targets:
         try:
             invoker.run(build_remove_args(target, force=force))
-        except MsbCircusError as e:
+        except AgentCircusError as e:
             typer.echo(f"Error: {e}", err=True)
             raise typer.Exit(code=1) from e
         typer.echo(f"✓ Removed {target}")
@@ -771,7 +771,7 @@ def _build_and_import_image(
     :param build_context: Build context directory.
     :param keep_tar: Optional tar output path to keep; a temporary file
         (removed on success) is used when ``None``.
-    :raises MsbCircusError: If the msb import fails.
+    :raises AgentCircusError: If the msb import fails.
     :raises typer.Exit: If a host build/save step fails.
     """
     _run_host(
@@ -799,7 +799,7 @@ def _build_and_import_image(
     typer.echo("Importing into the msb image cache (this can take a while)...")
     try:
         invoker.run(build_load_args(str(tar_path)), capture_output=False)
-    except MsbCircusError as e:
+    except AgentCircusError as e:
         typer.echo(f"Error: {e}", err=True)
         typer.echo(f"Image archive kept at {tar_path}", err=True)
         raise typer.Exit(code=1) from e
@@ -839,7 +839,7 @@ def import_(
     typer.echo(f"Importing {tar} into the msb image cache...")
     try:
         invoker.run(build_load_args(str(tar)), capture_output=False)
-    except MsbCircusError as e:
+    except AgentCircusError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
     typer.echo(f"✓ Imported {tar}")
@@ -865,7 +865,7 @@ def skills(ctx: typer.Context) -> None:
     args = list(ctx.args)
     try:
         config = load_config(Path.cwd())
-    except MsbCircusError as e:
+    except AgentCircusError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
     if not args:
@@ -880,7 +880,7 @@ def skills(ctx: typer.Context) -> None:
     try:
         binary = resolve_msb_binary(config.binary)
         check_version(binary)
-    except MsbCircusError as e:
+    except AgentCircusError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
     invoker = MsbInvoker(binary)
@@ -956,7 +956,7 @@ def _dockerd_warning(name: str, last_error: str) -> str:
     return "\n".join(lines)
 
 
-def _check_dockerd(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
+def _check_dockerd(invoker: MsbInvoker, config: AgentCircusConfig, name: str) -> None:
     """Probe dockerd readiness or explain why docker is unavailable.
 
     When the sandbox has no usable docker storage backend (no docker disk
@@ -1037,7 +1037,9 @@ def up(
     )
 
 
-def _warn_on_port_drift(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
+def _warn_on_port_drift(
+    invoker: MsbInvoker, config: AgentCircusConfig, name: str
+) -> None:
     """Warn when configured port forwards differ from the sandbox's ports.
 
     msb fixes port mappings at sandbox creation and ``msb modify`` cannot
@@ -1097,7 +1099,9 @@ def _fetch_sandbox_ports(
         return ()
 
 
-def _warn_on_disk_drift(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
+def _warn_on_disk_drift(
+    invoker: MsbInvoker, config: AgentCircusConfig, name: str
+) -> None:
     """Warn when configured disk settings differ from the sandbox's disks.
 
     msb fixes disks at sandbox creation and ``msb modify`` cannot add
@@ -1213,7 +1217,7 @@ def _warn_on_disk_drift(invoker: MsbInvoker, config: MsbConfig, name: str) -> No
 
 
 def _warn_on_mount_drift(
-    invoker: MsbInvoker, config: MsbConfig, name: str, workspace: Path
+    invoker: MsbInvoker, config: AgentCircusConfig, name: str, workspace: Path
 ) -> None:
     """Warn when the git worktree mirror is configured but the sandbox lacks it.
 
@@ -1258,7 +1262,7 @@ def _warn_on_mount_drift(
 
 
 def _warn_on_trust_host_cas_drift(
-    invoker: MsbInvoker, config: MsbConfig, name: str
+    invoker: MsbInvoker, config: AgentCircusConfig, name: str
 ) -> None:
     """Warn when ``trust_host_cas`` differs from the sandbox's setting.
 
@@ -1297,7 +1301,7 @@ def _warn_on_trust_host_cas_drift(
     )
 
 
-def boot_port_forwards(config: MsbConfig) -> tuple[PortForward, ...]:
+def boot_port_forwards(config: AgentCircusConfig) -> tuple[PortForward, ...]:
     """Return the configured port forwards plus the router forward.
 
     The router forward publishes the guest's circus-router port on a
@@ -1347,7 +1351,7 @@ def _warn_on_occupied_router_port(invoker: MsbInvoker, name: str) -> None:
     )
 
 
-def _fail_on_occupied_ports(config: MsbConfig) -> None:
+def _fail_on_occupied_ports(config: AgentCircusConfig) -> None:
     """Hard-fail when a configured host port is already bound on the host.
 
     msb does not reliably fail at boot when the host port is held by
@@ -1373,7 +1377,7 @@ def _fail_on_occupied_ports(config: MsbConfig) -> None:
     raise typer.Exit(code=1)
 
 
-def _workspace_guest_path(config: MsbConfig, workspace: Path) -> str:
+def _workspace_guest_path(config: AgentCircusConfig, workspace: Path) -> str:
     """Return the guest path the workspace itself is mounted at.
 
     ACP clients open sessions with the workspace's guest path as the
@@ -1394,7 +1398,7 @@ def _workspace_guest_path(config: MsbConfig, workspace: Path) -> str:
     return DEFAULT_WORKDIR
 
 
-def _trusted_guest_dirs(config: MsbConfig, workspace: Path) -> list[str]:
+def _trusted_guest_dirs(config: AgentCircusConfig, workspace: Path) -> list[str]:
     """Return the guest directories to pre-trust for the agent harnesses.
 
     The guest workspace path, the exec workdir, the worktree mirror
@@ -1420,7 +1424,7 @@ def _trusted_guest_dirs(config: MsbConfig, workspace: Path) -> list[str]:
 
 
 def _ensure_pi_trust(
-    invoker: MsbInvoker, config: MsbConfig, name: str, workspace: Path
+    invoker: MsbInvoker, config: AgentCircusConfig, name: str, workspace: Path
 ) -> None:
     """Pre-trust the mounted work directories for pi and pi-acp.
 
@@ -1456,7 +1460,7 @@ def _ensure_pi_trust(
 
 
 def _ensure_claude_trust(
-    invoker: MsbInvoker, config: MsbConfig, name: str, workspace: Path
+    invoker: MsbInvoker, config: AgentCircusConfig, name: str, workspace: Path
 ) -> None:
     """Pre-trust the mounted work directories for Claude Code.
 
@@ -1602,7 +1606,9 @@ def _ensure_agent_config_copies(invoker: MsbInvoker, name: str) -> None:
             )
 
 
-def _system_skill_mounts(config: MsbConfig, *, create: bool) -> list[tuple[str, str]]:
+def _system_skill_mounts(
+    config: AgentCircusConfig, *, create: bool
+) -> list[tuple[str, str]]:
     """Return the read-only system skill mounts for a new sandbox.
 
     Resolves the store from ``[msb.skills] store``. With ``create=True``
@@ -1668,7 +1674,7 @@ def _warn_on_agent_config_mount_drift(invoker: MsbInvoker, name: str) -> None:
 
 
 def _warn_on_agent_skill_mount_drift(
-    invoker: MsbInvoker, config: MsbConfig, name: str
+    invoker: MsbInvoker, config: AgentCircusConfig, name: str
 ) -> None:
     """Warn when an expected skill directory mount is missing.
 
@@ -1707,7 +1713,9 @@ def _warn_on_agent_skill_mount_drift(
     )
 
 
-def _ensure_host_entries(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
+def _ensure_host_entries(
+    invoker: MsbInvoker, config: AgentCircusConfig, name: str
+) -> None:
     """Write the selected host entries into the guest ``/etc/hosts``.
 
     Re-reads the host hosts file on every call so changes apply without
@@ -1756,7 +1764,7 @@ def _ensure_host_entries(invoker: MsbInvoker, config: MsbConfig, name: str) -> N
     logger.debug("Wrote %d host entries into %s", len(lines), name)
 
 
-def _prepare_ssh_agent(config: MsbConfig) -> Path | None:
+def _prepare_ssh_agent(config: AgentCircusConfig) -> Path | None:
     """Refresh the host agent link when SSH forwarding is configured.
 
     :param config: Resolved agent-circus configuration.
@@ -1773,7 +1781,9 @@ def _prepare_ssh_agent(config: MsbConfig) -> Path | None:
         raise typer.Exit(code=1) from e
 
 
-def _ensure_ssh_files(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
+def _ensure_ssh_files(
+    invoker: MsbInvoker, config: AgentCircusConfig, name: str
+) -> None:
     """Copy the configured SSH config/known_hosts into the guest (one-way).
 
     Like :data:`AGENT_CONFIG_FILE_COPIES`: host edits are picked up after
@@ -1826,7 +1836,9 @@ def _ensure_ssh_files(invoker: MsbInvoker, config: MsbConfig, name: str) -> None
             )
 
 
-def _ensure_git_config(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
+def _ensure_git_config(
+    invoker: MsbInvoker, config: AgentCircusConfig, name: str
+) -> None:
     """Forward the host git config and signing key into the guest.
 
     Writes a managed gitconfig under ``/root/.config/agent-circus/git``
@@ -1916,7 +1928,7 @@ def _ensure_git_config(invoker: MsbInvoker, config: MsbConfig, name: str) -> Non
             )
 
 
-def _check_ssh_agent(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
+def _check_ssh_agent(invoker: MsbInvoker, config: AgentCircusConfig, name: str) -> None:
     """Probe the forwarded SSH agent inside the guest; warn on problems.
 
     The probe is ``ssh-add -l``: exit code 0 lists keys, 1 means the agent
@@ -1979,7 +1991,7 @@ def _fail_on_linked_worktree(workspace: Path) -> None:
         raise typer.Exit(code=1) from e
 
 
-def _repair_guest_path_worktrees(config: MsbConfig, workspace: Path) -> None:
+def _repair_guest_path_worktrees(config: AgentCircusConfig, workspace: Path) -> None:
     """Repair worktrees that Git recorded through the guest mount.
 
     Only with ``[git] worktree_mirror``: without the mirror, guest paths
@@ -2042,7 +2054,7 @@ def _warn_on_missing_worktrees(workspace: Path) -> None:
     )
 
 
-def _warn_on_broken_skill_links(config: MsbConfig, workspace: Path) -> None:
+def _warn_on_broken_skill_links(config: AgentCircusConfig, workspace: Path) -> None:
     """Warn about project and user skill links that do not resolve.
 
     Checks the links against the mounts a new sandbox would get. For a
@@ -2082,7 +2094,7 @@ def _warn_on_broken_skill_links(config: MsbConfig, workspace: Path) -> None:
     )
 
 
-def _prepare_sandbox_worktrees(config: MsbConfig, workspace: Path) -> None:
+def _prepare_sandbox_worktrees(config: AgentCircusConfig, workspace: Path) -> None:
     """Create the sandbox worktree directory and warn without the mirror.
 
     Non-fatal: a failure to create the directory only logs a warning.
@@ -2107,7 +2119,7 @@ def _prepare_sandbox_worktrees(config: MsbConfig, workspace: Path) -> None:
 
 
 def _ensure_git_wrapper(
-    invoker: MsbInvoker, config: MsbConfig, name: str, workspace: Path
+    invoker: MsbInvoker, config: AgentCircusConfig, name: str, workspace: Path
 ) -> None:
     """Install the guest ``git`` wrapper that guides worktree locations.
 
@@ -2159,7 +2171,9 @@ def _format_capacity(capacity_bytes: int) -> str:
     return f"{capacity_bytes // (1024 * 1024)}M"
 
 
-def _check_docker_volume(invoker: MsbInvoker, config: MsbConfig, volume: str) -> None:
+def _check_docker_volume(
+    invoker: MsbInvoker, config: AgentCircusConfig, volume: str
+) -> None:
     """Check that an existing persistent docker volume fits the config.
 
     Reads ``msb volume list`` and compares the volume's kind and size
@@ -2254,7 +2268,7 @@ def _sandbox_creation_env(env: Mapping[str, str]) -> dict[str, str]:
 
 
 def _daemon_envs(
-    config: MsbConfig,
+    config: AgentCircusConfig,
 ) -> dict[str, tuple[dict[str, str], frozenset[str]]]:
     """Return the merged environment of every configured daemon.
 
@@ -2285,7 +2299,7 @@ def _daemon_envs(
     return envs
 
 
-def _daemon_url(config: MsbConfig, port: int) -> str | None:
+def _daemon_url(config: AgentCircusConfig, port: int) -> str | None:
     """Return the host URL that reaches a guest TCP port, if forwarded.
 
     :param config: Resolved agent-circus configuration.
@@ -2333,7 +2347,9 @@ def _proxy_port_or_default() -> int:
         return DEFAULT_PROXY_PORT
 
 
-def _display_url(config: MsbConfig, name: str, daemon: DaemonConfig) -> str | None:
+def _display_url(
+    config: AgentCircusConfig, name: str, daemon: DaemonConfig
+) -> str | None:
     """Return the URL shown to the user for a daemon.
 
     Exposed daemons (a port plus ``expose``) show the central proxy URL;
@@ -2352,7 +2368,7 @@ def _display_url(config: MsbConfig, name: str, daemon: DaemonConfig) -> str | No
 
 
 def _wait_for_daemon_port(
-    invoker: MsbInvoker, config: MsbConfig, name: str, daemon: DaemonConfig
+    invoker: MsbInvoker, config: AgentCircusConfig, name: str, daemon: DaemonConfig
 ) -> bool:
     """Wait until an autostarted daemon's guest port accepts connections.
 
@@ -2402,7 +2418,7 @@ def _wait_for_daemon_port(
     return False
 
 
-def _ensure_router(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
+def _ensure_router(invoker: MsbInvoker, config: AgentCircusConfig, name: str) -> None:
     """Install or update the circus-router s6 service in the sandbox.
 
     The router carries the routes of every exposed daemon, so it is
@@ -2500,7 +2516,7 @@ def _router_failure_message(
 
 
 def _ensure_daemons(
-    invoker: MsbInvoker, config: MsbConfig, name: str, workspace: Path
+    invoker: MsbInvoker, config: AgentCircusConfig, name: str, workspace: Path
 ) -> None:
     """Register the configured daemons with s6 inside the sandbox.
 
@@ -2577,7 +2593,7 @@ def _hook_failed(hook: HookConfig, reason: str) -> bool:
 
 def _run_hook(
     invoker: MsbInvoker,
-    config: MsbConfig,
+    config: AgentCircusConfig,
     name: str,
     workspace: Path,
     hook: HookConfig,
@@ -2654,7 +2670,7 @@ def _run_hook(
 
 def _ensure_hooks(
     invoker: MsbInvoker,
-    config: MsbConfig,
+    config: AgentCircusConfig,
     name: str,
     workspace: Path,
     *,
@@ -2793,7 +2809,7 @@ def _log_unused_host_agent_skills() -> None:
 
 def _ensure_sandbox_running(
     invoker: MsbInvoker,
-    config: MsbConfig,
+    config: AgentCircusConfig,
     workspace: Path,
     *,
     allow_build: bool = False,
@@ -2994,7 +3010,7 @@ def _ensure_sandbox_running(
     _ensure_daemons(invoker, config, name, workspace)
 
 
-def _stop_sandbox(invoker: MsbInvoker, config: MsbConfig, name: str) -> None:
+def _stop_sandbox(invoker: MsbInvoker, config: AgentCircusConfig, name: str) -> None:
     """Stop the sandbox, working around msb's stop with an s6 init.
 
     With s6-overlay as PID 1, ``msb stop`` never completes (the guest
@@ -3705,7 +3721,7 @@ def _require_running_sandbox(invoker: MsbInvoker, name: str) -> None:
         raise typer.Exit(code=1)
 
 
-def _require_daemon(config: MsbConfig, daemon_name: str) -> DaemonConfig:
+def _require_daemon(config: AgentCircusConfig, daemon_name: str) -> DaemonConfig:
     """Return the configured daemon with the given name, or exit.
 
     :param config: Resolved agent-circus configuration.
@@ -3725,7 +3741,7 @@ def _require_daemon(config: MsbConfig, daemon_name: str) -> DaemonConfig:
     raise typer.Exit(code=1)
 
 
-def _require_hook(config: MsbConfig, hook_name: str) -> HookConfig:
+def _require_hook(config: AgentCircusConfig, hook_name: str) -> HookConfig:
     """Return the configured hook with the given name, or exit.
 
     :param config: Resolved agent-circus configuration.
@@ -3786,7 +3802,7 @@ def _run_daemon_script(
 
 
 def _print_daemon_ready(
-    invoker: MsbInvoker, config: MsbConfig, name: str, daemon: DaemonConfig
+    invoker: MsbInvoker, config: AgentCircusConfig, name: str, daemon: DaemonConfig
 ) -> None:
     """Wait for a daemon's port and print its host URL when it opened.
 

@@ -12,7 +12,7 @@ from .config import SSH_AGENT_GUEST_SOCKET
 from .exceptions import ConfigurationError
 
 if TYPE_CHECKING:
-    from .config import MsbConfig
+    from .config import AgentCircusConfig
 
 REDACTED = "<redacted>"
 
@@ -133,7 +133,7 @@ def quote_shell_word(value: str) -> str:
 
 
 def merged_env(
-    config: MsbConfig,
+    config: AgentCircusConfig,
     env_passthrough: tuple[str, ...],
     env: Mapping[str, str],
     *,

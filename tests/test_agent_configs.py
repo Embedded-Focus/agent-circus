@@ -23,7 +23,11 @@ from agent_circus.cli import (
     _warn_on_agent_config_mount_drift,
     app,
 )
-from agent_circus.config import AdditionalDir, MsbConfig, resolve_agent_config_mounts
+from agent_circus.config import (
+    AdditionalDir,
+    AgentCircusConfig,
+    resolve_agent_config_mounts,
+)
 from agent_circus.exceptions import MsbCommandError
 from agent_circus.exec_ import build_write_claude_trust_args
 from agent_circus.msb import MsbInvoker
@@ -340,8 +344,10 @@ def test_build_write_claude_trust_args_rejects_empty_dirs():
         build_write_claude_trust_args("agents-demo", [])
 
 
-def _config_with_additional_dir() -> MsbConfig:
-    return MsbConfig(additional_dirs=(AdditionalDir(path="/host/lib", name="lib"),))
+def _config_with_additional_dir() -> AgentCircusConfig:
+    return AgentCircusConfig(
+        additional_dirs=(AdditionalDir(path="/host/lib", name="lib"),)
+    )
 
 
 def test_ensure_claude_trust_trusts_workdir_and_additional_dirs():
@@ -367,7 +373,7 @@ def test_ensure_claude_trust_warns_on_failure(caplog):
     with caplog.at_level(logging.WARNING):
         _ensure_claude_trust(
             cast(MsbInvoker, FailingInvoker()),
-            MsbConfig(),
+            AgentCircusConfig(),
             "agents-demo",
             Path("/host/ws"),
         )

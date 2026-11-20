@@ -3,8 +3,8 @@
 from importlib.metadata import version as distribution_version
 
 from .exceptions import (
+    AgentCircusError,
     ConfigurationError,
-    MsbCircusError,
     MsbCommandError,
     MsbNotFoundError,
 )
@@ -12,8 +12,8 @@ from .exceptions import (
 __version__ = distribution_version("agent-circus")
 
 __all__ = [
+    "AgentCircusError",
     "ConfigurationError",
-    "MsbCircusError",
     "MsbCommandError",
     "MsbNotFoundError",
     "__version__",

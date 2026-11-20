@@ -9,7 +9,7 @@ import pytest
 from typer.testing import CliRunner
 
 import agent_circus.cli as cli_module
-from agent_circus.config import ImageConfig, MsbConfig, SkillsConfig
+from agent_circus.config import AgentCircusConfig, ImageConfig, SkillsConfig
 from agent_circus.exceptions import MsbCommandError
 from agent_circus.skills_installer import InstallerError
 
@@ -54,7 +54,7 @@ def installer(tmp_path, monkeypatch: pytest.MonkeyPatch):
     FakeInvoker.behavior = {}
     store = tmp_path / "xdg-data" / "agent-circus" / "system-skills"
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
-    config = MsbConfig(
+    config = AgentCircusConfig(
         image=ImageConfig(tag="img:1"), skills=SkillsConfig(store=str(store))
     )
     behavior = FakeInvoker.behavior
