@@ -14,3 +14,4 @@ def isolate_user_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     :returns: None.
     """
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
+    monkeypatch.setenv("AGENT_CIRCUS_NO_UPGRADE_NOTICE", "1")

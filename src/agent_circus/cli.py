@@ -19,6 +19,7 @@ from agent_circus.commands import (
     version,
 )
 from agent_circus.config import load_user_config
+from agent_circus.upgrade_notice import maybe_show_upgrade_notice
 from agent_circus.utils import setup_logging
 
 app = typer.Typer(
@@ -49,6 +50,7 @@ def main(
     ] = None,
 ) -> None:
     """CLI for managing agent containers."""
+    maybe_show_upgrade_notice()
     if ctx.invoked_subcommand == "version":
         return
 
