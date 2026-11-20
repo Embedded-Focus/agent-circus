@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "agent-circus"
 version = "0.2.0"
-description = "Run AI coding agents in isolated Docker or Podman containers"
+description = "Run AI coding agents in Microsandbox micro-VMs"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -17,8 +17,6 @@ keywords = [
     "ai-agents",
     "cli",
     "containers",
-    "docker",
-    "podman",
     "sandbox",
 ]
 classifiers = [
@@ -34,7 +32,6 @@ classifiers = [
     "Topic :: Software Development",
 ]
 dependencies = [
-    "docker>=7.0.0",
     "importlib-resources>=5.10; python_version < '3.12'",
     "microsandbox>=0.7.8",
     "packaging>=24.0",
@@ -49,12 +46,11 @@ Repository = "https://github.com/Embedded-Focus/agent-circus"
 Issues = "https://github.com/Embedded-Focus/agent-circus/issues"
 
 [project.scripts]
-agent-circus = "agent_circus.cli:run_cli"
 agent-circus-update-templates = "msb_circus.update_versions:run"
 msb-circus = "msb_circus.cli:run_cli"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/agent_circus", "src/msb_circus"]
+packages = ["src/msb_circus"]
 
 [tool.hatch.build.hooks.custom]
 path = "src/hatch_build.py"
