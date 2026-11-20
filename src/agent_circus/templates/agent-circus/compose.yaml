@@ -1,7 +1,7 @@
 ---
 x-common-build-args: &common-build-args
   TZ: ${TZ:-Europe/Vienna}
-  NPM_VERSION: 12.2.1
+  NPM_VERSION: 12.2.3
 
 x-common-build: &common-build
   context: .
@@ -30,13 +30,13 @@ services:
       target: claude-code
       args:
         <<: *common-build-args
-        CLAUDE_CODE_VERSION: 2.1.314
+        CLAUDE_CODE_VERSION: 2.1.329
         # https://github.com/agentclientprotocol/claude-agent-acp
-        CLAUDE_AGENT_ACP_VERSION: 0.99.1
+        CLAUDE_AGENT_ACP_VERSION: 0.109.0
         # https://github.com/oven-sh/bun
-        BUN_VERSION: 1.4.4
+        BUN_VERSION: 1.4.5
         # https://github.com/thedotmack/claude-mem
-        CLAUDE_MEM_VERSION: 15.6.0
+        CLAUDE_MEM_VERSION: 16.0.1
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
     - ${HOME}/.cache:/home/node/.cache
@@ -54,9 +54,9 @@ services:
       args:
         <<: *common-build-args
         # https://github.com/openai/codex
-        CODEX_VERSION: 0.166.0
+        CODEX_VERSION: 0.171.0
         # https://github.com/agentclientprotocol/codex-acp
-        CODEX_ACP_VERSION: 2.5.0
+        CODEX_ACP_VERSION: 2.8.0
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
     - ${HOME}/.cache:/home/node/.cache
@@ -83,7 +83,7 @@ services:
       target: opencode
       args:
         <<: *common-build-args
-        OPENCODE_VERSION: 2.2.2
+        OPENCODE_VERSION: 2.3.2
     volumes:
     - ${AGENT_CIRCUS_WORKSPACE:-..}:/workspace:cached
     - ${HOME}/.cache:/home/node/.cache
@@ -98,7 +98,7 @@ services:
       args:
         <<: *common-build-args
         # https://github.com/earendil-works/pi
-        PI_VERSION: 1.4.0
+        PI_VERSION: 1.6.0
         # https://github.com/svkozak/pi-acp
         PI_ACP_VERSION: 0.0.34
     volumes:
