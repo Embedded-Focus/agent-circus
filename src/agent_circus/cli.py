@@ -3623,8 +3623,8 @@ def exec_(
             trace_session = TraceSession.create(
                 workspace=workspace,
                 root=root,
-                config=tracing,
-                msb_config=config,
+                tracing=tracing,
+                config=config,
                 sandbox=name,
                 command=cmd,
                 acp=acp,

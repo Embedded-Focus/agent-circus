@@ -336,7 +336,7 @@ def test_exec_acp_trace_connects_stream_observer(tmp_path, fake_msb, monkeypatch
 
     assert result.exit_code == 0
     assert created["root"] == tmp_path / "diagnostics"
-    assert created["config"].enabled is True
+    assert created["tracing"].enabled is True
     assert fake_msb["acp_kwargs"]["observer"] == trace.record_stream
     assert callable(fake_msb["acp_kwargs"]["on_started"])
     assert fake_msb["trace_returncode"] == 0

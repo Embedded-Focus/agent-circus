@@ -19,8 +19,8 @@ def test_trace_records_repetition_across_chunk_boundaries(tmp_path):
     trace = TraceSession.create(
         workspace=tmp_path,
         root=tmp_path / ".agent-circus" / "traces",
-        config=config,
-        msb_config=AgentCircusConfig(),
+        tracing=config,
+        config=AgentCircusConfig(),
         sandbox="agents-test",
         command=["pi-acp", "--flag", "secret prompt"],
         acp=True,
@@ -59,8 +59,8 @@ def test_trace_payload_capture_stops_at_limit(tmp_path):
     trace = TraceSession.create(
         workspace=tmp_path,
         root=tmp_path / "traces",
-        config=config,
-        msb_config=AgentCircusConfig(),
+        tracing=config,
+        config=AgentCircusConfig(),
         sandbox="agents-test",
         command=["pi-acp"],
         acp=True,
@@ -84,8 +84,8 @@ def test_trace_files_are_private(tmp_path):
     trace = TraceSession.create(
         workspace=tmp_path,
         root=tmp_path / "traces",
-        config=TracingConfig(),
-        msb_config=AgentCircusConfig(),
+        tracing=TracingConfig(),
+        config=AgentCircusConfig(),
         sandbox="agents-test",
         command=["pi"],
         acp=False,
@@ -104,8 +104,8 @@ def test_process_collector_uses_preinstalled_uv_python(tmp_path, monkeypatch):
     trace = TraceSession.create(
         workspace=tmp_path,
         root=tmp_path / "traces",
-        config=TracingConfig(),
-        msb_config=AgentCircusConfig(),
+        tracing=TracingConfig(),
+        config=AgentCircusConfig(),
         sandbox="agents-test",
         command=["pi-acp"],
         acp=True,

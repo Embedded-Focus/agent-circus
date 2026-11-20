@@ -137,18 +137,18 @@ class TraceSession:
         *,
         workspace: Path,
         root: Path,
-        config: TracingConfig,
+        tracing: TracingConfig,
         manifest: dict[str, Any],
     ) -> None:
         """Create a trace directory and its initial files.
 
         :param workspace: Project workspace.
         :param root: Trace root directory.
-        :param config: Effective trace settings.
+        :param tracing: Effective trace settings.
         :param manifest: Sanitized execution metadata.
         """
         self.workspace = workspace
-        self.config = config
+        self.tracing = tracing
         trace_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         trace_id += f"-{secrets.token_hex(2)}"
         root_exists = root.exists()
@@ -176,7 +176,7 @@ class TraceSession:
         self._payload_limited: set[str] = set()
         self._log_handler: logging.FileHandler | None = None
 
-        if config.capture_payloads:
+        if tracing.capture_payloads:
             payload_dir = self.directory / "payloads"
             payload_dir.mkdir(mode=0o700)
             for direction, filename in {
@@ -207,8 +207,8 @@ class TraceSession:
         *,
         workspace: Path,
         root: Path,
-        config: TracingConfig,
-        msb_config: AgentCircusConfig,
+        tracing: TracingConfig,
+        config: AgentCircusConfig,
         sandbox: str,
         command: list[str],
         acp: bool,
@@ -220,8 +220,8 @@ class TraceSession:
 
         :param workspace: Project workspace.
         :param root: Trace root directory.
-        :param config: Effective trace settings.
-        :param msb_config: Effective agent-circus configuration.
+        :param tracing: Effective trace settings.
+        :param config: Effective agent-circus configuration.
         :param sandbox: Sandbox name.
         :param command: Agent command. Only its executable name is saved.
         :param acp: Whether the execution uses ACP.
@@ -239,14 +239,14 @@ class TraceSession:
             "environment_names": sorted(env_names),
             "msb_version": msb_version,
             "sandbox_resources": {
-                "memory": msb_config.sandbox.memory,
-                "cpus": msb_config.sandbox.cpus,
-                "root_disk": msb_config.sandbox.root_disk,
-                "docker_disk": msb_config.sandbox.docker_disk,
+                "memory": config.sandbox.memory,
+                "cpus": config.sandbox.cpus,
+                "root_disk": config.sandbox.root_disk,
+                "docker_disk": config.sandbox.docker_disk,
             },
-            "tracing": asdict(config),
+            "tracing": asdict(tracing),
         }
-        return cls(workspace=workspace, root=root, config=config, manifest=manifest)
+        return cls(workspace=workspace, root=root, tracing=tracing, manifest=manifest)
 
     def _write_json(self, path: Path, value: dict[str, Any]) -> None:
         """Write one private JSON document.
@@ -320,7 +320,7 @@ class TraceSession:
                     longest_byte = byte
                     longest_count = state.count
                     longest_offset = state.run_start
-                if state.count == self.config.repetition_threshold:
+                if state.count == self.tracing.repetition_threshold:
                     incidents.append(
                         {
                             "byte": byte,
@@ -369,7 +369,7 @@ class TraceSession:
         if file is None or direction in self._payload_limited:
             return
         used = self._payload_bytes[direction]
-        remaining = self.config.max_payload_bytes - used
+        remaining = self.tracing.max_payload_bytes - used
         if remaining > 0:
             chunk = data[:remaining]
             file.write(chunk)
@@ -384,7 +384,7 @@ class TraceSession:
         :param binary: Resolved msb binary.
         :param sandbox: Sandbox name.
         """
-        interval = f"{self.config.sample_interval:g}s"
+        interval = f"{self.tracing.sample_interval:g}s"
         self._start_collector(
             "vm_metrics",
             [
@@ -430,7 +430,7 @@ class TraceSession:
                 "-u",
                 "-c",
                 _PROCESS_SAMPLER,
-                str(self.config.sample_interval),
+                str(self.tracing.sample_interval),
             ],
             "processes.jsonl",
         )
