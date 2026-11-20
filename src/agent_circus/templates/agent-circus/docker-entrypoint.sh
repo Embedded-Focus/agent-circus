@@ -45,6 +45,27 @@ if compgen -G "/run/ca-host/*.crt" > /dev/null 2>&1; then
   sudo /usr/local/bin/install-ca-certs.sh
 fi
 
+# Repair the codex app-server daemon install when the seeded/mounted
+# ~/.codex was relocated. Codex records its daemon with an absolute
+# `current` symlink (pointing at the creating machine's $CODEX_HOME), which
+# dangles at the container path and aborts every codex invocation with
+# "daemon executable not found". Repoint a dangling absolute symlink at its
+# releases entry relatively, and drop a stale absolute control-socket
+# symlink left behind by a daemon on another machine. Best effort: codex
+# reinstalls the daemon if the repair cannot run.
+codex_daemon_dir="${HOME}/.codex/packages/app-server-daemon"
+if [[ -L "${codex_daemon_dir}/current" ]]; then
+  codex_target="$(readlink "${codex_daemon_dir}/current")" || true
+  if [[ "${codex_target:-}" == /* && ! -e "${codex_daemon_dir}/current" ]]; then
+    ln -sfn "$(basename "${codex_target%/*}")/$(basename "${codex_target}")" \
+      "${codex_daemon_dir}/current" || true
+  fi
+fi
+codex_sock="${HOME}/.codex/app-server-control/app-server-control.sock"
+if [[ -L "${codex_sock}" && ! -e "${codex_sock}" ]]; then
+  rm -f "${codex_sock}" || true
+fi
+
 # Run per-project startup hook if present.
 # An inline config.toml hook is mounted read-only under /run (outside the
 # workspace bind-mount, so it never leaves a placeholder file in the project).
