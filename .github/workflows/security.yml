@@ -5,10 +5,12 @@ on:
     branches:
       - develop
       - main
+      - v1
   pull_request:
     branches:
       - develop
       - main
+      - v1
   schedule:
     - cron: "27 5 * * 1"
   workflow_dispatch:
