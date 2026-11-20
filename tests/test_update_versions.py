@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from msb_circus.update_versions import (
+from agent_circus.update_versions import (
     ALL_PINS,
     MSB_AGENTS_PINS,
     VersionPin,
@@ -169,7 +169,7 @@ def test_fetch_latest_docker_digest_returns_hub_api_digest(
         b'{"digest": "sha256:' + b"a" * 64 + b'", "tag": "26-slim"}'
     )
     urlopen = MagicMock(return_value=response)
-    monkeypatch.setattr("msb_circus.update_versions.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("agent_circus.update_versions.urllib.request.urlopen", urlopen)
 
     digest = fetch_latest_docker_digest("docker.io/library/node", "26-slim")
 
@@ -185,7 +185,7 @@ def test_fetch_latest_docker_digest_raises_without_hub_digest(
     response.__enter__.return_value = response
     response.read.return_value = b'{"tag": "26-slim"}'
     urlopen = MagicMock(return_value=response)
-    monkeypatch.setattr("msb_circus.update_versions.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("agent_circus.update_versions.urllib.request.urlopen", urlopen)
 
     with pytest.raises(ValueError, match="no digest"):
         fetch_latest_docker_digest("docker.io/library/node", "26-slim")
@@ -201,7 +201,7 @@ def test_fetch_ghcr_digest_returns_multiarch_content_digest(
     manifest_response.__enter__.return_value = manifest_response
     manifest_response.headers.get.return_value = "sha256:" + "a" * 64
     urlopen = MagicMock(side_effect=[token_response, manifest_response])
-    monkeypatch.setattr("msb_circus.update_versions.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("agent_circus.update_versions.urllib.request.urlopen", urlopen)
 
     digest = fetch_latest_docker_digest("ghcr.io/astral-sh/uv", "0.13.6")
 
@@ -235,7 +235,7 @@ def test_fetch_ghcr_digest_raises_without_digest_header(
     manifest_response.__enter__.return_value = manifest_response
     manifest_response.headers.get.return_value = None
     urlopen = MagicMock(side_effect=[token_response, manifest_response])
-    monkeypatch.setattr("msb_circus.update_versions.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("agent_circus.update_versions.urllib.request.urlopen", urlopen)
 
     with pytest.raises(ValueError, match="no digest"):
         fetch_latest_docker_digest("ghcr.io/astral-sh/uv", "0.13.6")
@@ -247,7 +247,7 @@ def test_fetch_latest_version_routes_registry_digest_pin(
     pin = next(pin for pin in ALL_PINS if pin.name == "node (msb-agents)")
     digest_mock = MagicMock(return_value="sha256:" + "b" * 64)
     monkeypatch.setattr(
-        "msb_circus.update_versions.fetch_latest_docker_digest", digest_mock
+        "agent_circus.update_versions.fetch_latest_docker_digest", digest_mock
     )
 
     latest = fetch_latest_version(MagicMock(), pin)
@@ -261,12 +261,12 @@ def test_fetch_latest_version_routes_github_image_pin(
 ) -> None:
     pin = next(pin for pin in ALL_PINS if pin.name == "docker (msb-agents)")
     monkeypatch.setattr(
-        "msb_circus.update_versions.fetch_latest_tag",
+        "agent_circus.update_versions.fetch_latest_tag",
         lambda gh, repo: "docker-v29.9.2",
     )
     digest_mock = MagicMock(return_value="sha256:" + "c" * 64)
     monkeypatch.setattr(
-        "msb_circus.update_versions.fetch_latest_docker_digest", digest_mock
+        "agent_circus.update_versions.fetch_latest_docker_digest", digest_mock
     )
 
     latest = fetch_latest_version(MagicMock(), pin)
@@ -302,7 +302,7 @@ def test_fetch_latest_github_asset_sha256_parses_release_asset(
             return b"" + b"a" * 64 + b"  s6-overlay-noarch.tar.xz\n"
 
     urlopen = MagicMock(return_value=Response())
-    monkeypatch.setattr("msb_circus.update_versions.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("agent_circus.update_versions.urllib.request.urlopen", urlopen)
 
     digest = fetch_latest_github_asset_sha256(
         gh, "just-containers/s6-overlay", "s6-overlay-noarch.tar.xz.sha256"
@@ -333,7 +333,7 @@ def test_fetch_latest_github_asset_sha256_rejects_malformed_asset(
             return b"not a sha256sum line\n"
 
     urlopen = MagicMock(return_value=Response())
-    monkeypatch.setattr("msb_circus.update_versions.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("agent_circus.update_versions.urllib.request.urlopen", urlopen)
 
     with pytest.raises(ValueError, match="not a sha256sum line"):
         fetch_latest_github_asset_sha256(
@@ -352,7 +352,7 @@ def test_fetch_latest_version_routes_github_asset_sha256_pin(
     )
     fetch = MagicMock(return_value="a" * 64)
     monkeypatch.setattr(
-        "msb_circus.update_versions.fetch_latest_github_asset_sha256", fetch
+        "agent_circus.update_versions.fetch_latest_github_asset_sha256", fetch
     )
 
     latest = fetch_latest_version(MagicMock(), pin)
@@ -378,7 +378,7 @@ def test_fetch_latest_npm_version_returns_latest_dist_tag(
             return b'{"dist-tags": {"latest": "12.0.2"}}'
 
     urlopen = MagicMock(return_value=Response())
-    monkeypatch.setattr("msb_circus.update_versions.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("agent_circus.update_versions.urllib.request.urlopen", urlopen)
 
     latest = fetch_latest_npm_version("npm")
 
@@ -391,7 +391,7 @@ def test_fetch_latest_version_routes_npm_pin(
 ) -> None:
     npm_pin = next(pin for pin in MSB_AGENTS_PINS if pin.source == "npm")
     fetch = MagicMock(return_value="2.3.2")
-    monkeypatch.setattr("msb_circus.update_versions.fetch_latest_npm_version", fetch)
+    monkeypatch.setattr("agent_circus.update_versions.fetch_latest_npm_version", fetch)
 
     latest = fetch_latest_version(MagicMock(), npm_pin)
 
@@ -410,7 +410,7 @@ def test_build_report_records_error_and_continues(
             raise urllib.error.URLError("Not Found")
         return normalize_tag("v9.9.9", pin.strip_prefix)
 
-    monkeypatch.setattr("msb_circus.update_versions.fetch_latest_version", fake_fetch)
+    monkeypatch.setattr("agent_circus.update_versions.fetch_latest_version", fake_fetch)
 
     results = build_report(ALL_PINS, gh=MagicMock())
 

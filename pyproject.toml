@@ -46,11 +46,11 @@ Repository = "https://github.com/Embedded-Focus/agent-circus"
 Issues = "https://github.com/Embedded-Focus/agent-circus/issues"
 
 [project.scripts]
-agent-circus-update-templates = "msb_circus.update_versions:run"
-msb-circus = "msb_circus.cli:run_cli"
+agent-circus = "agent_circus.cli:run_cli"
+agent-circus-update-templates = "agent_circus.update_versions:run"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/msb_circus"]
+packages = ["src/agent_circus"]
 
 [tool.hatch.build.hooks.custom]
 path = "src/hatch_build.py"
