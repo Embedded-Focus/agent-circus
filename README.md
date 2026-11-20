@@ -455,7 +455,7 @@ project value wins; arrays (for example `[[daemons]]` or
 `env_passthrough`) are replaced as a whole by the project value.
 
 agent-circus applies its own `[msb]` table, plus the top-level tables
-`[image]`, `[agent]`, `[tracing]`, `[skills]`, `[[daemons]`, `[hooks]`,
+`[image]`, `[agent]`, `[tracing]`, `[skills]`, `[[daemons]]`, `[hooks]`,
 `[env]`, `logging`, `env_passthrough`, `additional_dirs`, `git`, `ssh`,
 `hosts`, and `port_forwards`. Known 1.x keys log a warning; any other
 unknown key stops the command with an error.

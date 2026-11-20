@@ -41,7 +41,7 @@ an error.
   `[msb.network]`, `[msb.mounts]` (settings that map directly to the
   msb binary);
 - the top-level tables `[image]`, `[agent]`, `[tracing]`, `[skills]`,
-  `[[daemons]`, `[hooks]`, `[env]`, `[logging]`, `[git]`, `[ssh]`,
+  `[[daemons]]`, `[hooks]`, `[env]`, `[logging]`, `[git]`, `[ssh]`,
   `[hosts]`, plus `env_passthrough`, `[[additional_dirs]]` and
   `[[port_forwards]]`.
 
