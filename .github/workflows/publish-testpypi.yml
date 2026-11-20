@@ -1,6 +1,8 @@
 name: Publish to TestPyPI
 
 on:
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -10,11 +12,14 @@ jobs:
   build:
     name: Build and verify distributions
     runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.release.prerelease }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
         with:
+          ref: ${{ github.event.release.tag_name || github.ref }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up uv
@@ -25,6 +30,34 @@ jobs:
 
       - name: Install Python
         run: uv python install 3.14
+
+      - name: Validate pre-release tag
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(a|b|rc)[0-9]+$ ]]; then
+            echo "Pre-release tag must look like v2.0.0rc1: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$RELEASE_TAG" origin/develop \
+            && ! git merge-base --is-ancestor "$RELEASE_TAG" origin/main; then
+            echo "Pre-release tag $RELEASE_TAG is not on develop or main" >&2
+            exit 1
+          fi
+          uv run --no-project --python 3.14 python - <<'PY'
+          import os
+          import pathlib
+          import tomllib
+
+          tag_version = os.environ["RELEASE_TAG"].removeprefix("v")
+          with pathlib.Path("pyproject.toml").open("rb") as file:
+              project_version = tomllib.load(file)["project"]["version"]
+          if tag_version != project_version:
+              raise SystemExit(
+                  f"Version mismatch: tag={tag_version!r}, pyproject.toml={project_version!r}"
+              )
+          PY
 
       - name: Build distributions
         run: uv build --no-sources

@@ -55,3 +55,26 @@ jobs:
 
       - name: Audit locked dependencies
         run: make audit
+
+  uv-audit-v1:
+    name: uv audit (v1)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Check out v1
+        uses: actions/checkout@v7
+        with:
+          ref: v1
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+          version: latest-known
+
+      - name: Install Python
+        run: uv python install 3.14
+
+      - name: Audit locked dependencies
+        run: make audit
