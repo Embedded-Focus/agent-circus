@@ -753,10 +753,13 @@ def test_follow_script_trap_installed_before_background_jobs(tmp_path, monkeypat
         stderr=subprocess.PIPE,
         text=True,
     )
-    # Signal immediately, before reading anything.
+    # Signal immediately, before reading anything. The signal can arrive
+    # before sh runs the trap line; then sh dies from SIGTERM, but no
+    # follower has started yet. After the trap line, the trap exits 0.
+    # Both outcomes are correct; the orphan check below is the point.
     proc.send_signal(signal.SIGTERM)
     try:
-        assert proc.wait(timeout=_REAP_DEADLINE_S) == 0
+        assert proc.wait(timeout=_REAP_DEADLINE_S) in (0, -signal.SIGTERM)
     finally:
         if proc.poll() is None:
             proc.kill()
