@@ -1,4 +1,8 @@
-# agent-circus
+<div align="center">
+
+<img src="https://raw.githubusercontent.com/Embedded-Focus/agent-circus/main/assets/agent_circus_logo.png" alt="AI Agents Circus" width="260">
+
+# AI Agents Circus
 
 *Run AI coding agents in Microsandbox micro-VMs with one configuration file.*
 
@@ -7,29 +11,33 @@
 [![Security](https://github.com/Embedded-Focus/agent-circus/actions/workflows/security.yml/badge.svg)](https://github.com/Embedded-Focus/agent-circus/actions/workflows/security.yml)
 [![Dependabot](https://img.shields.io/badge/dependabot-enabled-025e8c?logo=dependabot)](https://github.com/Embedded-Focus/agent-circus/security/dependabot)
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
+[![Microsandbox](https://img.shields.io/badge/runtime-Microsandbox-0A7EA4)](https://microsandbox.dev/)
 [![uv](https://img.shields.io/badge/uv-supported-DE5FE9)](https://docs.astral.sh/uv/)
 [![Last commit](https://img.shields.io/github/last-commit/Embedded-Focus/agent-circus?logo=github)](https://github.com/Embedded-Focus/agent-circus/commits/main)
 ![Agents: Claude Code · Codex · OpenCode · Pi](https://img.shields.io/badge/agents-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20OpenCode%20%C2%B7%20Pi-lightgrey)
 
-Looking for the Docker/Podman version? See the
-[`v1` branch](https://github.com/Embedded-Focus/agent-circus/tree/v1).
+**[Open Protocols](#open-protocols)** ·
+**[Getting Started](#getting-started)** ·
+**[How It Works](#how-it-works)** ·
+**[Running Agents](#running-agents)** ·
+**[Editors](#setting-up-editors-to-work-with-acp)** ·
+**[Images](#images)** ·
+**[Lifecycle](#lifecycle)** ·
+**[Configuration](#configuration)** ·
+**[Hooks](#hooks)** ·
+**[Environment Variables](#environment-variables)** ·
+**[Secrets](#secrets)** ·
+**[Networking](#networking)** ·
+**[Host Entries](#host-entries)** ·
+**[CA Certificates](#ca-certificates)** ·
+**[Logs](#logs)** ·
+**[Troubleshooting](#troubleshooting)**
 
-[Open Protocols](#open-protocols) ·
-[Getting Started](#getting-started) ·
-[How It Works](#how-it-works) ·
-[Running Agents](#running-agents) ·
-[Editors](#setting-up-editors-to-work-with-acp) ·
-[Images](#images) ·
-[Lifecycle](#lifecycle) ·
-[Configuration](#configuration) ·
-[Hooks](#hooks) ·
-[Environment Variables](#environment-variables) ·
-[Secrets](#secrets) ·
-[Networking](#networking) ·
-[Host Entries](#host-entries) ·
-[CA Certificates](#ca-certificates) ·
-[Logs](#logs) ·
-[Troubleshooting](#troubleshooting)
+</div>
+
+> [!NOTE]
+> Looking for the Docker/Podman version? See the
+> [`v1` branch](https://github.com/Embedded-Focus/agent-circus/tree/v1).
 
 ## Overview
 
