@@ -14,6 +14,7 @@
 Looking for the Docker/Podman version? See the
 [`v1` branch](https://github.com/Embedded-Focus/agent-circus/tree/v1).
 
+[Open Protocols](#open-protocols) ·
 [Getting Started](#getting-started) ·
 [How It Works](#how-it-works) ·
 [Running Agents](#running-agents) ·
@@ -66,6 +67,33 @@ Editors and IDEs connect to the agents through the
 [Agent Client Protocol](https://agentclientprotocol.com/) (ACP). In ACP mode,
 the editor talks to the agent through the sandbox, and the sandbox boundary
 stays in place.
+
+## Open Protocols
+
+agent-circus is built around open interfaces instead of editor- or
+vendor-specific integrations:
+
+<p align="center">
+  <img src="assets/open_protocols.svg" alt="Open protocols map showing ACP and MCP relationships" width="680" />
+</p>
+
+- [ACP — Agent Client Protocol](https://agentclientprotocol.com/) connects
+  editors and IDEs to coding agents through a shared client protocol.
+  The image contains an ACP entry point for every harness (`opencode acp`,
+  `pi-acp`, `claude-agent-acp`, `codex-acp`); see
+  [Setting up Editors to Work with ACP](#setting-up-editors-to-work-with-acp).
+- [MCP — Model Context Protocol](https://modelcontextprotocol.io/) connects
+  agents to tools, services, and contextual data sources. The agents
+  reach MCP servers through the sandbox network, or run them inside the
+  sandbox, for example as a daemon; see [Networking](#networking) and
+  [Daemon Settings](#daemon-settings).
+- [Agent Skills](https://agentskills.io/) package reusable agent capabilities
+  as portable, declarative instructions and resources. agent-circus makes
+  project, user, and system skills available in the sandbox; see
+  [Skills](#skills).
+- [A2A — Agent2Agent Protocol](https://a2a-protocol.org/) defines a common
+  protocol for communication and task handoff between agents. agent-circus
+  does not use A2A yet; the map shows where it fits.
 
 ## Getting Started
 
