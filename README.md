@@ -416,22 +416,25 @@ This is a working [agent-shell](https://github.com/xenodium/agent-shell)
 configuration based on agent-circus. The runner starts the harness through
 `agent-circus exec --acp`, so the editor talks to the sandbox over ACP. The
 path resolver maps file paths between your editor and the `/workspace`
-mount in the sandbox.
+mount in the sandbox. The same code is available as a package in
+[`emacs/agent-shell-circus.el`](emacs/agent-shell-circus.el); put it on
+your `load-path` and add `(require 'agent-shell-circus)` to your init file.
 
 The sandbox carries Pi, OpenCode, Claude Code, and Codex. agent-shell
 knows the harness command for every agent it supports (for example
-\='("opencode" "acp") for OpenCode); these defaults name the harnesses
+`'("opencode" "acp")` for OpenCode); these defaults name the harnesses
 that ship in the sandbox image, so the runner returns the exec prefix
-only. API keys do not go into
-this configuration; agent-circus reads them from `env_passthrough` on the
-host. If you change the mount in `[msb.mounts]`, change the workspace path
-constant to match it.
+only. API keys do not go into this configuration; agent-circus reads them
+from `env_passthrough` on the host. If you change the mount in
+`[msb.mounts]`, change `rpo/agent-shell-circus-workspace-path` to match it.
+The runner writes the agent-circus log to `/tmp/agent-circus.log`; see
+[Configuration](#configuration) for logging in ACP mode.
 
 ``` emacs-lisp
-(defconst rpo/agent-shell--msb-workspace-path "/workspace/"
-  "The workspace path inside the agent-circus sandbox.")
+(defvar rpo/agent-shell-circus-workspace-path "/workspace/"
+  "Workspace path inside the agent-circus sandbox, with a trailing slash.")
 
-(defun rpo/agent-shell--resolve-msb-path (path)
+(defun rpo/agent-shell-circus-resolve-path (path)
   "Resolve PATH between local filesystem and the sandbox workspace.
 
 For example:
@@ -440,38 +443,42 @@ For example:
     => /home/you/projects/my-project/README.md
 - /home/you/projects/my-project/README.md
     => /workspace/README.md"
-  (let ((cwd (agent-shell-cwd)))
+  (let ((cwd (agent-shell-cwd))
+        (guest-path rpo/agent-shell-circus-workspace-path))
     (if (string-prefix-p cwd path)
         ;; Local -> sandbox
-        (string-replace cwd rpo/agent-shell--msb-workspace-path path)
+        (string-replace cwd guest-path path)
       ;; Sandbox -> local
       (if agent-shell-text-file-capabilities
-          (if-let* ((_ (string-prefix-p rpo/agent-shell--msb-workspace-path path))
+          (if-let* ((_ (string-prefix-p guest-path path))
                     (local-path (expand-file-name
-                                 (string-replace rpo/agent-shell--msb-workspace-path cwd path))))
+                                 (string-replace guest-path cwd path))))
               (or
                (and (file-in-directory-p local-path cwd) local-path)
                (error "Resolves to path outside of working directory: %s" path))
             (error "Unexpected path outside of workspace folder: %s" path))
         (error "Refuse to resolve to local filesystem with text file capabilities disabled: %s" path)))))
 
-(defun rpo/agent-shell-msb-runner (_buffer)
-  "Return the agent-circus exec command prefix to run for BUFFER's agent.
+(defun rpo/agent-shell-circus-runner (_buffer)
+  "Return the agent-circus exec command prefix for any agent.
 
-This is the prefix only. agent-shell appends the agent's own ACP
-command (for example \='("opencode" "acp") for OpenCode) after the
-prefix. Those per-agent defaults name the harnesses that ship in
-the sandbox image (opencode acp, pi-acp, claude-agent-acp,
-codex-acp). Do NOT add a harness command to the prefix: the
+The prefix is the same for every agent-shell buffer, so the buffer
+argument is unused.
+
+This returns the prefix only. agent-shell appends the agent's own
+ACP command (for example \\='(\"opencode\" \"acp\") for OpenCode)
+after the prefix. Do NOT add a harness command to the prefix: the
 doubled command makes the guest harness reject its arguments."
-  (list "agent-circus" "exec" "--acp" "--"))
+  (list "agent-circus" "--log-level" "DEBUG"
+        "--log-file" "/tmp/agent-circus.log"
+        "exec" "--acp" "--"))
 
 (use-package agent-shell
   :ensure t
   :config
   (setq acp-logging-enabled t)
-  (setq agent-shell-command-prefix #'rpo/agent-shell-msb-runner)
-  (setq agent-shell-path-resolver-function #'rpo/agent-shell--resolve-msb-path)
+  (setq agent-shell-command-prefix #'rpo/agent-shell-circus-runner)
+  (setq agent-shell-path-resolver-function #'rpo/agent-shell-circus-resolve-path)
   (setq agent-shell-file-completion-enabled t))
 ```
 
