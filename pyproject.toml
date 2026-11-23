@@ -37,7 +37,7 @@ dependencies = [
     "packaging>=24.0",
     "pygithub>=2.9.1",
     "tomli-w>=1.2.0",
-    "typer>=0.21.1",
+    "typer>=0.29.1",
 ]
 
 [project.urls]
@@ -71,8 +71,8 @@ dev = [
     "importlib-resources>=5.10",
     "pre-commit>=4.5.1",
     "pytest>=9.0",
-    "ruff>=0.14.14",
-    "ty>=0.0.15",
+    "ruff>=0.17.5",
+    "ty>=0.0.104",
     "websockets>=17.4",
 ]
 
