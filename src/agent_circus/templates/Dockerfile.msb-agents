@@ -243,7 +243,12 @@ ENV NODE_OPTIONS=--max-old-space-size=4096
 # - codex-acp: its nested @openai/codex package (with a 436 MB platform
 #   package) becomes a symlink to the global @openai/codex package.
 #   Shortcut: codex-acp pins an older codex minor version (a caret range
-#   on 0.x), so it now talks to the newer global codex app-server. Without
+#   on 0.x), so it now talks to the newer global codex app-server.
+#   Note: when the global codex version already satisfies codex-acp's
+#   dependency range, npm dedupes and installs no nested copy at all;
+#   Node then resolves the global package through the normal node_modules
+#   walk-up. The step below still runs (harmless) so a future codex-acp
+#   with an unsatisfiable pin gets its nested copy replaced. Without
 #   credentials, ACP initialize and session/new gave the same answers as
 #   with the bundled copy (checked 2026-11-18); a full prompt turn was not
 #   tested. If codex-acp sessions fail, this symlink is the first suspect.
@@ -278,6 +283,7 @@ RUN --mount=type=cache,target=/root/.npm \
     done \
     && codex_acp="$g/@agentclientprotocol/codex-acp/node_modules/@openai" \
     && rm -rf "$codex_acp/codex" "$codex_acp"/codex-* \
+    && mkdir -p "$codex_acp" \
     && ln -s "$g/@openai/codex" "$codex_acp/codex" \
     && node "$codex_acp/codex/bin/codex.js" --version >/dev/null
 
