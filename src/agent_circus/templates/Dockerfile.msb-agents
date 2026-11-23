@@ -251,12 +251,12 @@ ENV NODE_OPTIONS=--max-old-space-size=4096
 RUN --mount=type=cache,target=/root/.npm \
     npm install --global \
         --allow-scripts=@opencode/cli,@anthropic-ai/claude-code \
-        @opencode/cli@2.3.2 \
-        @anthropic-ai/claude-code@2.1.327 \
-        @agentclientprotocol/claude-agent-acp@0.108.0 \
-        @openai/codex@0.170.0 \
-        @agentclientprotocol/codex-acp@2.7.0 \
-        @earendil-works/pi-coding-agent@1.5.2 pi-acp@0.0.34 \
+        @opencode/cli@2.4.1 \
+        @anthropic-ai/claude-code@2.1.330 \
+        @agentclientprotocol/claude-agent-acp@0.110.0 \
+        @openai/codex@0.171.0 \
+        @agentclientprotocol/codex-acp@2.10.0 \
+        @earendil-works/pi-coding-agent@1.6.0 pi-acp@0.0.35 \
         skills@1.9.0 \
     && g=/usr/local/lib/node_modules \
     && rm -rf "$g"/@opencode/cli/node_modules/@opencode/cli-* \
