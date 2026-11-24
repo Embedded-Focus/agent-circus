@@ -450,6 +450,7 @@ def test_hook_run_passes_env_workdir_and_mode(tmp_path, fake_msb):
     ]
     assert len(run_calls) == 1
     args = run_calls[0]
-    assert args[args.index("--env") + 1] == "FOO=bar"
+    envs = [args[i + 1] for i, a in enumerate(args) if a == "--env"]
+    assert "FOO=bar" in envs
     assert args[args.index("--workdir") + 1] == "/tmp"
     assert args[-2:] == ["provision", "ensure"]

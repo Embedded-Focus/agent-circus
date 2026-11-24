@@ -73,7 +73,7 @@ from .daemons import (
 )
 from .dashboard import DashboardCollector
 from .dashboard_http import DashboardApp
-from .envs import merged_env, parse_env_assignments
+from .envs import merged_env, parse_env_assignments, uv_project_environment
 from .exceptions import AgentCircusError, ConfigurationError, MsbCommandError
 from .exec_ import (
     S6_PID1_COMM,
@@ -2942,6 +2942,7 @@ def _ensure_sandbox_running(
             if config.sandbox.docker_disk_persist
             else None
         )
+        uv_environment = uv_project_environment(config)
         if docker_volume is not None:
             _check_docker_volume(invoker, config, docker_volume)
         _fail_on_occupied_ports(config)
@@ -2970,6 +2971,11 @@ def _ensure_sandbox_running(
                     ),
                     trust_host_cas=config.network.trust_host_cas,
                     env={
+                        **(
+                            {"UV_PROJECT_ENVIRONMENT": uv_environment}
+                            if uv_environment is not None
+                            else {}
+                        ),
                         **_sandbox_creation_env(config.env),
                         DOCKERD_SHUTDOWN_TIMEOUT_ENV_VAR: str(
                             config.sandbox.docker_stop_timeout

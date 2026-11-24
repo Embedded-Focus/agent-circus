@@ -359,8 +359,9 @@ def test_exec_passes_env_and_overrides(tmp_path, fake_msb):
     )
     assert result.exit_code == 0
     argv = fake_msb["interactive_argv"]
-    assert argv[argv.index("--env") + 1] == "OPENAI_API_KEY=sk-test"
-    assert argv[argv.index("--env", argv.index("--env") + 1) + 1] == "EXTRA=1"
+    envs = [argv[i + 1] for i, a in enumerate(argv) if a == "--env"]
+    assert "OPENAI_API_KEY=sk-test" in envs
+    assert "EXTRA=1" in envs
 
 
 def test_exec_fails_fast_on_missing_required_passthrough(tmp_path, fake_msb):

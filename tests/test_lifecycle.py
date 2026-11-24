@@ -14,7 +14,12 @@ from typer.testing import CliRunner
 
 import agent_circus.cli as cli_module
 from agent_circus.cli import _format_capacity, app
-from agent_circus.config import GUEST_HOME, parse_config, sandbox_name_for_workspace
+from agent_circus.config import (
+    GUEST_HOME,
+    UV_PROJECT_ENVIRONMENT_DEFAULT,
+    parse_config,
+    sandbox_name_for_workspace,
+)
 from agent_circus.exceptions import MsbCommandError
 from agent_circus.gitconfig import (
     GIT_GUEST_DIR,
@@ -222,10 +227,55 @@ def test_up_boots_fresh_sandbox_with_documented_workflow(tmp_path, fake_msb):
         "/var/lib/docker:kind=disk,size=10G"
     )
     assert args[args.index("--init") + 1] == "auto"
-    assert args[args.index("--env") + 1] == "CIRCUS_DOCKERD_SHUTDOWN_TIMEOUT=20"
+    envs = [args[i + 1] for i, a in enumerate(args) if a == "--env"]
+    assert envs == [
+        f"UV_PROJECT_ENVIRONMENT={UV_PROJECT_ENVIRONMENT_DEFAULT}",
+        "CIRCUS_DOCKERD_SHUTDOWN_TIMEOUT=20",
+    ]
     assert "--detach" in args
     assert args[-1] == "docker.io/library/msb-agents:26"
     assert any("dockerd is ready" in message for message in debug_messages(records))
+
+
+def test_up_injects_uv_project_environment(tmp_path, fake_msb):
+    """The default venv path is persisted in the sandbox environment."""
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    args = run_calls[0]
+    envs = [args[i + 1] for i, a in enumerate(args) if a == "--env"]
+    assert f"UV_PROJECT_ENVIRONMENT={UV_PROJECT_ENVIRONMENT_DEFAULT}" in envs
+
+
+def test_up_skips_uv_project_environment_when_disabled(tmp_path, fake_msb):
+    """[uv] project_environment = false injects nothing."""
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(b"[uv]\nproject_environment = false\n")
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    args = run_calls[0]
+    envs = [args[i + 1] for i, a in enumerate(args) if a == "--env"]
+    assert not any(e.startswith("UV_PROJECT_ENVIRONMENT=") for e in envs)
+
+
+def test_up_keeps_env_table_uv_project_environment(tmp_path, fake_msb):
+    """A user-set UV_PROJECT_ENVIRONMENT in [env] wins over the default."""
+    config_dir = tmp_path / ".agent-circus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_bytes(
+        b'[env]\nUV_PROJECT_ENVIRONMENT = "/root/venvs/workspaces"\n'
+    )
+    result = runner.invoke(app, ["up", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    run_calls = [c for c in fake_msb["calls"] if c[0] == "run"]
+    args = run_calls[0]
+    envs = [args[i + 1] for i, a in enumerate(args) if a == "--env"]
+    assert envs.count("UV_PROJECT_ENVIRONMENT=/root/venvs/workspaces") == 1
+    assert not any(
+        e == f"UV_PROJECT_ENVIRONMENT={UV_PROJECT_ENVIRONMENT_DEFAULT}" for e in envs
+    )
 
 
 def _enable_docker(tmp_path: Path, size: str = "10G") -> None:
@@ -1216,14 +1266,13 @@ def test_up_with_ssh_boots_with_vsock_route_and_env(tmp_path, fake_msb, ssh_envi
     args = run_calls[0]
     link = agent_link_path()
     assert args[args.index("--vsock") + 1] == f"{link}:22022"
-    assert args[args.index("--env") + 1] == "CIRCUS_DOCKERD_SHUTDOWN_TIMEOUT=20"
-    assert args[args.index("--env", args.index("--env") + 1) + 1] == (
-        "SSH_AUTH_SOCK=/run/ssh-agent.sock"
-    )
-    ssh_sock_idx = args.index("SSH_AUTH_SOCK=/run/ssh-agent.sock")
-    assert args[args.index("--env", ssh_sock_idx) + 1] == (
-        "CIRCUS_SSH_AGENT_VSOCK_PORT=22022"
-    )
+    envs = [args[i + 1] for i, a in enumerate(args) if a == "--env"]
+    assert envs == [
+        f"UV_PROJECT_ENVIRONMENT={UV_PROJECT_ENVIRONMENT_DEFAULT}",
+        "CIRCUS_DOCKERD_SHUTDOWN_TIMEOUT=20",
+        "SSH_AUTH_SOCK=/run/ssh-agent.sock",
+        "CIRCUS_SSH_AGENT_VSOCK_PORT=22022",
+    ]
     # msb rejects --env values with the reserved MSB_ prefix.
     env_values = [v for k, v in pairwise(args) if k == "--env"]
     assert not any(v.startswith("MSB_") for v in env_values)

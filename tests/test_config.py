@@ -1,6 +1,7 @@
 """Tests for agent-circus configuration loading."""
 
 import logging
+import re
 from pathlib import Path
 
 import pytest
@@ -40,6 +41,7 @@ def test_parse_config_returns_defaults_for_empty_dict():
     assert config.mounts == {".": "/workspace"}
     assert config.env == {}
     assert config.env_passthrough == ()
+    assert config.uv.project_environment is True
     assert config.logging_level == "INFO"
     assert config.logging_file is None
 
@@ -560,6 +562,7 @@ def test_parse_config_still_accepts_direct_msb_keys():
         ("git", {"bogus": 1}),
         ("ssh", {"bogus": 1}),
         ("hosts", {"bogus": 1}),
+        ("uv", {"bogus": 1}),
     ],
 )
 def test_parse_config_rejects_unknown_subtable_keys(table, raw):
@@ -643,6 +646,29 @@ def test_parse_config_accepts_1x_style_port_forward():
     )
     assert config.port_forwards[0].guest_port == 4096
     assert config.port_forwards[0].host_port == 4097
+
+
+def test_parse_config_uv_table():
+    """[uv] project_environment parses; absence keeps the default."""
+    assert parse_config({}).uv.project_environment is True
+    assert parse_config({"uv": {}}).uv.project_environment is True
+    assert parse_config({"uv": {"project_environment": True}}).uv.project_environment
+    assert not parse_config(
+        {"uv": {"project_environment": False}}
+    ).uv.project_environment
+
+
+def test_parse_config_uv_rejects_non_boolean():
+    with pytest.raises(
+        ConfigurationError,
+        match=re.escape("uv.project_environment must be a boolean"),
+    ):
+        parse_config({"uv": {"project_environment": "off"}})
+
+
+def test_parse_config_uv_rejects_non_table():
+    with pytest.raises(ConfigurationError, match="uv must be a table"):
+        parse_config({"uv": False})
 
 
 def test_merge_layers_merges_tables_and_keeps_user_keys(tmp_path):

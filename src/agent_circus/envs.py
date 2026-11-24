@@ -8,13 +8,16 @@ import re
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
-from .config import SSH_AGENT_GUEST_SOCKET
+from .config import SSH_AGENT_GUEST_SOCKET, UV_PROJECT_ENVIRONMENT_DEFAULT
 from .exceptions import ConfigurationError
 
 if TYPE_CHECKING:
     from .config import AgentCircusConfig
 
 REDACTED = "<redacted>"
+
+#: Name of the environment variable uv reads for the project venv path.
+UV_PROJECT_ENVIRONMENT = "UV_PROJECT_ENVIRONMENT"
 
 #: Characters that turn a plain name into a glob pattern (like agent-circus).
 _GLOB_CHARS = "*?["
@@ -132,6 +135,31 @@ def quote_shell_word(value: str) -> str:
     return '"' + "".join(out) + '"'
 
 
+def uv_project_environment(config: AgentCircusConfig) -> str | None:
+    """Return the ``UV_PROJECT_ENVIRONMENT`` value to inject, if any.
+
+    Returns :data:`agent_circus.config.UV_PROJECT_ENVIRONMENT_DEFAULT`
+    when ``[uv] project_environment`` is enabled (the default) and the
+    user did not set ``UV_PROJECT_ENVIRONMENT`` in ``[env]``. Returns
+    ``None`` when the feature is disabled or the user set their own
+    value; nothing is injected then and uv falls back to its default
+    per-project ``.venv``.
+
+    The injected path is absolute and fixed, so every uv project in the
+    sandbox shares one environment: uv overwrites it on every sync (the
+    uv docs recommend a fixed absolute path for a single project in CI
+    or Docker images, which a one-workspace sandbox matches).
+
+    :param config: Resolved agent-circus configuration.
+    :returns: The venv path to inject, or ``None``.
+    """
+    if not config.uv.project_environment:
+        return None
+    if "UV_PROJECT_ENVIRONMENT" in config.env:
+        return None
+    return UV_PROJECT_ENVIRONMENT_DEFAULT
+
+
 def merged_env(
     config: AgentCircusConfig,
     env_passthrough: tuple[str, ...],
@@ -141,9 +169,11 @@ def merged_env(
 ) -> tuple[dict[str, str], frozenset[str]]:
     """Return the environment of a daemon or hook, plus its shell words.
 
-    In increasing precedence: the ``[env]`` variables, the
-    top-level ``env_passthrough`` variables, ``SSH_AUTH_SOCK`` (when
-    ``[ssh]`` is configured), *env_passthrough*, and *env*.
+    In increasing precedence: the injected ``UV_PROJECT_ENVIRONMENT``
+    (when ``[uv] project_environment`` is enabled), the ``[env]``
+    variables, the top-level ``env_passthrough`` variables,
+    ``SSH_AUTH_SOCK`` (when ``[ssh]`` is configured), *env_passthrough*,
+    and *env*.
 
     Values are classified by origin and content: user-authored values
     (``[env]`` and *env*) containing ``$`` are guest shell
@@ -170,6 +200,9 @@ def merged_env(
         merged.update(values)
         origins.update(dict.fromkeys(values, shell_word))
 
+    uv_environment = uv_project_environment(config)
+    if uv_environment is not None:
+        put({UV_PROJECT_ENVIRONMENT: uv_environment}, shell_word=False)
     put(config.env, shell_word=True)
     put(resolve_passthrough(config.env_passthrough, environ=environ), shell_word=False)
     if config.ssh:

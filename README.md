@@ -790,6 +790,11 @@ patterns = []                          # globs or re:-prefixed regexes
                                        # $XDG_CONFIG_HOME/git/config
 # signing_key_path = "~/.ssh/id_ed25519.pub"  # SSH public key
 # worktree_mirror = true               # default; see "Git Worktrees"
+
+[uv]                                   # uv project environment; see
+                                       # "Python Virtual Environments (uv)"
+# project_environment = true           # default; set UV_PROJECT_ENVIRONMENT
+                                       # in the sandbox
 ```
 
 All fields are optional. The values above are the defaults. The
@@ -899,6 +904,54 @@ For values that are not secret and do not change, use `[env]` instead.
 Daemons are different: s6 starts them in the guest, not `agent-circus exec`,
 so their variables must be stored in the guest. See
 [Daemon Secrets](#daemon-secrets).
+
+## Python Virtual Environments (uv)
+
+A Python virtual environment on the workspace share cannot run its native
+binaries inside the sandbox: the virtiofs mount denies execution, and
+commands like `uv run ruff` fail with `Permission denied (os error 13)`.
+
+To avoid this, agent-circus sets the `UV_PROJECT_ENVIRONMENT` variable in
+the sandbox by default (see the
+[uv documentation](https://docs.astral.sh/uv/concepts/projects/config/#project-environment-path)).
+The variable points to a fixed path on the guest root filesystem:
+
+``` text
+UV_PROJECT_ENVIRONMENT=/root/venvs/workspace
+```
+
+The guest root filesystem can execute native binaries, so `uv sync` and
+`uv run` work. The path is absolute, so uv creates the environment there
+instead of the default `.venv` in the project directory. agent-circus
+injects the variable at sandbox creation and passes it with every `exec`,
+hook, and daemon, so all uv commands see it.
+
+This fits the uv documentation's advice to use a fixed absolute path for
+a single project in CI or Docker images: a sandbox with one workspace
+project is exactly that case.
+
+### Limitations and Opt-Out
+
+The fixed path means every uv project in the sandbox shares one
+environment. uv overwrites it on every sync: packages of another project
+under `/workspace` (or under an `additional_dirs` mount) get uninstalled.
+If you work on several projects in one sandbox, opt out:
+
+``` toml
+[uv]
+project_environment = false
+```
+
+With the opt-out, uv uses its default per-project `.venv` again: every
+project gets its own environment, but a venv on the workspace share
+cannot execute native binaries in the sandbox (see above). If you want a
+custom location instead, set `UV_PROJECT_ENVIRONMENT` in the `[env]`
+table; it always wins over the injected default, and you do not need the
+opt-out for that.
+
+Changes to `[uv]` or to `UV_PROJECT_ENVIRONMENT` in `[env]` apply to new
+sandboxes. Re-create a running sandbox (`agent-circus rm -f && agent-circus
+up`) to apply them.
 
 ## Networking
 

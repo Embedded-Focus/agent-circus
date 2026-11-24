@@ -57,6 +57,7 @@ SUPPORTED_TOP_LEVEL_KEYS: frozenset[str] = frozenset(
         "skills",
         "daemons",
         "hooks",
+        "uv",
     }
 )
 
@@ -142,6 +143,15 @@ GUEST_HOME = "/root"
 #: Sandbox env var read by the image's dockerd service (seconds at
 #: shutdown). Not prefixed with ``MSB_``: msb reserves that prefix.
 DOCKERD_SHUTDOWN_TIMEOUT_ENV_VAR = "CIRCUS_DOCKERD_SHUTDOWN_TIMEOUT"
+
+#: Default guest venv path injected as ``UV_PROJECT_ENVIRONMENT`` (see
+#: ``[uv] project_environment``). The venv lives on the guest root
+#: filesystem, which can execute native binaries; a venv on the virtiofs
+#: workspace share cannot (microsandbox denies it, os error 13). All uv
+#: projects in the sandbox share this one environment: uv overwrites it
+#: on every sync (uv docs recommend a fixed absolute path for a single
+#: project in CI or Docker images).
+UV_PROJECT_ENVIRONMENT_DEFAULT = f"{GUEST_HOME}/venvs/workspace"
 
 #: Host file that ``[hosts]`` entries are read from.
 DEFAULT_HOSTS_FILE = "/etc/hosts"
@@ -517,6 +527,21 @@ class HostsConfig:
 
 
 @dataclass(frozen=True)
+class UVConfig:
+    """uv project environment settings (``[uv]``).
+
+    :ivar project_environment: When true (the default), agent-circus sets
+        ``UV_PROJECT_ENVIRONMENT`` to :data:`UV_PROJECT_ENVIRONMENT_DEFAULT`
+        in the sandbox, so uv project venvs live on the guest root
+        filesystem instead of the workspace share. Set it to ``false`` to
+        opt out and manage ``UV_PROJECT_ENVIRONMENT`` (or per-project
+        ``.venv`` directories) yourself.
+    """
+
+    project_environment: bool = True
+
+
+@dataclass(frozen=True)
 class AgentCircusConfig:
     """Resolved agent-circus configuration.
 
@@ -551,6 +576,7 @@ class AgentCircusConfig:
     :ivar git_worktree_mirror_explicit: Whether ``[git] worktree_mirror``
         is set in the configuration.
     :ivar git: Git settings; ``None`` when the ``[git]`` table is absent.
+    :ivar uv: uv project environment settings (``[uv]``).
     :ivar ssh: SSH agent forwarding settings; ``None`` disables forwarding.
     :ivar hosts: Host entry forwarding; ``None`` disables it.
     :ivar logging_level: Log level for agent-circus's own logging.
@@ -574,6 +600,7 @@ class AgentCircusConfig:
     git_worktree_mirror: bool = False
     git_worktree_mirror_explicit: bool = False
     git: GitConfig | None = None
+    uv: UVConfig = field(default_factory=UVConfig)
     ssh: SshConfig | None = None
     hosts: HostsConfig | None = None
     logging_level: str = "INFO"
@@ -1664,6 +1691,28 @@ def _parse_git(raw: Any) -> GitConfig | None:
     )
 
 
+def _parse_uv(raw: Any) -> UVConfig:
+    """Parse the ``[uv]`` table.
+
+    :param raw: Raw table value or ``None``.
+    :returns: Parsed settings.
+    :raises ConfigurationError: If the table is malformed.
+    """
+    if raw is None:
+        return UVConfig()
+    if not isinstance(raw, dict):
+        raise ConfigurationError("uv must be a table")
+    _reject_unknown_keys(raw, "uv", ("project_environment",))
+    project_environment = raw.get("project_environment")
+    if project_environment is not None and not isinstance(project_environment, bool):
+        raise ConfigurationError("uv.project_environment must be a boolean")
+    return UVConfig(
+        project_environment=(
+            True if project_environment is None else project_environment
+        )
+    )
+
+
 def _parse_ssh(raw: Any) -> SshConfig | None:
     """Parse the ``[ssh]`` table.
 
@@ -1898,6 +1947,7 @@ def parse_config(config: dict[str, Any]) -> AgentCircusConfig:
             git.worktree_mirror_explicit if git is not None else False
         ),
         git=git,
+        uv=_parse_uv(config.get("uv")),
         ssh=_parse_ssh(config.get("ssh")),
         hosts=_parse_hosts(config.get("hosts")),
         logging_level=level,
