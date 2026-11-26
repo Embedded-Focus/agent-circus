@@ -81,7 +81,9 @@ def _bundled_msb_path() -> Path | None:
     :returns: Path to the bundled binary, or ``None`` if unavailable.
     """
     try:
-        from microsandbox._microsandbox import resolved_cli_msb_path
+        # Compiled extension module without type stubs; the runtime import
+        # is real and guarded below.
+        from microsandbox._microsandbox import resolved_cli_msb_path  # ty: ignore[import-not-found]
     except ImportError:
         return None
     path = Path(resolved_cli_msb_path())
