@@ -261,8 +261,8 @@ RUN --mount=type=cache,target=/root/.npm \
         @agentclientprotocol/claude-agent-acp@0.113.0 \
         @openai/codex@0.172.0 \
         @agentclientprotocol/codex-acp@2.12.1 \
-        @earendil-works/pi-coding-agent@1.6.1 pi-acp@0.0.35 \
-        skills@1.9.0 \
+        @earendil-works/pi-coding-agent@1.7.0 pi-acp@0.0.35 \
+        skills@1.9.1 \
     && g=/usr/local/lib/node_modules \
     && rm -rf "$g"/@opencode/cli/node_modules/@opencode/cli-* \
     && opencode --version >/dev/null \
