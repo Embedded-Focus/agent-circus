@@ -5,7 +5,8 @@ is an opt-in feature and agent-circus has no runtime dependencies beyond
 msb itself. This module implements the server side of RFC 6455 on the
 standard library only: the upgrade handshake, a frame codec and a
 :class:`WebSocket` class for one connection. No extensions, no
-subprotocols, no compression.
+compression. The handshake can echo one application-selected
+subprotocol. The caller chooses the value.
 """
 
 from __future__ import annotations
@@ -103,19 +104,23 @@ def check_upgrade(head: bytes) -> str:
     return key
 
 
-def handshake_response(key: str) -> bytes:
+def handshake_response(key: str, subprotocol: str | None = None) -> bytes:
     """Return the ``101 Switching Protocols`` response head.
 
     :param key: The validated Sec-WebSocket-Key.
+    :param subprotocol: The one selected subprotocol to echo back, or
+        ``None`` when the request offered none and none was selected.
     :returns: The complete response head bytes.
     """
-    return (
+    head = (
         "HTTP/1.1 101 Switching Protocols\r\n"
         "Upgrade: websocket\r\n"
         "Connection: Upgrade\r\n"
         f"Sec-WebSocket-Accept: {accept_key(key)}\r\n"
-        "\r\n"
-    ).encode()
+    )
+    if subprotocol is not None:
+        head += f"Sec-WebSocket-Protocol: {subprotocol}\r\n"
+    return (head + "\r\n").encode()
 
 
 def encode_frame(opcode: int, payload: bytes) -> bytes:

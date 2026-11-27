@@ -11,8 +11,9 @@ import websockets.exceptions
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from websockets.typing import Origin
+    from websockets.typing import Origin, Subprotocol
 
+from agent_circus.browser_protocol import BROWSER_PROTOCOL_SUBPROTOCOL
 from agent_circus.websocket import (
     MAX_MESSAGE_BYTES,
     OP_BINARY,
@@ -71,6 +72,18 @@ def test_handshake_response_contains_accept():
     response = handshake_response("dGhlIHNhbXBsZSBub25jZQ==")
     assert response.startswith(b"HTTP/1.1 101 Switching Protocols\r\n")
     assert b"Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=" in response
+
+
+def test_handshake_response_echoes_selected_subprotocol():
+    response = handshake_response("dGhlIHNhbXBsZSBub25jZQ==", "agent-circus.v1")
+    assert b"Sec-WebSocket-Protocol: agent-circus.v1\r\n" in response
+    assert b"Sec-WebSocket-Accept" in response
+
+
+def test_handshake_response_without_subprotocol_is_unchanged():
+    response = handshake_response("dGhlIHNhbXBsZSBub25jZQ==")
+    assert b"Sec-WebSocket-Protocol" not in response
+    assert response.endswith(b"\r\n\r\n")
 
 
 def test_encode_frame_lengths():
@@ -240,6 +253,59 @@ def test_client_close_ends_recv():
             await ws.close()
 
     _run_server_test(handler, client)
+
+
+# ---- browser subprotocol regression ----------------------------------------
+
+
+def test_new_browser_against_old_proxy_never_sends_hello():
+    """A version 1 page must not send hello to a proxy without it.
+
+    Simulates an old server: it completes the upgrade but does not echo
+    a Sec-WebSocket-Protocol header. The browser rule (compare the
+    selected subprotocol before the first message) must close the
+    connection so the old proxy never sees a hello message.
+    """
+    received_messages: list[bytes] = []
+
+    async def handler(reader, writer):
+        # Old-server handshake: accept the key, echo no subprotocol.
+        head = await reader.readuntil(b"\r\n\r\n")
+        key = check_upgrade(head)
+        writer.write(handshake_response(key))
+        await writer.drain()
+        try:
+            while True:
+                frame = await reader.read(4096)
+                if not frame:
+                    break
+                received_messages.append(frame)
+        except ConnectionError:
+            pass
+
+    async def scenario():
+        server = await asyncio.start_server(handler, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        try:
+            async with await websockets.asyncio.client.connect(
+                f"ws://127.0.0.1:{port}/api/shell",
+                origin=cast("Origin", "http://localhost:7700"),
+                subprotocols=cast("list[Subprotocol]", [BROWSER_PROTOCOL_SUBPROTOCOL]),
+                open_timeout=5,
+                close_timeout=1,
+            ) as ws:
+                # The old proxy echoed nothing, so the selection is empty.
+                assert ws.subprotocol is None
+                # Apply the browser rule: close without sending hello.
+                assert ws.subprotocol != BROWSER_PROTOCOL_SUBPROTOCOL
+                await ws.close(4406)
+        finally:
+            server.close()
+            await server.wait_closed()
+
+    asyncio.run(scenario())
+    hello_frames = [m for m in received_messages if b"hello" in m]
+    assert hello_frames == [], "the old proxy must not receive a hello message"
 
 
 # ---- raw socket tests (frames the library refuses to send) -----------------

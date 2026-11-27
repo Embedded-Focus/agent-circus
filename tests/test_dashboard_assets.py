@@ -9,6 +9,7 @@ import pytest
 
 from agent_circus.browser_protocol import (
     BROWSER_PROTOCOL_HEADER,
+    BROWSER_PROTOCOL_SUBPROTOCOL,
     BROWSER_PROTOCOL_VERSION,
 )
 
@@ -149,6 +150,23 @@ def test_dashboard_js_has_fatal_protocol_mismatch_path():
     assert "This page is incompatible with the running proxy. Reload the page." in js
 
 
+def test_dashboard_js_both_api_paths_use_fatal_rejection_helper():
+    """A 409 from state polling and from the log dialog must both set
+    the fatal state; a log path that only throws would keep polling."""
+    js = _js()
+    assert "function handleProtocolRejection(response)" in js
+    assert "handleProtocolRejection(response)" in js
+    # Both call sites go through the helper (plus its definition).
+    assert js.count("handleProtocolRejection(response)") == 3
+    # The helper itself sets the fatal state and renders the banner.
+    helper_at = js.index("function handleProtocolRejection")
+    helper_body = js[helper_at : js.index("}", helper_at)]
+    assert "setProtocolError()" in helper_body
+    assert "renderBanner(state.data)" in helper_body
+    # No call site keeps the old direct 409 comparison.
+    assert js.count("response.status === 409") == 0
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_dashboard_js_parses():
     result = subprocess.run(
@@ -227,6 +245,31 @@ def test_shell_js_protocol_version_matches_python():
     match = re.search(r"var BROWSER_PROTOCOL_VERSION = (\d+);", js)
     assert match, "shell.js has no BROWSER_PROTOCOL_VERSION"
     assert int(match.group(1)) == BROWSER_PROTOCOL_VERSION
+
+
+def test_shell_js_subprotocol_matches_python():
+    js = _shell_js()
+    match = re.search(r'var BROWSER_PROTOCOL_SUBPROTOCOL = "([^"]+)";', js)
+    assert match, "shell.js has no BROWSER_PROTOCOL_SUBPROTOCOL"
+    assert match.group(1) == BROWSER_PROTOCOL_SUBPROTOCOL
+
+
+def test_shell_js_compares_subprotocol_before_hello():
+    js = _shell_js()
+    # The page requests the subprotocol in the WebSocket constructor.
+    constructor_at = js.index("new WebSocket(")
+    assert (
+        "BROWSER_PROTOCOL_SUBPROTOCOL"
+        in js[constructor_at : js.index(";", constructor_at)]
+    )
+    # ws.protocol is compared in onopen, and the mismatch path closes
+    # with a return before the first ws.send call.
+    onopen_at = js.index("ws.onopen")
+    send_at = js.index("ws.send(", onopen_at)
+    onopen_before_send = js[onopen_at:send_at]
+    assert "ws.protocol !== BROWSER_PROTOCOL_SUBPROTOCOL" in onopen_before_send
+    assert "ws.close(" in onopen_before_send
+    assert "return;" in onopen_before_send
 
 
 def test_shell_js_has_fatal_protocol_mismatch_path():

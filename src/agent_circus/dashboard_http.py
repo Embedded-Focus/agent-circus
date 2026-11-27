@@ -24,6 +24,7 @@ from urllib.parse import parse_qs
 
 from .browser_protocol import (
     BROWSER_PROTOCOL_HEADER,
+    BROWSER_PROTOCOL_SUBPROTOCOL,
     BROWSER_PROTOCOL_VERSION,
     INCOMPATIBLE_PROTOCOL_MESSAGE,
     parse_header_version,
@@ -195,6 +196,29 @@ def _protocol_rejection(received: int | None) -> bytes:
     return http_response(409, "Conflict", body, "application/json")
 
 
+def _negotiate_subprotocol(head: bytes) -> tuple[str | None, bool]:
+    """Select the shell subprotocol from the offer in a request head.
+
+    The caller keeps the policy; this helper only parses the offer.
+    A request without a ``Sec-WebSocket-Protocol`` header selects
+    nothing, so an old page still completes the upgrade and fails in
+    the versioned hello message.
+
+    :param head: Raw request head bytes.
+    :returns: ``(selected, offered)``. *selected* is
+        BROWSER_PROTOCOL_SUBPROTOCOL when the offer includes it, else
+        ``None``. *offered* is ``True`` when the request offered any
+        subprotocol.
+    """
+    header = parse_headers(head).get("sec-websocket-protocol")
+    if header is None:
+        return None, False
+    offered_values = {value.strip() for value in header.split(",")}
+    if BROWSER_PROTOCOL_SUBPROTOCOL in offered_values:
+        return BROWSER_PROTOCOL_SUBPROTOCOL, True
+    return None, True
+
+
 class DashboardApp:
     """Answer dashboard requests on behalf of the proxy.
 
@@ -298,9 +322,10 @@ class DashboardApp:
     ) -> None:
         """Handle one ``/api/shell`` WebSocket upgrade and session.
 
-        The Origin check and the handshake checks happen before the
-        upgrade and answer with plain HTTP. After the upgrade the shell
-        manager owns the connection.
+        The Origin check, the handshake checks, the sandbox check and
+        the subprotocol negotiation happen before the upgrade and answer
+        with plain HTTP. After the upgrade the shell manager owns the
+        connection.
 
         :param head: Raw request head bytes.
         :param reader: Client-side stream reader.
@@ -348,7 +373,22 @@ class DashboardApp:
             client = f"{peername[0]}:{peername[1]}"
         else:
             client = "-"
-        writer.write(handshake_response(key))
+        selected, offered = _negotiate_subprotocol(head)
+        if offered and selected is None:
+            # An offered but unsupported subprotocol cannot reach the
+            # shell manager: the page expects a protocol we do not speak.
+            writer.write(
+                http_response(
+                    400,
+                    "Bad Request",
+                    b"Unsupported browser protocol\n",
+                    "text/plain; charset=utf-8",
+                )
+            )
+            await writer.drain()
+            writer.close()
+            return
+        writer.write(handshake_response(key, selected))
         await writer.drain()
         ws = WebSocket(reader, writer)
         try:

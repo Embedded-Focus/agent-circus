@@ -8,6 +8,14 @@ version in the ``X-Agent-Circus-Protocol-Version`` request header; the
 ``protocol_version`` field; a shell client sends it as the
 ``protocol_version`` field of its first ``hello`` message.
 
+The WebSocket shell also negotiates a subprotocol during the HTTP
+upgrade. A client requests :data:`BROWSER_PROTOCOL_SUBPROTOCOL` in the
+``Sec-WebSocket-Protocol`` header. A proxy that supports the version
+echoes the selected value in its ``101`` response; an old proxy echoes
+nothing, so the client can detect the mismatch before it sends its
+first message. A client without an offer still completes the upgrade
+and is rejected through the versioned ``hello`` message instead.
+
 The package version (``agent_circus.__version__``) is separate: a
 package release does not imply a protocol change. Increase
 :data:`BROWSER_PROTOCOL_VERSION` only for a breaking change, such as
@@ -34,6 +42,10 @@ BROWSER_PROTOCOL_VERSION = 1
 #: HTTP request header that carries :data:`BROWSER_PROTOCOL_VERSION`.
 BROWSER_PROTOCOL_HEADER = "X-Agent-Circus-Protocol-Version"
 
+#: WebSocket subprotocol that a shell client offers during the upgrade.
+#: Derived from the version, so a version increase changes the value.
+BROWSER_PROTOCOL_SUBPROTOCOL = f"agent-circus.v{BROWSER_PROTOCOL_VERSION}"
+
 #: Private WebSocket close code for an incompatible application
 #: protocol. The 4xxx range is application specific and never collides
 #: with the registered RFC 6455 codes.
@@ -53,6 +65,11 @@ _DECIMAL_INTEGER = re.compile(r"[0-9]+")
 def parse_header_version(value: str | None) -> int | None:
     """Return the protocol version from an HTTP header value.
 
+    The parser is total: it returns a value for every input and never
+    raises. A very long numeric string would otherwise make ``int``
+    raise, and the proxy must answer a malformed request with the
+    structured 409 error, not with a connection failure.
+
     :param value: Header value (already stripped), or ``None`` when the
         header is missing.
     :returns: The version integer, or ``None`` when the value is
@@ -60,7 +77,10 @@ def parse_header_version(value: str | None) -> int | None:
     """
     if value is None or not _DECIMAL_INTEGER.fullmatch(value):
         return None
-    return int(value, 10)
+    try:
+        return int(value, 10)
+    except ValueError:
+        return None
 
 
 def parse_hello_version(value: Any) -> int | None:

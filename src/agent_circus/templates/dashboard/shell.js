@@ -12,6 +12,8 @@
   // authoritative source). Increase it there and here only for a
   // breaking protocol change.
   var BROWSER_PROTOCOL_VERSION = 1;
+  // Copy of the WebSocket subprotocol in agent_circus.browser_protocol.
+  var BROWSER_PROTOCOL_SUBPROTOCOL = "agent-circus.v1";
   var INCOMPATIBLE_PROTOCOL_CLOSE_CODE = 4406;
   var INCOMPATIBLE_PROTOCOL_MESSAGE =
     "This page is incompatible with the running proxy. Reload the page.";
@@ -295,10 +297,19 @@
       proto +
         window.location.host +
         "/api/shell?sandbox=" +
-        encodeURIComponent(sandbox)
+        encodeURIComponent(sandbox),
+      BROWSER_PROTOCOL_SUBPROTOCOL
     );
     ws.binaryType = "arraybuffer";
     ws.onopen = function () {
+      // An old proxy completes the upgrade but echoes no subprotocol.
+      // Sending hello would start a shell that this page may not speak
+      // to, so close before the first message.
+      if (ws.protocol !== BROWSER_PROTOCOL_SUBPROTOCOL) {
+        lastError = INCOMPATIBLE_PROTOCOL_MESSAGE;
+        ws.close(INCOMPATIBLE_PROTOCOL_CLOSE_CODE);
+        return;
+      }
       ws.send(
         JSON.stringify({
           type: "hello",

@@ -94,8 +94,17 @@
   }
 
   /** Enter the fatal mismatch state. Only a page reload recovers. */
-  function setProtocolError(received) {
+  function setProtocolError() {
     state.protocolError = INCOMPATIBLE_PROTOCOL_MESSAGE;
+  }
+
+  /** Handle a protocol rejection from any API call. Returns true when
+      the response was one, so the caller stops its request flow. */
+  function handleProtocolRejection(response) {
+    if (response.status !== 409) return false;
+    setProtocolError();
+    renderBanner(state.data);
+    return true;
   }
 
   // ---- shell token and buttons ----------------------------------------------
@@ -1459,7 +1468,7 @@
     el("log-body").textContent = "Loading…";
     fetchApi(url)
       .then(function (response) {
-        if (response.status === 409) {
+        if (handleProtocolRejection(response)) {
           throw new Error(INCOMPATIBLE_PROTOCOL_MESSAGE);
         }
         if (!response.ok) throw new Error("HTTP " + response.status);
@@ -1510,24 +1519,18 @@
     var url = scope === null ? "/api/state" : "/api/state?sandbox=" + scope;
     fetchApi(url)
       .then(function (response) {
-        if (response.status === 409) {
-          // The proxy reports an incompatible protocol before any work.
-          return response.json().then(function (body) {
-            setProtocolError(body && body.received);
-          });
+        if (handleProtocolRejection(response)) {
+          return null; // the banner shows the reload message, polling stops
         }
         if (!response.ok) throw new Error("HTTP " + response.status);
         return response.json();
       })
       .then(function (data) {
-        if (state.protocolError) {
-          renderBanner(state.data);
-          return; // do not schedule another poll
-        }
+        if (data === null) return; // the rejection is already handled
         if (!isCompatibleState(data)) {
           // The answer is missing or speaks another protocol version;
           // its fields may not match this page's expectations.
-          setProtocolError(data && data.protocol_version);
+          setProtocolError();
           renderBanner(state.data);
           return;
         }

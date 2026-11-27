@@ -11,6 +11,7 @@ import pytest
 
 from agent_circus.browser_protocol import (
     BROWSER_PROTOCOL_HEADER,
+    BROWSER_PROTOCOL_SUBPROTOCOL,
     BROWSER_PROTOCOL_VERSION,
 )
 from agent_circus.dashboard_http import STATIC_FILES, DashboardApp, is_dashboard_host
@@ -18,7 +19,7 @@ from agent_circus.proxy import RouterLookup
 from agent_circus.proxy_stats import ConnectionTracker
 
 if TYPE_CHECKING:
-    from websockets.typing import Origin
+    from websockets.typing import Origin, Subprotocol
 
     from agent_circus.dashboard import DashboardCollector
 
@@ -227,6 +228,26 @@ def test_api_state_unsupported_version_is_409_with_received_value():
     body = json.loads(response.split(b"\r\n\r\n", 1)[1])
     assert body["expected"] == BROWSER_PROTOCOL_VERSION
     assert body["received"] == 2
+
+
+def test_api_state_huge_numeric_header_is_409_with_null_received():
+    """A 4,301-digit header must give the structured 409, not a crash.
+
+    Python raises ValueError for an integer this long; the parser must
+    treat it as malformed instead of letting the exception escape.
+    """
+    collector = FakeCollector({"name": "agents-foo"})
+    app = _app(collector)
+    head = (
+        f"GET /api/state HTTP/1.1\r\nHost: localhost\r\n"
+        f"{BROWSER_PROTOCOL_HEADER}: {'1' * 4301}\r\n\r\n"
+    ).encode()
+    response = _respond(head, app)
+    assert response.startswith(b"HTTP/1.1 409 Conflict")
+    body = json.loads(response.split(b"\r\n\r\n", 1)[1])
+    assert body["error"] == "incompatible_protocol"
+    assert body["received"] is None
+    assert collector.calls == 0
 
 
 def test_rejected_state_request_skips_collector():
@@ -622,7 +643,11 @@ from agent_circus.proxy import handle as proxy_handle
 from agent_circus.webshell import ShellManager
 
 
-def _upgrade_head(port: int, origin: str | None = "http://localhost:7700") -> bytes:
+def _upgrade_head(
+    port: int,
+    origin: str | None = "http://localhost:7700",
+    subprotocol: str | None = None,
+) -> bytes:
     lines = [
         "GET /api/shell?sandbox=agents-foo HTTP/1.1",
         f"Host: localhost:{port}",
@@ -633,6 +658,8 @@ def _upgrade_head(port: int, origin: str | None = "http://localhost:7700") -> by
     ]
     if origin is not None:
         lines.append(f"Origin: {origin}")
+    if subprotocol is not None:
+        lines.append(f"Sec-WebSocket-Protocol: {subprotocol}")
     return ("\r\n".join(lines) + "\r\n\r\n").encode()
 
 
@@ -734,6 +761,53 @@ def test_shell_rejects_invalid_sandbox_name_with_400():
     assert data.startswith(b"HTTP/1.1 400 Bad Request")
 
 
+# ---- shell subprotocol negotiation ------------------------------------------
+
+
+def test_shell_accepts_supported_subprotocol_and_echoes_it():
+    app = _shell_app(
+        ShellManager(token="t", argv_factory=lambda s, w: [], notify=lambda l: None)
+    )
+    data = _raw_exchange(_upgrade_head(7700, subprotocol="agent-circus.v1"), app)
+    assert data.startswith(b"HTTP/1.1 101 Switching Protocols")
+    assert b"Sec-WebSocket-Protocol: agent-circus.v1" in data
+
+
+def test_shell_accepts_comma_separated_offer_with_supported_value():
+    app = _shell_app(
+        ShellManager(token="t", argv_factory=lambda s, w: [], notify=lambda l: None)
+    )
+    head = _upgrade_head(7700, subprotocol="other.v9, agent-circus.v1")
+    data = _raw_exchange(head, app)
+    assert data.startswith(b"HTTP/1.1 101 Switching Protocols")
+    assert b"Sec-WebSocket-Protocol: agent-circus.v1" in data
+
+
+def test_shell_rejects_unknown_subprotocol_with_400():
+    factory_calls = []
+    app = _shell_app(
+        ShellManager(
+            token="t",
+            argv_factory=lambda s, w: factory_calls.append((s, w)) or [],
+            notify=lambda l: None,
+        )
+    )
+    data = _raw_exchange(_upgrade_head(7700, subprotocol="agent-circus.v2"), app)
+    assert data.startswith(b"HTTP/1.1 400 Bad Request")
+    assert b"Unsupported browser protocol" in data
+    assert factory_calls == [], "an unsupported offer must not start a shell"
+
+
+def test_shell_without_subprotocol_reaches_hello_validation():
+    """An old page (no offer) upgrades and fails in the hello check."""
+    app = _shell_app(
+        ShellManager(token="t", argv_factory=lambda s, w: [], notify=lambda l: None)
+    )
+    data = _raw_exchange(_upgrade_head(7700), app)
+    assert data.startswith(b"HTTP/1.1 101 Switching Protocols")
+    assert b"Sec-WebSocket-Protocol" not in data
+
+
 def test_shell_disabled_by_default_closes_with_4503():
     app = _shell_app(
         ShellManager(token=None, argv_factory=lambda s, w: [], notify=lambda l: None)
@@ -821,8 +895,10 @@ def test_shell_end_to_end_through_proxy_handle(tmp_path):
             async with await ws_client.connect(
                 f"ws://127.0.0.1:{port}/api/shell?sandbox=agents-foo",
                 origin=cast("Origin", "http://localhost:7700"),
+                subprotocols=cast("list[Subprotocol]", [BROWSER_PROTOCOL_SUBPROTOCOL]),
                 open_timeout=5,
             ) as ws:
+                assert ws.subprotocol == BROWSER_PROTOCOL_SUBPROTOCOL
                 await ws.send(
                     json.dumps(
                         {
