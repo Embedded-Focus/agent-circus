@@ -1,8 +1,47 @@
 """Shared test isolation fixtures."""
 
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
+
+import agent_circus.cli as cli_module
+
+
+@pytest.fixture
+def fake_msb(monkeypatch):
+    """Patch the CLI to use a fake msb binary returning canned JSON.
+
+    ``list`` calls return ``calls["stdout"]``, ``inspect`` calls return
+    ``calls["inspect_stdout"]`` (default: no ports). Every invocation is
+    recorded in ``calls["invocations"]``.
+    """
+    calls: dict[str, Any] = {"invocations": []}
+
+    class FakeInvoker:
+        def __init__(self, binary: Path) -> None:
+            calls["binary"] = binary
+
+        def run(self, args, **kwargs):
+            calls["args"] = args
+            calls["invocations"].append(args)
+            stdout = (
+                calls["inspect_stdout"]
+                if args and args[0] == "inspect"
+                else calls["stdout"]
+            )
+            return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    def setup(stdout: str) -> None:
+        calls["stdout"] = stdout
+        calls.setdefault("inspect_stdout", '{"config": {}}')
+        monkeypatch.setattr(cli_module, "resolve_msb_binary", lambda b: Path("/fake"))
+        monkeypatch.setattr(cli_module, "check_version", lambda binary: "0.7.12")
+        monkeypatch.setattr(cli_module, "MsbInvoker", FakeInvoker)
+
+    setup("[]")
+    return calls
 
 
 @pytest.fixture(autouse=True)
