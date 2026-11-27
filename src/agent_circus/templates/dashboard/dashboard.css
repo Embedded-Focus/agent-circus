@@ -432,6 +432,96 @@ button {
   font-size: 12px;
 }
 
+/* Resource metric rows (cards) and charts (detail view) */
+
+.res-rows {
+  margin: 2px 0 8px;
+  border-top: 1px solid var(--border);
+}
+
+.res-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  min-width: 0;
+}
+
+.res-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  flex: 0 0 6.5em;
+}
+
+.res-row .res-label {
+  flex-basis: 5.5em;
+}
+
+.res-value {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.res-row .res-value {
+  flex: 1;
+}
+
+.res-row svg {
+  flex: 0 0 90px;
+  display: block;
+}
+
+.res-disk-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.res-chart {
+  margin-bottom: 14px;
+}
+
+.res-chart:last-child {
+  margin-bottom: 0;
+}
+
+.res-chart-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.res-chart .res-label {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.res-chart .spark-holder svg {
+  display: block;
+  width: 100%;
+  height: 64px;
+}
+
+.res-summary {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+@media (max-width: 720px) {
+  .res-row .res-label {
+    flex-basis: 4.5em;
+  }
+
+  .res-row svg {
+    display: none;
+  }
+}
+
 /* Status pills: icon in the status colour, label in plain text */
 
 .st {

@@ -3,6 +3,7 @@
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,8 @@ DASHBOARD_DIR = (
     / "templates"
     / "dashboard"
 )
+
+METRICS_JS = DASHBOARD_DIR / "dashboard-metrics.js"
 
 REQUIRED_IDS = [
     "live-status",
@@ -48,6 +51,7 @@ REQUIRED_IDS = [
     "detail-pill",
     "detail-meta",
     "detail-hints",
+    "detail-resources",
     "detail-daemons",
     "detail-kpis",
     "detail-conn-tabs",
@@ -55,6 +59,75 @@ REQUIRED_IDS = [
     "detail-ports",
     "layout-switch",
 ]
+
+#: Skips Node-based tests when Node.js is not installed.
+needs_node = pytest.mark.skipif(
+    shutil.which("node") is None, reason="node is not installed"
+)
+
+
+def _run_history_test(script: str) -> str:
+    """Run a Node script against the real dashboard-metrics.js module.
+
+    The script receives the module path as argv[2] and must require it
+    itself, so the tests always execute the shipped implementation.
+
+    :param script: JavaScript source of the test.
+    :returns: The stdout of the script.
+    :raises AssertionError: If Node exits non-zero.
+    """
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as fh:
+        fh.write(script)
+        path = fh.name
+    try:
+        result = subprocess.run(
+            ["node", path, str(METRICS_JS)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    finally:
+        Path(path).unlink(missing_ok=True)
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+#: Common prologue of a history test: require the module and provide
+#: payload builders matching the /api/state contract.
+HISTORY_PROLOGUE = """
+const assert = require("assert");
+// The module is an IIFE that publishes its namespace on globalThis;
+// requiring it runs the real implementation.
+require(require("path").resolve(process.argv[2]));
+const H = globalThis.AgentCircusMetricHistory;
+assert(H && typeof H.createHistory === "function");
+
+function state(sandboxes, startedAt) {
+  return { proxy: { started_at: startedAt === undefined ? 1000 : startedAt }, sandboxes };
+}
+
+function view(name, sampledAt, overrides) {
+  const resources = Object.assign(
+    {
+      sample_state: "running",
+      sampled_at: sampledAt,
+      cpu_percent: 80,
+      cpu_count: 2,
+      memory_used_bytes: 512,
+      memory_available_bytes: 512,
+      memory_limit_bytes: 1024,
+      disks: [
+        { id: "root", label: "Root disk", mount: "/",
+          used_bytes: 100, available_bytes: 300, total_bytes: 400 },
+        { id: "docker", label: "Docker disk", mount: "/var/lib/docker",
+          used_bytes: 10, available_bytes: 90, total_bytes: 100 },
+      ],
+    },
+    overrides || {}
+  );
+  return { name, resources };
+}
+"""
 
 
 def _js() -> str:
@@ -167,7 +240,7 @@ def test_dashboard_js_both_api_paths_use_fatal_rejection_helper():
     assert js.count("response.status === 409") == 0
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+@needs_node
 def test_dashboard_js_parses():
     result = subprocess.run(
         ["node", "--check", str(DASHBOARD_DIR / "dashboard.js")],
@@ -176,6 +249,332 @@ def test_dashboard_js_parses():
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+@needs_node
+def test_dashboard_metrics_js_parses():
+    result = subprocess.run(
+        ["node", "--check", str(METRICS_JS)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_index_loads_metrics_module_before_dashboard_js():
+    index = _index()
+    metrics_at = index.index('src="dashboard-metrics.js"')
+    dashboard_at = index.index('src="dashboard.js"')
+    assert metrics_at < dashboard_at, (
+        "dashboard-metrics.js must load before dashboard.js"
+    )
+
+
+def test_dashboard_js_records_history_before_rendering():
+    js = _js()
+    assert "recordHistory(data)" in js
+    record_at = js.index("recordHistory(data);")
+    render_at = js.index("renderAll();", record_at)
+    assert render_at > record_at
+    assert "AgentCircusMetricHistory" in js
+
+
+def test_dashboard_js_renders_resource_charts():
+    js = _js()
+    for needle in (
+        "metricRow",
+        "renderCardResources",
+        "renderDetailResources",
+        "metricListText",
+        "diskListRow",
+        "percentChart",
+        "metrics_error",
+    ):
+        assert needle in js, f"dashboard.js lacks resource rendering: {needle}"
+
+
+# ---- pure helpers (executed in Node.js) -------------------------------------
+
+
+@needs_node
+def test_cpu_usage_helper_splits_capacity_and_core_use():
+    out = _run_history_test(
+        HISTORY_PROLOGUE
+        + """
+// 80 across 2 cores: 0.8 busy cores, 40 percent of the capacity.
+assert.deepEqual(H.cpuUsage(80, 2), { used_cores: 0.8, capacity_percent: 40 });
+assert.deepEqual(H.cpuUsage(100, 1), { used_cores: 1, capacity_percent: 100 });
+// Unusable counts give no capacity result.
+assert.equal(H.cpuUsage(80, undefined), null);
+assert.equal(H.cpuUsage(80, null), null);
+assert.equal(H.cpuUsage(80, 0), null);
+assert.equal(H.cpuUsage(80, true), null);
+assert.equal(H.cpuUsage(80, NaN), null);
+assert.equal(H.cpuUsage(80, Infinity), null);
+// An unusable percent does not produce NaN either.
+assert.equal(H.cpuUsage(undefined, 2), null);
+assert.equal(H.cpuUsage(true, 2), null);
+assert.equal(H.cpuUsage(NaN, 2), null);
+console.log("ok");
+"""
+    )
+    assert "ok" in out
+
+
+@needs_node
+def test_chart_time_bounds_spans_fixed_retention_window():
+    out = _run_history_test(
+        HISTORY_PROLOGUE
+        + """
+// The window is the retention length, not the sample span.
+const bounds = H.chartTimeBounds([{ t: 100 }, { t: 103 }]);
+assert.deepEqual(bounds, { start: -497, end: 103 });
+assert.equal(bounds.end - bounds.start, H.RETENTION_S);
+console.log("ok");
+"""
+    )
+    assert "ok" in out
+
+
+@needs_node
+def test_chart_time_bounds_keeps_sparse_points_near_right_edge():
+    out = _run_history_test(
+        HISTORY_PROLOGUE
+        + """
+// Mirrors percentChart's x mapping on a 560 px detail chart.
+const W = 560;
+const points = [{ t: 100 }, { t: 103 }];
+const bounds = H.chartTimeBounds(points);
+function x(t) { return ((t - bounds.start) / (bounds.end - bounds.start)) * W; }
+// The newest point is at the right edge; the older one is close by.
+assert.equal(x(103), W);
+assert.ok(x(100) > W * 0.99, "older point must stay near the right edge");
+console.log("ok");
+"""
+    )
+    assert "ok" in out
+
+
+@needs_node
+def test_chart_time_bounds_empty_series_is_finite_and_nonzero():
+    out = _run_history_test(
+        HISTORY_PROLOGUE
+        + """
+const bounds = H.chartTimeBounds([]);
+assert.equal(Number.isFinite(bounds.start), true);
+assert.equal(Number.isFinite(bounds.end), true);
+assert.notEqual(bounds.start, bounds.end);
+console.log("ok");
+"""
+    )
+    assert "ok" in out
+
+
+# ---- browser history module (executed in Node.js) ----------------------------
+
+
+@needs_node
+def test_history_deduplicates_cached_responses():
+    out = _run_history_test(
+        HISTORY_PROLOGUE
+        + """
+const h = H.createHistory();
+h.record(state([view("a", 100)]));
+h.record(state([view("a", 100)]));  // same sampled_at: cached duplicate
+assert.equal(h.series("a", "cpu").length, 1);
+h.record(state([view("a", 103)]));
+assert.equal(h.series("a", "cpu").length, 2);
+console.log("ok");
+"""
+    )
+    assert "ok" in out
+
+
+@needs_node
+def test_history_returns_all_series_with_correct_percentages():
+    out = _run_history_test(
+        HISTORY_PROLOGUE
+        + """
+const h = H.createHistory();
+h.record(state([view("a", 100)]));
+const cpu = h.series("a", "cpu");
+assert.equal(cpu.length, 1);
+// CPU percent is the share of the allocated cores: 80 across 2 cores.
+assert.equal(cpu[0].percent, 40);
+assert.equal(cpu[0].used_bytes, null);
+assert.equal(cpu[0].available_bytes, null);
+assert.equal(cpu[0].total_bytes, null);
+assert.equal(cpu[0].gap_before, false);
+const mem = h.series("a", "memory");
+assert.equal(mem[0].percent, 50);  // 100 * 512 / 1024
+assert.equal(mem[0].used_bytes, 512);
+assert.equal(mem[0].available_bytes, 512);
+assert.equal(mem[0].total_bytes, 1024);
+const root = h.series("a", "disk:root");
+assert.equal(root[0].percent, 25);  // 100 * 100 / (100 + 300)
+assert.equal(root[0].total_bytes, 400);
+const docker = h.series("a", "disk:docker");
+assert.equal(docker[0].percent, 10);
+console.log("ok");
+"""
+    )
+    assert "ok" in out
+
+
+@needs_node
+def test_history_percent_null_without_valid_denominator():
+    out = _run_history_test(
+        HISTORY_PROLOGUE
+        + """
+const h = H.createHistory();
+h.record(state([
+  view("a", 100, { cpu_count: null }),
+  view("b", 100, { memory_used_bytes: 512, memory_limit_bytes: 0, memory_available_bytes: null }),
+  view("c", 100, { disks: [{ id: "root", used_bytes: 0, available_bytes: 0, total_bytes: 0 }] }),
+]));
+assert.equal(h.series("a", "cpu")[0].percent, null);
+assert.equal(h.series("b", "memory")[0].percent, null);
+assert.equal(h.series("c", "disk:root")[0].percent, null);
+console.log("ok");
+"""
+    )
+    assert "ok" in out
+
+
+@needs_node
+def test_history_missing_data_gives_no_series():
+    out = _run_history_test(
+        HISTORY_PROLOGUE
+        + """
+const h = H.createHistory();
+h.record(state([
+  { name: "bare" },  // no resources object
+  view("partial", 100, { disks: [] }),
+]));
+assert.deepEqual(h.series("bare", "cpu"), []);
+assert.deepEqual(h.series("unknown", "cpu"), []);
+assert.deepEqual(h.series("partial", "disk:root"), []);
+assert.equal(h.series("partial", "cpu").length, 1);
+console.log("ok");
+"""
+    )
+    assert "ok" in out
+
+
+@needs_node
+def test_history_skips_stalled_samples_and_marks_gaps():
+    out = _run_history_test(
+        HISTORY_PROLOGUE
+        + """
+const h = H.createHistory();
+h.record(state([view("a", 100)]));
+h.record(state([view("a", 110, { sample_state: "stalled" })]));
+assert.equal(h.series("a", "cpu").length, 1);  // stalled values are not live samples
+h.record(state([view("a", 160)]));  // 60 s after the last live sample
+const series = h.series("a", "cpu");
+assert.equal(series.length, 2);
+assert.equal(series[1].gap_before, true);
+assert.equal(series[1].t, 160);
+// A dense sample is not a gap.
+h.record(state([view("a", 163)]));
+assert.equal(h.series("a", "cpu")[2].gap_before, false);
+console.log("ok");
+"""
+    )
+    assert "ok" in out
+
+
+@needs_node
+def test_history_retention_and_point_cap():
+    out = _run_history_test(
+        HISTORY_PROLOGUE
+        + """
+const h = H.createHistory();
+// 71 points, 10 s apart, ending at t=700: only t >= 100 survive.
+for (let t = 0; t <= 700; t += 10) h.record(state([view("a", t)]));
+const series = h.series("a", "cpu");
+assert.equal(series.length, 61);
+assert.equal(series[0].t, 100);
+assert.equal(series[series.length - 1].t, 700);
+// The hard cap applies before the retention window is full.
+const h2 = H.createHistory();
+for (let t = 0; t < 320; t += 1) h2.record(state([view("b", t)]));
+assert.equal(h2.series("b", "cpu").length, 300);
+assert.equal(h2.series("b", "cpu")[0].t, 20);
+console.log("ok");
+"""
+    )
+    assert "ok" in out
+
+
+@needs_node
+def test_history_limits_overview_series():
+    out = _run_history_test(
+        HISTORY_PROLOGUE
+        + """
+const h = H.createHistory();
+for (let t = 0; t < 100; t += 1) h.record(state([view("a", t)]));
+assert.equal(h.series("a", "cpu").length, 100);  // no limit: all retained
+assert.equal(h.series("a", "cpu", 60).length, 60);
+assert.equal(h.series("a", "cpu", 60)[0].t, 40);  // last 60 of 100 points
+console.log("ok");
+"""
+    )
+    assert "ok" in out
+
+
+@needs_node
+def test_history_removes_deleted_sandboxes():
+    out = _run_history_test(
+        HISTORY_PROLOGUE
+        + """
+const h = H.createHistory();
+h.record(state([view("a", 100), view("b", 100)]));
+assert.equal(h.series("b", "cpu").length, 1);
+h.record(state([view("a", 103)]));  // b disappeared from the state
+assert.deepEqual(h.series("b", "cpu"), []);
+assert.equal(h.series("a", "cpu").length, 2);
+console.log("ok");
+"""
+    )
+    assert "ok" in out
+
+
+@needs_node
+def test_history_resets_after_proxy_restart():
+    out = _run_history_test(
+        HISTORY_PROLOGUE
+        + """
+const h = H.createHistory();
+h.record(state([view("a", 100)], 1000));
+assert.equal(h.series("a", "cpu").length, 1);
+h.record(state([view("a", 103)], 2000));  // proxy restarted
+// The restart clears the old lifetime; the revealing sample is fresh
+// data of the new proxy, so it stays.
+assert.equal(h.series("a", "cpu").length, 1);
+assert.equal(h.series("a", "cpu")[0].t, 103);
+h.record(state([view("a", 106)], 2000));
+assert.equal(h.series("a", "cpu").length, 2);
+console.log("ok");
+"""
+    )
+    assert "ok" in out
+
+
+@needs_node
+def test_history_stores_are_independent():
+    out = _run_history_test(
+        HISTORY_PROLOGUE
+        + """
+const h1 = H.createHistory();
+const h2 = H.createHistory();
+h1.record(state([view("a", 100)]));
+assert.equal(h2.series("a", "cpu").length, 0);
+console.log("ok");
+"""
+    )
+    assert "ok" in out
 
 
 SHELL_DIR = DASHBOARD_DIR

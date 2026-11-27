@@ -50,6 +50,10 @@ STATIC_FILES: dict[str, tuple[str, str]] = {
     "/favicon.png": ("favicon.png", "image/png"),
     "/dashboard.css": ("dashboard.css", "text/css; charset=utf-8"),
     "/dashboard.js": ("dashboard.js", "text/javascript; charset=utf-8"),
+    "/dashboard-metrics.js": (
+        "dashboard-metrics.js",
+        "text/javascript; charset=utf-8",
+    ),
     "/shell": ("shell.html", "text/html; charset=utf-8"),
     "/shell.css": ("shell.css", "text/css; charset=utf-8"),
     "/shell.js": ("shell.js", "text/javascript; charset=utf-8"),
@@ -418,11 +422,19 @@ class DashboardApp:
         if scope is not None and not _SANDBOX_NAME.fullmatch(scope):
             body = json.dumps({"error": "invalid sandbox name"}).encode()
             return http_response(400, "Bad Request", body, "application/json")
-        views, generated_at, refresh_error = await self.collector.sandboxes()
+        (
+            views,
+            generated_at,
+            refresh_error,
+            metrics_error,
+        ) = await self.collector.sandboxes()
         payload = {
             "protocol_version": BROWSER_PROTOCOL_VERSION,
             "generated_at": generated_at,
             "refresh_error": refresh_error,
+            # Nonfatal: the page shows it as a warning and keeps the
+            # rest of the state; null after a successful refresh.
+            "metrics_error": metrics_error,
             "scope": scope,
             "proxy": {
                 "port": self.proxy_port,

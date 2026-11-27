@@ -5,7 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import pytest
 
@@ -14,13 +14,19 @@ from agent_circus.dashboard import (
     InspectFacts,
     RouterStatus,
     build_daemon_views,
+    build_sandbox_resources,
     build_sandbox_view,
     fetch_router_status,
     inspect_facts,
     parse_router_status_response,
 )
 from agent_circus.exceptions import ConfigurationError
-from agent_circus.sandbox import SandboxInfo
+from agent_circus.sandbox import (
+    SandboxInfo,
+    SandboxMetrics,
+    build_metrics_args,
+    parse_metrics_output,
+)
 
 TEMPLATE_PATH = (
     Path(__file__).resolve().parent.parent
@@ -92,6 +98,66 @@ def test_parse_router_status_response_ignores_bad_entries():
     assert status.reachable == {"web": True}
     assert status.started_at is None
     assert status.daemon_status is None
+    assert status.filesystems == {}
+
+
+def test_parse_router_status_response_without_filesystems_still_parses():
+    """An old router payload without the optional filesystems object."""
+    raw = _status_response({"api": 1, "started_at": 1, "routes": {}})
+    status = parse_router_status_response(raw)
+    assert status is not None
+    assert status.filesystems == {}
+
+
+def test_parse_router_status_response_accepts_valid_filesystems():
+    raw = _status_response(
+        {
+            "api": 1,
+            "routes": {},
+            "filesystems": {
+                "/var/lib/docker": {
+                    "total_bytes": 100,
+                    "used_bytes": 10,
+                    "available_bytes": 80,
+                }
+            },
+        }
+    )
+    status = parse_router_status_response(raw)
+    assert status is not None
+    assert status.filesystems == {
+        "/var/lib/docker": {
+            "total_bytes": 100,
+            "used_bytes": 10,
+            "available_bytes": 80,
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "not-an-object",
+        {},
+        {"total_bytes": True, "used_bytes": 1, "available_bytes": 1},
+        {"total_bytes": -1, "used_bytes": 1, "available_bytes": 1},
+        {"total_bytes": 1.5, "used_bytes": 1, "available_bytes": 1},
+        {"total_bytes": 1, "used_bytes": 1},
+    ],
+)
+def test_parse_router_status_response_drops_malformed_filesystem_entries(entry):
+    """A malformed optional entry never invalidates the whole response."""
+    raw = _status_response(
+        {
+            "api": 1,
+            "routes": {"web": 4096},
+            "filesystems": {"/var/lib/docker": entry, "also-bad": 5},
+        }
+    )
+    status = parse_router_status_response(raw)
+    assert status is not None
+    assert status.filesystems == {}
+    assert status.routes == {"web": 4096}
 
 
 def test_fetch_router_status_unreachable():
@@ -171,14 +237,21 @@ def test_inspect_facts_raises_on_bad_output():
 
 
 def _router_status(**overrides) -> RouterStatus:
-    defaults = {
+    defaults: dict[str, Any] = {
         "started_at": 1000.0,
         "routes": {"web": 4096},
         "reachable": {"web": True},
         "daemon_status": "web 0 true true 5400 60\nworker 1 false false 10 5\n",
+        "filesystems": {},
     }
     defaults.update(overrides)
-    return RouterStatus(**defaults)
+    return RouterStatus(
+        started_at=defaults["started_at"],
+        routes=defaults["routes"],
+        reachable=defaults["reachable"],
+        daemon_status=defaults["daemon_status"],
+        filesystems=defaults["filesystems"],
+    )
 
 
 def test_build_daemon_views_merges_routes_and_status():
@@ -328,8 +401,275 @@ def test_build_hints_none_for_unmanaged_sandbox():
     assert view["hints"] == []
 
 
+# ---- msb metrics parsing ----------------------------------------------------
+
+
+def test_build_metrics_args_is_bulk_json():
+    assert build_metrics_args() == ["metrics", "--format", "json"]
+
+
+def _metrics_record(**overrides):
+    """One valid msb metrics record, fields overridable.
+
+    ``cpus`` is a top-level report field; ``report`` overrides replace
+    only the nested metrics object.
+    """
+    report = {
+        "timestamp": "2026-11-27T12:00:00Z",
+        "cpu_percent": 80.0,
+        "memory_bytes": 536870912,
+        "memory_limit_bytes": 1073741824,
+        "upper_used_bytes": 2147483648,
+        "upper_free_bytes": 6442450944,
+    }
+    report = overrides.pop("report", report)
+    overrides.setdefault("cpus", 2)
+    entry = {"name": "agents-foo", "state": "running", "metrics": report}
+    entry.update(overrides)
+    return entry
+
+
+def test_parse_metrics_output_empty_array():
+    assert parse_metrics_output("[]") == {}
+
+
+def test_parse_metrics_output_valid_record():
+    metrics = parse_metrics_output(json.dumps([_metrics_record()]))
+    assert set(metrics) == {"agents-foo"}
+    m = metrics["agents-foo"]
+    assert isinstance(m, SandboxMetrics)
+    assert m.state == "running"
+    assert m.cpu_percent == pytest.approx(80.0)
+    assert m.cpu_count == 2
+    assert m.memory_used_bytes == 536870912
+    assert m.memory_limit_bytes == 1073741824
+    assert m.root_used_bytes == 2147483648
+    assert m.root_free_bytes == 6442450944
+
+
+def test_parse_metrics_output_keeps_valid_drops_invalid_records():
+    document = [
+        _metrics_record(),
+        "not-an-object",
+        {"name": "", "state": "running", "metrics": {}},
+        {"name": "agents-x", "state": "exited", "metrics": {}},
+        {"name": "agents-y", "state": "running"},  # no metrics object
+        {"name": "agents-z", "state": "running", "metrics": {"cpu_percent": True}},
+        {"name": "agents-z", "state": "running", "metrics": {"cpu_percent": 5}},
+    ]
+    metrics = parse_metrics_output(json.dumps(document))
+    assert set(metrics) == {"agents-foo", "agents-z"}
+    assert metrics["agents-z"].cpu_percent == 5
+
+
+def test_parse_metrics_output_accepts_stalled_state():
+    metrics = parse_metrics_output(json.dumps([_metrics_record(state="stalled")]))
+    assert metrics["agents-foo"].state == "stalled"
+
+
+def test_parse_metrics_output_missing_disk_fields_gives_none():
+    report = {"cpu_percent": 1, "memory_bytes": 10, "memory_limit_bytes": 20}
+    metrics = parse_metrics_output(json.dumps([_metrics_record(report=report)]))
+    m = metrics["agents-foo"]
+    assert m.root_used_bytes is None
+    assert m.root_free_bytes is None
+
+
+@pytest.mark.parametrize(
+    "report",
+    [
+        {"cpu_percent": True},
+        {"cpu_percent": -1},
+        {"cpu_percent": float("nan")},
+        {"cpu_percent": float("inf")},
+        {"memory_bytes": True},
+        {"memory_bytes": -1},
+        {"memory_bytes": 1.5},
+        {"memory_limit_bytes": -5},
+        {"upper_used_bytes": True},
+        {"upper_free_bytes": -1},
+    ],
+)
+def test_parse_metrics_output_rejects_invalid_field_values(report):
+    metrics = parse_metrics_output(json.dumps([_metrics_record(report=report)]))
+    assert metrics == {}
+
+
+@pytest.mark.parametrize("cpus", [0, -2, True, 2.5, "2"])
+def test_parse_metrics_output_rejects_invalid_top_level_cpus(cpus):
+    metrics = parse_metrics_output(json.dumps([_metrics_record(cpus=cpus)]))
+    assert metrics == {}
+
+
+def test_parse_metrics_output_missing_cpus_keeps_sample_without_cpu_count():
+    entry = _metrics_record()
+    del entry["cpus"]
+    metrics = parse_metrics_output(json.dumps([entry]))
+    m = metrics["agents-foo"]
+    assert m.cpu_percent == pytest.approx(80.0)
+    assert m.cpu_count is None
+
+
+def test_parse_metrics_output_invalid_cpus_drops_only_own_record():
+    document = [
+        _metrics_record(name="agents-bad", cpus=0),
+        _metrics_record(name="agents-good"),
+    ]
+    metrics = parse_metrics_output(json.dumps(document))
+    assert set(metrics) == {"agents-good"}
+    assert metrics["agents-good"].cpu_count == 2
+
+
+def test_parse_metrics_output_zero_values_are_valid():
+    report = {
+        "cpu_percent": 0,
+        "memory_bytes": 0,
+        "memory_limit_bytes": 0,
+        "upper_used_bytes": 0,
+        "upper_free_bytes": 0,
+    }
+    metrics = parse_metrics_output(json.dumps([_metrics_record(report=report)]))
+    assert metrics["agents-foo"].cpu_percent == pytest.approx(0.0)
+    assert metrics["agents-foo"].memory_used_bytes == 0
+
+
+def test_parse_metrics_output_invalid_document_raises():
+    with pytest.raises(ConfigurationError):
+        parse_metrics_output("not json")
+    with pytest.raises(ConfigurationError):
+        parse_metrics_output(json.dumps({"sandboxes": []}))
+
+
+# ---- sandbox resources joining ----------------------------------------------
+
+
+def test_build_sandbox_resources_none_for_stopped_sandbox():
+    metrics = SandboxMetrics(name="agents-foo", state="running", cpu_percent=1.0)
+    assert build_sandbox_resources(False, metrics, None, 1000.0) is None
+
+
+def test_build_sandbox_resources_none_without_any_source():
+    assert build_sandbox_resources(True, None, None, 1000.0) is None
+
+
+def test_build_sandbox_resources_full_contract():
+    metrics = SandboxMetrics(
+        name="agents-foo",
+        state="running",
+        cpu_percent=80.0,
+        cpu_count=2,
+        memory_used_bytes=536870912,
+        memory_limit_bytes=1073741824,
+        root_used_bytes=2147483648,
+        root_free_bytes=6442450944,
+    )
+    router = _router_status(
+        filesystems={
+            "/var/lib/docker": {
+                "total_bytes": 10737418240,
+                "used_bytes": 1073741824,
+                "available_bytes": 8589934592,
+            }
+        }
+    )
+    resources = build_sandbox_resources(True, metrics, router, 1795780800.0)
+    assert resources == {
+        "sample_state": "running",
+        "sampled_at": 1795780800.0,
+        "cpu_percent": 80.0,
+        "cpu_count": 2,
+        "memory_used_bytes": 536870912,
+        "memory_available_bytes": 536870912,
+        "memory_limit_bytes": 1073741824,
+        "disks": [
+            {
+                "id": "root",
+                "label": "Root disk",
+                "mount": "/",
+                "used_bytes": 2147483648,
+                "available_bytes": 6442450944,
+                "total_bytes": 8589934592,
+            },
+            {
+                "id": "docker",
+                "label": "Docker disk",
+                "mount": "/var/lib/docker",
+                "used_bytes": 1073741824,
+                "available_bytes": 8589934592,
+                "total_bytes": 10737418240,
+            },
+        ],
+    }
+
+
+def test_build_sandbox_resources_partial_host_sample():
+    """A host sample without disk values keeps only host fields."""
+    metrics = SandboxMetrics(
+        name="agents-foo", state="running", cpu_percent=50.0, cpu_count=1
+    )
+    resources = build_sandbox_resources(True, metrics, None, 1000.0)
+    assert resources is not None
+    assert resources["disks"] == []
+    assert resources["cpu_percent"] == pytest.approx(50.0)
+    assert resources["memory_used_bytes"] is None
+    assert resources["memory_available_bytes"] is None
+
+
+def test_build_sandbox_resources_memory_available_clamped_at_zero():
+    metrics = SandboxMetrics(
+        name="agents-foo",
+        state="running",
+        memory_used_bytes=2000,
+        memory_limit_bytes=1000,
+    )
+    resources = build_sandbox_resources(True, metrics, None, 1000.0)
+    assert resources is not None
+    assert resources["memory_available_bytes"] == 0
+
+
+def test_build_sandbox_resources_keeps_docker_disk_when_metrics_fail():
+    router = _router_status(
+        filesystems={
+            "/var/lib/docker": {
+                "total_bytes": 100,
+                "used_bytes": 10,
+                "available_bytes": 80,
+            }
+        }
+    )
+    resources = build_sandbox_resources(True, None, router, 1000.0)
+    assert resources is not None
+    assert resources["sample_state"] == "running"  # fresh router proves liveness
+    assert resources["cpu_percent"] is None
+    assert resources["disks"] == [
+        {
+            "id": "docker",
+            "label": "Docker disk",
+            "mount": "/var/lib/docker",
+            "used_bytes": 10,
+            "available_bytes": 80,
+            "total_bytes": 100,
+        }
+    ]
+
+
+def test_build_sandbox_resources_stalled_state_is_reported():
+    metrics = SandboxMetrics(name="agents-foo", state="stalled", cpu_percent=1.0)
+    resources = build_sandbox_resources(True, metrics, None, 1000.0)
+    assert resources is not None
+    assert resources["sample_state"] == "stalled"
+
+
+def test_build_sandbox_resources_ignores_unreported_docker_mount():
+    """A router without the docker entry reports no docker disk."""
+    metrics = SandboxMetrics(name="agents-foo", state="running", cpu_percent=1.0)
+    resources = build_sandbox_resources(True, metrics, _router_status(), 1000.0)
+    assert resources is not None
+    assert [d["id"] for d in resources["disks"]] == []
+
+
 class FakeInvoker:
-    """Counts list/inspect calls; scripted outputs for the collector."""
+    """Counts list/inspect/metrics calls; scripted outputs for the collector."""
 
     behavior: ClassVar[dict] = {}
 
@@ -349,6 +689,12 @@ class FakeInvoker:
                 returncode=0,
                 stdout=self.behavior.get("inspect_json", INSPECT_JSON),
                 stderr="",
+            )
+        if args[0] == "metrics":
+            return SimpleNamespace(
+                returncode=self.behavior.get("metrics_rc", 0),
+                stdout=self.behavior.get("metrics_output", "[]"),
+                stderr=self.behavior.get("metrics_stderr", ""),
             )
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
@@ -449,8 +795,202 @@ def test_collector_sorts_managed_running_first():
         "inspect_json": json.dumps({"config": {}}),
     }
     collector, _, _ = _collector()
-    views, _, _ = asyncio.run(collector.sandboxes())
+    views, _, _, _ = asyncio.run(collector.sandboxes())
     assert [v["name"] for v in views] == ["agents-a", "agents-b", "other-x"]
+
+
+_METRICS_REPORT = {
+    "cpu_percent": 80.0,
+    "memory_bytes": 536870912,
+    "memory_limit_bytes": 1073741824,
+    "upper_used_bytes": 2147483648,
+    "upper_free_bytes": 6442450944,
+}
+
+
+def _metrics_entry(name, state="running", report=None, cpus=2):
+    """One msb metrics record for a collector fixture.
+
+    ``cpus`` defaults to a two-core sandbox; ``cpus=None`` omits the
+    field, as msb does when the count is unknown.
+    """
+    if report is None:
+        report = _METRICS_REPORT
+    entry = {"name": name, "state": state, "metrics": report}
+    if cpus is not None:
+        entry["cpus"] = cpus
+    return entry
+
+
+def test_collector_runs_one_bulk_metrics_command_for_all_sandboxes():
+    FakeInvoker.behavior = {
+        "list_output": json.dumps(
+            [
+                {"name": "agents-a", "status": "Running", "created_at": 1.0},
+                {"name": "agents-b", "status": "Running", "created_at": 2.0},
+            ]
+        ),
+        "inspect_json": json.dumps({"config": {}}),
+        "metrics_output": json.dumps(
+            [
+                {
+                    "name": "agents-a",
+                    "state": "running",
+                    "cpus": 2,
+                    "metrics": _METRICS_REPORT,
+                },
+                {
+                    "name": "agents-b",
+                    "state": "running",
+                    "metrics": {"cpu_percent": 10.0},
+                },
+            ]
+        ),
+    }
+    collector, _, invoker = _collector()
+    views, _, _, metrics_error = asyncio.run(collector.sandboxes())
+    assert metrics_error is None
+    metrics_calls = [c for c in invoker.behavior["calls"] if c[0] == "metrics"]
+    assert len(metrics_calls) == 1
+    by_name = {v["name"]: v for v in views}
+    assert by_name["agents-a"]["resources"]["cpu_percent"] == pytest.approx(80.0)
+    assert by_name["agents-a"]["resources"]["memory_available_bytes"] == 536870912
+    assert by_name["agents-a"]["resources"]["sampled_at"] == pytest.approx(1000.0)
+    assert by_name["agents-b"]["resources"]["cpu_count"] is None
+
+
+def test_collector_stopped_sandbox_has_no_resources():
+    FakeInvoker.behavior = {
+        "list_output": json.dumps(
+            [
+                {"name": "agents-a", "status": "Running", "created_at": 1.0},
+                {"name": "agents-b", "status": "Stopped", "created_at": 2.0},
+            ]
+        ),
+        "inspect_json": json.dumps({"config": {}}),
+        "metrics_output": json.dumps(
+            [
+                {
+                    "name": "agents-a",
+                    "state": "running",
+                    "cpus": 2,
+                    "metrics": _METRICS_REPORT,
+                },
+                # msb may still report a terminal sample for a stopped
+                # sandbox; the view must not use it.
+                {
+                    "name": "agents-b",
+                    "state": "running",
+                    "cpus": 2,
+                    "metrics": _METRICS_REPORT,
+                },
+            ]
+        ),
+    }
+    collector, _, _ = _collector()
+    views, _, _, _ = asyncio.run(collector.sandboxes())
+    by_name = {v["name"]: v for v in views}
+    assert by_name["agents-b"]["running"] is False
+    assert by_name["agents-b"]["resources"] is None
+
+
+def test_collector_joins_router_docker_disk_into_resources():
+    FakeInvoker.behavior = {
+        "list_output": json.dumps(
+            [{"name": "agents-foo", "status": "Running", "created_at": 1.0}]
+        ),
+        "inspect_json": INSPECT_JSON,
+        "metrics_output": json.dumps([_metrics_entry("agents-foo")]),
+    }
+
+    async def router_fetch(address, timeout=2.0):
+        return _router_status(
+            filesystems={
+                "/var/lib/docker": {
+                    "total_bytes": 100,
+                    "used_bytes": 10,
+                    "available_bytes": 80,
+                }
+            }
+        )
+
+    collector, _, _ = _collector(router_fetch=router_fetch)
+    views, _, _, _ = asyncio.run(collector.sandboxes())
+    disks = views[0]["resources"]["disks"]
+    assert [d["id"] for d in disks] == ["root", "docker"]
+
+
+def test_collector_metrics_failure_is_isolated():
+    FakeInvoker.behavior = {
+        "list_output": json.dumps(
+            [{"name": "agents-foo", "status": "Running", "created_at": 1.0}]
+        ),
+        "inspect_json": INSPECT_JSON,
+        "metrics_rc": 1,
+        "metrics_stderr": "secret host path /var/lib/foo\n",
+    }
+    collector, _, _ = _collector()
+    views, _, refresh_error, metrics_error = asyncio.run(collector.sandboxes())
+    assert views and views[0]["name"] == "agents-foo"
+    assert views[0]["daemons"] is not None
+    assert views[0]["resources"] is None
+    assert refresh_error is None
+    assert metrics_error is not None
+    assert "/var/lib/foo" not in metrics_error
+    assert "msb metrics" in metrics_error
+
+
+def test_collector_metrics_bad_document_is_safe_error():
+    FakeInvoker.behavior = {
+        "list_output": json.dumps(
+            [{"name": "agents-foo", "status": "Running", "created_at": 1.0}]
+        ),
+        "inspect_json": INSPECT_JSON,
+        "metrics_output": "{not json",
+    }
+    collector, _, _ = _collector()
+    views, _, _, metrics_error = asyncio.run(collector.sandboxes())
+    assert views and views[0]["resources"] is None
+    assert metrics_error == "msb metrics returned unusable output"
+
+
+def test_collector_metrics_cached_within_interval():
+    FakeInvoker.behavior = {
+        "list_output": json.dumps(
+            [{"name": "agents-foo", "status": "Running", "created_at": 1.0}]
+        ),
+        "inspect_json": INSPECT_JSON,
+    }
+    collector, clock, invoker = _collector()
+
+    async def scenario():
+        await collector.sandboxes()
+        clock["now"] += 1.0
+        await collector.sandboxes()  # cached
+        clock["now"] += 5.0
+        await collector.sandboxes()  # stale, refreshes
+
+    asyncio.run(scenario())
+    metrics_calls = [c for c in invoker.behavior["calls"] if c[0] == "metrics"]
+    assert len(metrics_calls) == 2
+
+
+def test_collector_concurrent_callers_share_one_metrics_refresh():
+    FakeInvoker.behavior = {
+        "list_output": json.dumps(
+            [{"name": "agents-foo", "status": "Running", "created_at": 1.0}]
+        ),
+        "inspect_json": INSPECT_JSON,
+    }
+    collector, _, invoker = _collector()
+
+    async def scenario():
+        return await asyncio.gather(*(collector.sandboxes() for _ in range(4)))
+
+    results = asyncio.run(scenario())
+    metrics_calls = [c for c in invoker.behavior["calls"] if c[0] == "metrics"]
+    assert len(metrics_calls) == 1
+    assert all(r[3] is None for r in results)
 
 
 class LogInvoker:

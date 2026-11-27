@@ -6,6 +6,7 @@
     <title>agent-circus dashboard</title>
     <link rel="icon" type="image/png" sizes="32x32" href="favicon.png" />
     <link rel="stylesheet" href="dashboard.css" />
+    <script src="dashboard-metrics.js" defer></script>
     <script src="dashboard.js" defer></script>
   </head>
   <body>
@@ -72,6 +73,10 @@
         </header>
         <dl id="detail-meta" class="meta"></dl>
         <section id="detail-hints"></section>
+        <section aria-label="Resource use">
+          <h3 class="section-title">Resource use (last 10 min)</h3>
+          <div id="detail-resources"></div>
+        </section>
         <section aria-label="Daemons">
           <h3 class="section-title">Daemons</h3>
           <div id="detail-daemons"></div>

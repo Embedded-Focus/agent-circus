@@ -42,6 +42,7 @@ CONTRACT_KEYS = {
     "protocol_version",
     "generated_at",
     "refresh_error",
+    "metrics_error",
     "proxy",
     "sandboxes",
     "traffic",
@@ -75,13 +76,14 @@ def test_is_dashboard_host_rejects_others(host):
 class FakeCollector:
     """Returns one canned sandbox view, counting calls."""
 
-    def __init__(self, view: dict):
+    def __init__(self, view: dict, metrics_error: str | None = None):
         self.view = view
+        self.metrics_error = metrics_error
         self.calls = 0
 
     async def sandboxes(self):
         self.calls += 1
-        return [self.view], 1763380000.0, None
+        return [self.view], 1763380000.0, None, self.metrics_error
 
 
 def _manager():
@@ -146,6 +148,61 @@ def test_respond_api_state_matches_contract():
     assert body["proxy"]["url_pattern"] == ("http://<daemon>.<sandbox>.localhost:7700/")
     assert len(body["traffic"]["series"]["buckets"]) == 60
     assert body["traffic"]["series"]["bucket_s"] == 10
+
+
+def test_api_state_passes_metrics_error_and_resources():
+    """Resource fields flow through without a protocol increase."""
+    view = {
+        "name": "agents-foo",
+        "status": "Running",
+        "running": True,
+        "managed": True,
+        "created_at": 1763300000.0,
+        "workspace": "/home/u/src/foo",
+        "router": {"state": "ok", "address": None, "started_at": None},
+        "ports": [],
+        "daemons": [],
+        "hints": [],
+        "resources": {
+            "sample_state": "running",
+            "sampled_at": 1763380000.0,
+            "cpu_percent": 40.0,
+            "cpu_count": 2,
+            "memory_used_bytes": 100,
+            "memory_available_bytes": 900,
+            "memory_limit_bytes": 1000,
+            "disks": [
+                {
+                    "id": "root",
+                    "label": "Root disk",
+                    "mount": "/",
+                    "used_bytes": 1,
+                    "available_bytes": 2,
+                    "total_bytes": 3,
+                }
+            ],
+        },
+    }
+    app = _app(FakeCollector(view, metrics_error="msb metrics failed"))
+    response = _respond(_api_get("/api/state"), app)
+    body = json.loads(response.split(b"\r\n\r\n", 1)[1])
+    assert body["metrics_error"] == "msb metrics failed"
+    assert body["sandboxes"][0]["resources"]["sample_state"] == "running"
+
+
+def test_api_state_metrics_error_defaults_to_null():
+    app = _app()
+    response = _respond(_api_get("/api/state"), app)
+    body = json.loads(response.split(b"\r\n\r\n", 1)[1])
+    assert body["metrics_error"] is None
+    assert body["sandboxes"][0].get("resources", "missing-key") == "missing-key"
+
+
+def test_api_state_accepts_old_view_without_resources():
+    """A view dict without the optional resources field stays valid."""
+    app = _app(FakeCollector({"name": "agents-foo"}))
+    response = _respond(_api_get("/api/state"), app)
+    assert response.startswith(b"HTTP/1.1 200 OK")
 
 
 def test_respond_rejects_post_with_405():
@@ -307,7 +364,7 @@ def test_proxy_serves_dashboard_for_localhost_host(tmp_path):
 
     class StubCollector:
         async def sandboxes(self):
-            return [], 0.0, None
+            return [], 0.0, None, None
 
     app = App(
         cast("DashboardCollector", StubCollector()),
@@ -353,7 +410,7 @@ def test_proxy_does_not_track_dashboard_requests(tmp_path):
 
     class StubCollector:
         async def sandboxes(self):
-            return [], 0.0, None
+            return [], 0.0, None, None
 
     tracker = ConnectionTracker()
     app = App(
@@ -451,7 +508,7 @@ class LogCollector:
         self.calls = []
 
     async def sandboxes(self):
-        return [self.view], 0.0, None
+        return [self.view], 0.0, None, None
 
     async def daemon_log(self, sandbox, daemon, lines):
         self.calls.append((sandbox, daemon, lines))
@@ -861,7 +918,7 @@ def test_shell_end_to_end_through_proxy_handle(tmp_path):
 
         class Collector:
             async def sandboxes(self):
-                return [], 0.0, None
+                return [], 0.0, None, None
 
             async def running_managed_view(self, name):
                 return {

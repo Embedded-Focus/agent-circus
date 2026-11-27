@@ -8,11 +8,12 @@ unit-tested without msb installed. Execution lives in
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from .config import DEFAULT_MEMORY, ROUTER_GUEST_PORT, PortForward
 from .exceptions import ConfigurationError
@@ -201,6 +202,182 @@ def build_remove_args(name: str, *, force: bool = False) -> list[str]:
         args.append("--force")
     args.append(name)
     return args
+
+
+def build_metrics_args() -> list[str]:
+    """Build argv for a bulk ``msb metrics`` request.
+
+    Without a sandbox name the command reports every sandbox in one
+    JSON array, so one command collects the metrics of all sandboxes.
+
+    :returns: Argv list for :class:`agent_circus.msb.MsbInvoker`.
+    """
+    return ["metrics", "--format", "json"]
+
+
+@dataclass(frozen=True)
+class SandboxMetrics:
+    """Resource sample of one sandbox from ``msb metrics`` output.
+
+    Every value field is ``None`` when the report left it out; a field
+    that is present but malformed makes the whole record invalid (see
+    :func:`parse_metrics_output`), so a non-``None`` field is always a
+    safe value.
+
+    CPU percentages are use across all cores: a ``cpu_percent`` of 100
+    means one fully busy core, not a saturated sandbox. Divide by
+    ``cpu_count`` to get the share of the allocated CPU capacity.
+
+    :ivar name: Sandbox name.
+    :ivar state: Sample state, ``"running"`` or ``"stalled"``. A
+        stalled sandbox did not answer its metrics request in time; its
+        values are the last known ones.
+    :ivar cpu_percent: CPU use across cores (0..100 per core), if reported.
+    :ivar cpu_count: Allocated CPU count, if reported positively.
+    :ivar memory_used_bytes: Guest memory in use, if reported.
+    :ivar memory_limit_bytes: Guest memory limit, if reported.
+    :ivar root_used_bytes: Writable root filesystem used bytes, if reported.
+    :ivar root_free_bytes: Writable root filesystem free bytes (including
+        blocks reserved for root), if reported.
+    """
+
+    name: str
+    state: Literal["running", "stalled"]
+    cpu_percent: float | None = None
+    cpu_count: int | None = None
+    memory_used_bytes: int | None = None
+    memory_limit_bytes: int | None = None
+    root_used_bytes: int | None = None
+    root_free_bytes: int | None = None
+
+
+def _valid_count(value: Any) -> bool:
+    """Return whether *value* is a non-negative integer (no Boolean)."""
+    return not isinstance(value, bool) and isinstance(value, int) and value >= 0
+
+
+#: Raised by the optional-value helpers for a present but malformed
+#: value (a missing field is simply ``None``, not an error).
+class _MalformedValue(Exception):
+    """A field was present but violated its type rule."""
+
+
+def _optional_number(value: Any) -> float | None:
+    """Validate an optional CPU percentage value.
+
+    :param value: Raw field value.
+    :returns: The value as a finite, non-negative float, or ``None``
+        when the field is absent.
+    :raises _MalformedValue: If the value is a Boolean, not numeric,
+        non-finite, or negative.
+    """
+    if value is None:
+        return None
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int | float)
+        or not math.isfinite(value)
+        or value < 0
+    ):
+        raise _MalformedValue("cpu_percent")
+    return float(value)
+
+
+def _optional_count(value: Any) -> int | None:
+    """Validate an optional byte-count value.
+
+    :param value: Raw field value.
+    :returns: The value, or ``None`` when the field is absent.
+    :raises _MalformedValue: If the value is not a non-negative integer
+        (Booleans and floats are rejected).
+    """
+    if value is None:
+        return None
+    if not _valid_count(value):
+        raise _MalformedValue("byte count")
+    return value
+
+
+def _parse_metrics_record(entry: Any) -> SandboxMetrics | None:
+    """Parse one entry of msb metrics output, or ``None`` when invalid.
+
+    :param entry: One element of the top-level JSON array.
+    :returns: The parsed sample, or ``None`` when the entry is not a
+        valid report (wrong shape, unknown state, a malformed top-level
+        ``cpus`` field, or any present metric violating its type rule).
+    """
+    if not isinstance(entry, dict):
+        return None
+    name = entry.get("name")
+    state = entry.get("state")
+    if not isinstance(name, str) or not name:
+        return None
+    if state not in ("running", "stalled"):
+        return None
+    # ``cpus`` belongs to the report itself, not to the nested metrics
+    # object; msb serializes it next to ``name`` and ``state``.
+    cpu_count: int | None = None
+    if "cpus" in entry:
+        raw_cpus = entry["cpus"]
+        if not isinstance(raw_cpus, int) or isinstance(raw_cpus, bool) or raw_cpus <= 0:
+            return None
+        cpu_count = raw_cpus
+    report = entry.get("metrics")
+    if not isinstance(report, dict):
+        return None
+    try:
+        cpu_percent = _optional_number(report.get("cpu_percent"))
+        memory_used = _optional_count(report.get("memory_bytes"))
+        memory_limit = _optional_count(report.get("memory_limit_bytes"))
+        root_used = _optional_count(report.get("upper_used_bytes"))
+        root_free = _optional_count(report.get("upper_free_bytes"))
+    except _MalformedValue:
+        return None
+    return SandboxMetrics(
+        name=name,
+        state=state,
+        cpu_percent=cpu_percent,
+        cpu_count=cpu_count,
+        memory_used_bytes=memory_used,
+        memory_limit_bytes=memory_limit,
+        root_used_bytes=root_used,
+        root_free_bytes=root_free,
+    )
+
+
+def parse_metrics_output(output: str) -> dict[str, SandboxMetrics]:
+    """Parse ``msb metrics --format json`` output.
+
+    The parse is defensive: msb is beta and its schema may change
+    between releases. A record is used only when its name is a non-empty
+    string, its state is ``"running"`` or ``"stalled"``, and every
+    present metric satisfies the documented type rules (no Booleans, no
+    negative numbers, no non-finite floats, integer byte counts, a
+    positive integer ``cpus``). One malformed record is dropped; the
+    other records survive.
+
+    :param output: Raw stdout of the metrics command.
+    :returns: Parsed metrics by sandbox name. Dropped records are
+        absent; a name reported twice keeps the last valid sample.
+    :raises ConfigurationError: If the output is not valid JSON or the
+        top level is not a JSON array.
+    """
+    try:
+        document = json.loads(output)
+    except json.JSONDecodeError as e:
+        raise ConfigurationError(
+            f"Could not parse msb metrics output as JSON: {e}"
+        ) from e
+    if not isinstance(document, list):
+        raise ConfigurationError(
+            "Unexpected msb metrics output shape: expected a JSON array"
+        )
+    metrics: dict[str, SandboxMetrics] = {}
+    for entry in document:
+        parsed = _parse_metrics_record(entry)
+        if parsed is not None:
+            metrics[parsed.name] = parsed
+    return metrics
 
 
 def build_volume_list_args() -> list[str]:
