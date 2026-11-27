@@ -1,10 +1,16 @@
 """Static guards for the dashboard assets (no JS test runner here)."""
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+
+from agent_circus.browser_protocol import (
+    BROWSER_PROTOCOL_HEADER,
+    BROWSER_PROTOCOL_VERSION,
+)
 
 DASHBOARD_DIR = (
     Path(__file__).resolve().parent.parent
@@ -120,6 +126,29 @@ def test_dashboard_js_reads_contract_keys():
         assert key in js, f"dashboard.js does not read {key}"
 
 
+def test_dashboard_js_protocol_version_matches_python():
+    js = _js()
+    match = re.search(r"var BROWSER_PROTOCOL_VERSION = (\d+);", js)
+    assert match, "dashboard.js has no BROWSER_PROTOCOL_VERSION"
+    assert int(match.group(1)) == BROWSER_PROTOCOL_VERSION
+
+
+def test_dashboard_js_sends_protocol_header_for_api_requests():
+    js = _js()
+    assert f'"{BROWSER_PROTOCOL_HEADER}"' in js
+    # Both API call sites (state poll and log fetch) go through the
+    # fetchApi helper, which adds the header and no-store caching.
+    # The count includes the helper definition itself.
+    assert js.count("fetchApi(url)") == 3, "an API request bypasses the fetchApi helper"
+
+
+def test_dashboard_js_has_fatal_protocol_mismatch_path():
+    js = _js()
+    assert "setProtocolError" in js
+    assert "isCompatibleState" in js
+    assert "This page is incompatible with the running proxy. Reload the page." in js
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_dashboard_js_parses():
     result = subprocess.run(
@@ -182,8 +211,32 @@ def test_shell_html_has_no_inline_script_or_style():
 
 def test_shell_js_sends_hello_with_token_and_size():
     js = _shell_js()
-    for needle in ('"hello"', "token", "cols", "rows", "binaryType"):
+    for needle in (
+        '"hello"',
+        "token",
+        "cols",
+        "rows",
+        "binaryType",
+        "protocol_version",
+    ):
         assert needle in js, f"shell.js does not send {needle}"
+
+
+def test_shell_js_protocol_version_matches_python():
+    js = _shell_js()
+    match = re.search(r"var BROWSER_PROTOCOL_VERSION = (\d+);", js)
+    assert match, "shell.js has no BROWSER_PROTOCOL_VERSION"
+    assert int(match.group(1)) == BROWSER_PROTOCOL_VERSION
+
+
+def test_shell_js_has_fatal_protocol_mismatch_path():
+    js = _shell_js()
+    assert "INCOMPATIBLE_PROTOCOL_CLOSE_CODE" in js
+    assert "This page is incompatible with the running proxy. Reload the page." in js
+    # The reload message must not offer a reconnect button.
+    mismatch_at = js.index("INCOMPATIBLE_PROTOCOL_CLOSE_CODE)")
+    block = js[mismatch_at : js.index("}", mismatch_at)]
+    assert 'el("shell-reconnect").hidden = true' in block
 
 
 def test_dashboard_js_strips_token_from_hash():

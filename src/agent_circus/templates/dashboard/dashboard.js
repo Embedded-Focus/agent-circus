@@ -7,6 +7,15 @@
 "use strict";
 
 (function () {
+  // ---- browser protocol version -------------------------------------------
+
+  // Copy of the version in agent_circus.browser_protocol (the
+  // authoritative source). Increase it there and here only for a
+  // breaking protocol change.
+  var BROWSER_PROTOCOL_VERSION = 1;
+  var INCOMPATIBLE_PROTOCOL_MESSAGE =
+    "This page is incompatible with the running proxy. Reload the page.";
+
   // ---- formatting helpers -------------------------------------------------
 
   /** Format bytes as B, kB, MB, GB (base 1000, one decimal). */
@@ -58,6 +67,7 @@
     lastFetchAt: null, // epoch ms of the last successful fetch
     paused: false,
     failed: false, // last fetch errored
+    protocolError: null, // fatal protocol mismatch message, stops polling
     backoff: 0, // current retry delay in ms
     tab: "active", // active | recent | routes
     theme: "auto", // auto | light | dark
@@ -65,6 +75,28 @@
     route: { view: "overview" }, // or { view: "detail", sandbox: name }
     layout: "list", // list | cards (overview only)
   };
+
+  // ---- API fetch and protocol check ---------------------------------------
+
+  /** Fetch an API URL with the protocol header and no caching. */
+  function fetchApi(url) {
+    return fetch(url, {
+      cache: "no-store",
+      headers: {
+        "X-Agent-Circus-Protocol-Version": String(BROWSER_PROTOCOL_VERSION),
+      },
+    });
+  }
+
+  /** True when a state answer speaks this page's protocol version. */
+  function isCompatibleState(data) {
+    return !!data && data.protocol_version === BROWSER_PROTOCOL_VERSION;
+  }
+
+  /** Enter the fatal mismatch state. Only a page reload recovers. */
+  function setProtocolError(received) {
+    state.protocolError = INCOMPATIBLE_PROTOCOL_MESSAGE;
+  }
 
   // ---- shell token and buttons ----------------------------------------------
 
@@ -947,6 +979,12 @@
 
   function renderBanner(data) {
     var banner = el("banner");
+    if (state.protocolError) {
+      banner.hidden = false;
+      banner.className = "banner serious";
+      banner.textContent = state.protocolError;
+      return;
+    }
     if (state.failed) {
       banner.hidden = false;
       banner.className = "banner serious";
@@ -1419,8 +1457,11 @@
       "&daemon=" + encodeURIComponent(logTarget.daemon) +
       "&lines=" + encodeURIComponent(lines);
     el("log-body").textContent = "Loading…";
-    fetch(url, { cache: "no-store" })
+    fetchApi(url)
       .then(function (response) {
+        if (response.status === 409) {
+          throw new Error(INCOMPATIBLE_PROTOCOL_MESSAGE);
+        }
         if (!response.ok) throw new Error("HTTP " + response.status);
         return response.text();
       })
@@ -1460,18 +1501,36 @@
   }
 
   function poll() {
+    if (state.protocolError) return; // a mismatch is fatal, only a reload recovers
     if (state.paused || document.hidden) return;
     var scope =
       state.route.view === "detail"
         ? encodeURIComponent(state.route.sandbox)
         : null;
     var url = scope === null ? "/api/state" : "/api/state?sandbox=" + scope;
-    fetch(url, { cache: "no-store" })
+    fetchApi(url)
       .then(function (response) {
+        if (response.status === 409) {
+          // The proxy reports an incompatible protocol before any work.
+          return response.json().then(function (body) {
+            setProtocolError(body && body.received);
+          });
+        }
         if (!response.ok) throw new Error("HTTP " + response.status);
         return response.json();
       })
       .then(function (data) {
+        if (state.protocolError) {
+          renderBanner(state.data);
+          return; // do not schedule another poll
+        }
+        if (!isCompatibleState(data)) {
+          // The answer is missing or speaks another protocol version;
+          // its fields may not match this page's expectations.
+          setProtocolError(data && data.protocol_version);
+          renderBanner(state.data);
+          return;
+        }
         // Drop the answer when the user navigated meanwhile.
         var currentScope =
           state.route.view === "detail" ? state.route.sandbox : null;

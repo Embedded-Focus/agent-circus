@@ -22,6 +22,12 @@ from importlib import resources
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qs
 
+from .browser_protocol import (
+    BROWSER_PROTOCOL_HEADER,
+    BROWSER_PROTOCOL_VERSION,
+    INCOMPATIBLE_PROTOCOL_MESSAGE,
+    parse_header_version,
+)
 from .exceptions import MsbCommandError
 from .proxy_stats import parse_request_line
 from .webshell import ShellManager, origin_allowed
@@ -169,6 +175,24 @@ def http_response(
     head.extend(f"{name}: {value}" for name, value in extra_headers)
     head.extend((f"Content-Length: {len(body)}", "Connection: close"))
     return ("\r\n".join(head) + "\r\n\r\n").encode() + body
+
+
+def _protocol_rejection(received: int | None) -> bytes:
+    """Render the 409 answer for a request without a supported version.
+
+    :param received: Version from the request header, or ``None`` when
+        it was missing or malformed.
+    :returns: The full response bytes with application/json.
+    """
+    body = json.dumps(
+        {
+            "error": "incompatible_protocol",
+            "expected": BROWSER_PROTOCOL_VERSION,
+            "received": received,
+            "message": INCOMPATIBLE_PROTOCOL_MESSAGE,
+        }
+    ).encode()
+    return http_response(409, "Conflict", body, "application/json")
 
 
 class DashboardApp:
@@ -337,20 +361,26 @@ class DashboardApp:
     async def _api_state(self, head: bytes) -> bytes:
         """Render the ``/api/state`` JSON document.
 
-        An optional ``?sandbox=<name>`` query scopes the ``traffic``
-        object to that sandbox; ``sandboxes`` always holds all of them.
+        Requests must carry the browser protocol header; anything else
+        gets a 409 before the collector runs. An optional
+        ``?sandbox=<name>`` query scopes the ``traffic`` object to that
+        sandbox; ``sandboxes`` always holds all of them.
 
         :param head: Raw request head bytes.
         :returns: The full response bytes with application/json.
         """
         from agent_circus import __version__
 
+        rejection = self._protocol_guard(head)
+        if rejection is not None:
+            return rejection
         scope = (query_params(head).get("sandbox") or [None])[0]
         if scope is not None and not _SANDBOX_NAME.fullmatch(scope):
             body = json.dumps({"error": "invalid sandbox name"}).encode()
             return http_response(400, "Bad Request", body, "application/json")
         views, generated_at, refresh_error = await self.collector.sandboxes()
         payload = {
+            "protocol_version": BROWSER_PROTOCOL_VERSION,
             "generated_at": generated_at,
             "refresh_error": refresh_error,
             "scope": scope,
@@ -375,14 +405,18 @@ class DashboardApp:
     async def _api_logs(self, head: bytes) -> bytes:
         """Render the ``/api/logs`` answer for one request head.
 
-        The query string is read here and never logged or stored. The
-        sandbox must be a running managed sandbox of the last views and
-        the daemon one of its daemons (or ``_router`` for the router
-        log).
+        Requests must carry the browser protocol header; anything else
+        gets a 409 before the log reader runs. The query string is read
+        here and never logged or stored. The sandbox must be a running
+        managed sandbox of the last views and the daemon one of its
+        daemons (or ``_router`` for the router log).
 
         :param head: Raw request head bytes.
-        :returns: The full response bytes (text/plain log or JSON 404).
+        :returns: The full response bytes (text/plain log or JSON error).
         """
+        rejection = self._protocol_guard(head)
+        if rejection is not None:
+            return rejection
         query = query_params(head)
         sandbox = (query.get("sandbox") or [None])[0]
         daemon = (query.get("daemon") or [None])[0]
@@ -404,6 +438,19 @@ class DashboardApp:
         return http_response(
             200, "OK", text.encode("utf-8", "replace"), "text/plain; charset=utf-8"
         )
+
+    def _protocol_guard(self, head: bytes) -> bytes | None:
+        """Return a 409 response when the request version is unsupported.
+
+        :param head: Raw request head bytes.
+        :returns: The rejection response, or ``None`` when the request
+            may proceed.
+        """
+        value = parse_headers(head).get(BROWSER_PROTOCOL_HEADER.lower())
+        received = parse_header_version(value)
+        if received == BROWSER_PROTOCOL_VERSION:
+            return None
+        return _protocol_rejection(received)
 
     @staticmethod
     def _logs_error(message: str) -> bytes:

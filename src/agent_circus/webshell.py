@@ -32,6 +32,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .browser_protocol import (
+    BROWSER_PROTOCOL_VERSION,
+    INCOMPATIBLE_PROTOCOL_CLOSE_CODE,
+    INCOMPATIBLE_PROTOCOL_MESSAGE,
+    parse_hello_version,
+)
 from .config import ConfigurationError, resolve_agent_workdir
 from .envs import merged_env
 from .exec_ import build_exec_args
@@ -499,6 +505,31 @@ class ShellManager:
         except (WebSocketClosed, ConnectionError, OSError):
             pass
 
+    async def _protocol_error_and_close(
+        self, ws: WebSocket, received: int | None
+    ) -> None:
+        """Send the protocol error and close with the 4406 close code.
+
+        :param ws: The WebSocket connection.
+        :param received: Version from the hello message, or ``None``
+            when it was absent, a Boolean, or not an integer.
+        """
+        try:
+            await ws.send_text(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "code": "incompatible_protocol",
+                        "expected": BROWSER_PROTOCOL_VERSION,
+                        "received": received,
+                        "message": INCOMPATIBLE_PROTOCOL_MESSAGE,
+                    }
+                )
+            )
+            await ws.close(INCOMPATIBLE_PROTOCOL_CLOSE_CODE)
+        except (WebSocketClosed, ConnectionError, OSError):
+            pass
+
     async def run(
         self,
         ws: WebSocket,
@@ -508,9 +539,11 @@ class ShellManager:
     ) -> None:
         """Run one shell session on an upgraded WebSocket.
 
-        Validates the hello message, the token, the sandbox, the session
-        limit and the workspace config, spawns the PTY process and
-        forwards both directions until the shell or the connection ends.
+        Validates the hello message and its protocol version, the
+        token, the sandbox, the session limit and the workspace config,
+        spawns the PTY process and forwards both directions until the
+        shell or the connection ends. A version mismatch is rejected
+        before the token check and any sandbox lookup or process start.
 
         :param ws: The upgraded WebSocket connection.
         :param sandbox_lookup: Returns the sandbox view of a running
@@ -532,11 +565,21 @@ class ShellManager:
             return
         except WebSocketClosed:
             return
-        hello = self._parse_hello(frame_type, payload)
+        hello = self._decode_hello(frame_type, payload)
         if hello is None:
             await self._error_and_close(ws, 1008, "Invalid hello message")
             return
-        cols, rows, token = hello
+        version = parse_hello_version(hello.get("protocol_version"))
+        if version != BROWSER_PROTOCOL_VERSION:
+            # Reject before the token check, the sandbox lookup and any
+            # process start: an incompatible page must not get a shell.
+            await self._protocol_error_and_close(ws, version)
+            return
+        fields = self._hello_fields(hello)
+        if fields is None:
+            await self._error_and_close(ws, 1008, "Invalid hello message")
+            return
+        cols, rows, token = fields
         if not token_matches(self._token or "", token):
             await self._error_and_close(ws, 4401, "Missing or wrong shell token")
             return
@@ -600,12 +643,13 @@ class ShellManager:
             )
 
     @staticmethod
-    def _parse_hello(frame_type: int, payload: bytes) -> tuple[int, int, str] | None:
-        """Parse and validate the hello message.
+    def _decode_hello(frame_type: int, payload: bytes) -> dict[str, Any] | None:
+        """Decode the hello message as a JSON object of type ``hello``.
 
         :param frame_type: Opcode of the first message.
         :param payload: Message payload.
-        :returns: ``(cols, rows, token)``, or ``None`` when invalid.
+        :returns: The hello object, or ``None`` when the payload is not
+            JSON text, not an object, or carries another ``type``.
         """
         if frame_type != OP_TEXT:
             return None
@@ -615,7 +659,17 @@ class ShellManager:
             return None
         if not isinstance(data, dict) or data.get("type") != "hello":
             return None
-        cols, rows, token = data.get("cols"), data.get("rows"), data.get("token")
+        return data
+
+    @staticmethod
+    def _hello_fields(hello: dict[str, Any]) -> tuple[int, int, str] | None:
+        """Extract and validate the terminal size and token fields.
+
+        :param hello: Decoded hello object.
+        :returns: ``(cols, rows, token)``, or ``None`` when a size is
+            out of range or the token is not a string.
+        """
+        cols, rows, token = hello.get("cols"), hello.get("rows"), hello.get("token")
         if (
             isinstance(cols, bool)
             or not isinstance(cols, int)

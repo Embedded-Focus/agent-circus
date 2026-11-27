@@ -8,6 +8,14 @@
 (function () {
   var STORAGE_PREFIX = "agent-circus.";
 
+  // Copy of the version in agent_circus.browser_protocol (the
+  // authoritative source). Increase it there and here only for a
+  // breaking protocol change.
+  var BROWSER_PROTOCOL_VERSION = 1;
+  var INCOMPATIBLE_PROTOCOL_CLOSE_CODE = 4406;
+  var INCOMPATIBLE_PROTOCOL_MESSAGE =
+    "This page is incompatible with the running proxy. Reload the page.";
+
   function el(id) {
     return document.getElementById(id);
   }
@@ -241,6 +249,15 @@
       el("shell-reconnect").hidden = true;
       return;
     }
+    if (code === INCOMPATIBLE_PROTOCOL_CLOSE_CODE) {
+      // The page's JavaScript is incompatible with the proxy; a
+      // reconnect of the same page cannot fix it. Reload instead.
+      showMessage([
+        make("span", null, lastError || INCOMPATIBLE_PROTOCOL_MESSAGE),
+      ]);
+      el("shell-reconnect").hidden = true;
+      return;
+    }
     if (code === 4503) {
       var wrap = make("span");
       wrap.append(
@@ -282,7 +299,15 @@
     );
     ws.binaryType = "arraybuffer";
     ws.onopen = function () {
-      ws.send(JSON.stringify({ type: "hello", token: token, cols: term.cols, rows: term.rows }));
+      ws.send(
+        JSON.stringify({
+          type: "hello",
+          protocol_version: BROWSER_PROTOCOL_VERSION,
+          token: token,
+          cols: term.cols,
+          rows: term.rows,
+        })
+      );
     };
     ws.onmessage = function (event) {
       if (event.data instanceof ArrayBuffer) {

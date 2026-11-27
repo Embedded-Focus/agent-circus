@@ -9,6 +9,10 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from agent_circus.browser_protocol import (
+    BROWSER_PROTOCOL_HEADER,
+    BROWSER_PROTOCOL_VERSION,
+)
 from agent_circus.dashboard_http import STATIC_FILES, DashboardApp, is_dashboard_host
 from agent_circus.proxy import RouterLookup
 from agent_circus.proxy_stats import ConnectionTracker
@@ -33,7 +37,22 @@ FIXTURE_PATH = (
     / "dashboard_state.json"
 )
 
-CONTRACT_KEYS = {"generated_at", "refresh_error", "proxy", "sandboxes", "traffic"}
+CONTRACT_KEYS = {
+    "protocol_version",
+    "generated_at",
+    "refresh_error",
+    "proxy",
+    "sandboxes",
+    "traffic",
+}
+
+
+def _api_get(path: str) -> bytes:
+    """Return a GET head for an API path with the protocol header."""
+    return (
+        f"GET {path} HTTP/1.1\r\nHost: localhost\r\n"
+        f"{BROWSER_PROTOCOL_HEADER}: {BROWSER_PROTOCOL_VERSION}\r\n\r\n"
+    ).encode()
 
 
 @pytest.mark.parametrize(
@@ -117,7 +136,7 @@ def test_respond_serves_index_with_security_headers():
 
 def test_respond_api_state_matches_contract():
     app = _app()
-    response = _respond(b"GET /api/state HTTP/1.1\r\nHost: localhost\r\n\r\n", app)
+    response = _respond(_api_get("/api/state"), app)
     body = json.loads(response.split(b"\r\n\r\n", 1)[1])
     assert CONTRACT_KEYS <= set(body)
     assert body["proxy"]["port"] == 7700
@@ -143,6 +162,105 @@ def test_respond_healthz():
     response = _respond(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n")
     assert response.startswith(b"HTTP/1.1 200 OK")
     assert response.endswith(b"ok\n")
+
+
+# ---- protocol version guard -------------------------------------------------
+
+
+def test_api_state_reports_supported_protocol_version():
+    app = _app()
+    response = _respond(_api_get("/api/state"), app)
+    body = json.loads(response.split(b"\r\n\r\n", 1)[1])
+    assert body["protocol_version"] == BROWSER_PROTOCOL_VERSION
+
+
+def test_api_state_accepts_supported_header():
+    app = _app()
+    response = _respond(_api_get("/api/state"), app)
+    assert response.startswith(b"HTTP/1.1 200 OK")
+
+
+def test_api_logs_accepts_supported_header():
+    app, collector = _logs_app()
+    response = _get("/api/logs?sandbox=agents-foo&daemon=web", app)
+    assert response.startswith(b"HTTP/1.1 200 OK")
+    assert collector.calls == [("agents-foo", "web", 200)]
+
+
+def test_api_state_missing_header_is_409_incompatible():
+    app = _app()
+    response = _respond(b"GET /api/state HTTP/1.1\r\nHost: localhost\r\n\r\n", app)
+    assert response.startswith(b"HTTP/1.1 409 Conflict")
+    assert b"Content-Type: application/json" in response
+    body = json.loads(response.split(b"\r\n\r\n", 1)[1])
+    assert body == {
+        "error": "incompatible_protocol",
+        "expected": BROWSER_PROTOCOL_VERSION,
+        "received": None,
+        "message": (
+            "This page is incompatible with the running proxy. Reload the page."
+        ),
+    }
+
+
+@pytest.mark.parametrize("value", ["", "1.0", "v1", "one", " "])
+def test_api_state_malformed_header_is_409_with_null_received(value):
+    app = _app()
+    head = (
+        f"GET /api/state HTTP/1.1\r\nHost: localhost\r\n"
+        f"{BROWSER_PROTOCOL_HEADER}: {value}\r\n\r\n"
+    ).encode()
+    response = _respond(head, app)
+    assert response.startswith(b"HTTP/1.1 409 Conflict")
+    body = json.loads(response.split(b"\r\n\r\n", 1)[1])
+    assert body["error"] == "incompatible_protocol"
+    assert body["received"] is None
+
+
+def test_api_state_unsupported_version_is_409_with_received_value():
+    app = _app()
+    head = (
+        f"GET /api/state HTTP/1.1\r\nHost: localhost\r\n"
+        f"{BROWSER_PROTOCOL_HEADER}: 2\r\n\r\n"
+    ).encode()
+    response = _respond(head, app)
+    body = json.loads(response.split(b"\r\n\r\n", 1)[1])
+    assert body["expected"] == BROWSER_PROTOCOL_VERSION
+    assert body["received"] == 2
+
+
+def test_rejected_state_request_skips_collector():
+    collector = FakeCollector({"name": "agents-foo"})
+    app = _app(collector)
+    _respond(b"GET /api/state HTTP/1.1\r\nHost: localhost\r\n\r\n", app)
+    assert collector.calls == 0
+
+
+def test_rejected_log_request_skips_log_reader():
+    app, collector = _logs_app()
+    _get("/api/logs?sandbox=agents-foo&daemon=web", app)  # sanity: one call
+    head = (
+        b"GET /api/logs?sandbox=agents-foo&daemon=web HTTP/1.1\r\n"
+        b"Host: localhost\r\n\r\n"
+    )
+    _respond(head, app)
+    assert collector.calls == [("agents-foo", "web", 200)]
+
+
+def test_api_logs_missing_header_is_409():
+    app, _ = _logs_app()
+    response = _respond(
+        b"GET /api/logs?sandbox=agents-foo&daemon=web HTTP/1.1\r\n"
+        b"Host: localhost\r\n\r\n",
+        app,
+    )
+    assert response.startswith(b"HTTP/1.1 409 Conflict")
+
+
+def test_fixtures_carry_supported_protocol_version():
+    for path in (FIXTURE_PATH, SCOPED_FIXTURE_PATH):
+        state = json.loads(path.read_text())
+        assert state["protocol_version"] == BROWSER_PROTOCOL_VERSION
 
 
 def test_dashboard_assets_are_packaged():
@@ -335,8 +453,7 @@ def _logs_app():
 
 
 def _get(path: str, app: DashboardApp) -> bytes:
-    head = f"GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n".encode()
-    return asyncio.run(app.respond(head))
+    return asyncio.run(app.respond(_api_get(path)))
 
 
 def test_api_logs_returns_log_text():
@@ -414,7 +531,7 @@ def _tracker_app():
 
 def test_api_state_without_scope_has_by_sandbox():
     app = _tracker_app()
-    response = _respond(b"GET /api/state HTTP/1.1\r\nHost: localhost\r\n\r\n", app)
+    response = _respond(_api_get("/api/state"), app)
     body = json.loads(response.split(b"\r\n\r\n", 1)[1])
     assert body["scope"] is None
     by_sandbox = body["traffic"]["by_sandbox"]
@@ -441,10 +558,7 @@ def test_api_state_with_scope_filters_traffic():
         7700,
         shells=_manager(),
     )
-    response = _respond(
-        b"GET /api/state?sandbox=agents-foo HTTP/1.1\r\nHost: localhost\r\n\r\n",
-        app,
-    )
+    response = _respond(_api_get("/api/state?sandbox=agents-foo"), app)
     body = json.loads(response.split(b"\r\n\r\n", 1)[1])
     assert body["scope"] == "agents-foo"
     assert [r["sandbox"] for r in body["traffic"]["active"]] == []
@@ -462,7 +576,7 @@ def test_api_state_rejects_invalid_scope_with_400():
     for scope in ("../x", "A%20B", "", "a" * 200):
         query = f"sandbox={scope}" if scope else "sandbox="
         response = _respond(
-            f"GET /api/state?{query} HTTP/1.1\r\nHost: localhost\r\n\r\n".encode(),
+            _api_get(f"/api/state?{query}"),
             app,
         )
         assert response.startswith(b"HTTP/1.1 400 Bad Request"), scope
@@ -472,10 +586,7 @@ def test_api_state_rejects_invalid_scope_with_400():
 
 def test_api_state_unknown_scope_is_empty_not_error():
     app = _tracker_app()
-    response = _respond(
-        b"GET /api/state?sandbox=agents-ghost HTTP/1.1\r\nHost: localhost\r\n\r\n",
-        app,
-    )
+    response = _respond(_api_get("/api/state?sandbox=agents-ghost"), app)
     assert response.startswith(b"HTTP/1.1 200 OK")
     body = json.loads(response.split(b"\r\n\r\n", 1)[1])
     assert body["scope"] == "agents-ghost"
@@ -644,7 +755,13 @@ def test_shell_disabled_by_default_closes_with_4503():
                 try:
                     await ws.send(
                         json.dumps(
-                            {"type": "hello", "token": "x", "cols": 80, "rows": 24}
+                            {
+                                "type": "hello",
+                                "protocol_version": BROWSER_PROTOCOL_VERSION,
+                                "token": "x",
+                                "cols": 80,
+                                "rows": 24,
+                            }
                         )
                     )
                     while True:
@@ -708,7 +825,13 @@ def test_shell_end_to_end_through_proxy_handle(tmp_path):
             ) as ws:
                 await ws.send(
                     json.dumps(
-                        {"type": "hello", "token": "secret", "cols": 80, "rows": 24}
+                        {
+                            "type": "hello",
+                            "protocol_version": BROWSER_PROTOCOL_VERSION,
+                            "token": "secret",
+                            "cols": 80,
+                            "rows": 24,
+                        }
                     )
                 )
                 while True:
@@ -752,7 +875,7 @@ def test_state_reports_shell_enabled_and_sessions():
             token="t", argv_factory=lambda s, w: [], notify=lambda l: None
         ),
     )
-    response = _respond(b"GET /api/state HTTP/1.1\r\nHost: localhost\r\n\r\n", app)
+    response = _respond(_api_get("/api/state"), app)
     body = json.loads(response.split(b"\r\n\r\n", 1)[1])
     assert body["proxy"]["shell"]["enabled"] is True
     assert body["proxy"]["shell"]["sessions"][0]["sandbox"] == "agents-foo"

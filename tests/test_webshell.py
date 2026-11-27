@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
+from agent_circus.browser_protocol import BROWSER_PROTOCOL_VERSION
 from agent_circus.config import ConfigurationError, parse_config
 from agent_circus.envs import merged_env
 from agent_circus.exec_ import build_exec_args
@@ -486,8 +487,21 @@ class RecordingManager:
         return _lookup()
 
 
-def _hello(token="secret-token", cols=80, rows=24):
-    return json.dumps({"type": "hello", "token": token, "cols": cols, "rows": rows})
+# Sentinel for _hello: build the payload without the protocol_version
+# field. JSON null is a separate case and passes version=None instead.
+_OMIT = object()
+
+
+def _hello(
+    token="secret-token",
+    cols=80,
+    rows=24,
+    protocol_version=BROWSER_PROTOCOL_VERSION,
+):
+    payload = {"type": "hello", "token": token, "cols": cols, "rows": rows}
+    if protocol_version is not _OMIT:
+        payload["protocol_version"] = protocol_version
+    return json.dumps(payload)
 
 
 def _run_ws_test(setup, client_coro):
@@ -559,6 +573,117 @@ def test_session_rejects_wrong_token_with_4401_and_spawns_nothing():
     message, code = _run_ws_test(RecordingManager, client)
     assert message["type"] == "error"
     assert code == 4401
+
+
+# ---- protocol version handshake ---------------------------------------------
+
+
+async def _protocol_error_then_close(ws):
+    """Read the first message and the close code from the server."""
+    message = json.loads(await asyncio.wait_for(ws.recv(), 5))
+    code = await _await_close(ws)
+    return message, code
+
+
+def test_session_rejects_missing_version_with_4406_and_spawns_nothing():
+    rec_holder = {}
+
+    async def client(rec, port):
+        async with await _client_connect(port) as ws:
+            await ws.send(_hello(protocol_version=_OMIT))
+            return await _protocol_error_then_close(ws)
+
+    def setup():
+        rec = RecordingManager()
+        rec_holder["rec"] = rec
+        return rec
+
+    message, code = _run_ws_test(setup, client)
+    assert message["type"] == "error"
+    assert message["code"] == "incompatible_protocol"
+    assert message["received"] is None
+    assert message["expected"] == BROWSER_PROTOCOL_VERSION
+    assert "Reload the page." in message["message"]
+    assert code == 4406
+    assert rec_holder["rec"].factory_calls == []
+
+
+def test_session_rejects_boolean_version_with_4406():
+    async def client(rec, port):
+        async with await _client_connect(port) as ws:
+            await ws.send(_hello(protocol_version=True))
+            return await _protocol_error_then_close(ws)
+
+    message, code = _run_ws_test(RecordingManager, client)
+    assert message["code"] == "incompatible_protocol"
+    assert message["received"] is None
+    assert code == 4406
+
+
+def test_session_rejects_string_version_with_4406():
+    async def client(rec, port):
+        async with await _client_connect(port) as ws:
+            await ws.send(_hello(protocol_version="1"))
+            return await _protocol_error_then_close(ws)
+
+    message, code = _run_ws_test(RecordingManager, client)
+    assert message["code"] == "incompatible_protocol"
+    assert message["received"] is None
+    assert code == 4406
+
+
+def test_session_rejects_unsupported_version_reporting_it():
+    async def client(rec, port):
+        async with await _client_connect(port) as ws:
+            await ws.send(_hello(protocol_version=2))
+            return await _protocol_error_then_close(ws)
+
+    message, code = _run_ws_test(RecordingManager, client)
+    assert message["code"] == "incompatible_protocol"
+    assert message["received"] == 2
+    assert code == 4406
+
+
+def test_session_checks_version_before_token():
+    async def client(rec, port):
+        async with await _client_connect(port) as ws:
+            await ws.send(_hello(token="wrong", protocol_version=99))
+            return await _protocol_error_then_close(ws)
+
+    message, code = _run_ws_test(RecordingManager, client)
+    assert message["code"] == "incompatible_protocol"
+    assert code == 4406, "an incompatible version must not reach the token check"
+
+
+def test_rejected_version_leaves_factory_and_spawn_untouched():
+    async def client(rec, port):
+        async with await _client_connect(port) as ws:
+            await ws.send(_hello(protocol_version=2))
+            await _await_close(ws)
+
+    rec_holder = {}
+
+    def setup():
+        rec = RecordingManager(
+            argv_factory=lambda s, w: [sys.executable, "-c", SLEEP_CHILD]
+        )
+        rec_holder["rec"] = rec
+        return rec
+
+    _run_ws_test(setup, client)
+    assert rec_holder["rec"].factory_calls == []
+
+
+def test_session_rejects_invalid_hello_fields_with_1008():
+    async def client(rec, port):
+        async with await _client_connect(port) as ws:
+            await ws.send(_hello(cols=0))
+            return await _protocol_error_then_close(ws)
+
+    message, code = _run_ws_test(RecordingManager, client)
+    assert message["type"] == "error"
+    assert "code" not in message
+    assert code == 1008
 
 
 def test_session_rejects_missing_hello_with_1008(monkeypatch):
