@@ -1,22 +1,24 @@
 """Dashboard data collection: sandbox state, router status and hints.
 
 The dashboard shows every msb sandbox and the daemons inside the
-running ones. All data comes from ``msb list`` / ``msb inspect`` (cached,
-refreshed at most every :data:`REFRESH_INTERVAL_S`) and from the running
-guest routers' status endpoints (see ``templates/circus_router.py``).
-The module keeps the pure view-building functions separate from the
-I/O, so most tests need no sockets.
+running ones. All data comes from ``msb list`` / ``msb inspect`` /
+``msb metrics`` (cached, refreshed at most every
+:data:`REFRESH_INTERVAL_S`) and from the running guest routers' status
+endpoints (see ``templates/circus_router.py``). The module keeps the
+pure view-building functions separate from the I/O, so most tests need
+no sockets.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import shlex
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 from .config import (
@@ -31,11 +33,15 @@ from .config import (
 from .daemons import parse_status_output
 from .exceptions import ConfigurationError, MsbCommandError
 from .sandbox import (
+    DOCKER_DATA_GUEST_PATH,
     SandboxInfo,
+    SandboxMetrics,
     build_inspect_args,
     build_list_args,
+    build_metrics_args,
     parse_inspect_bind_mounts,
     parse_inspect_ports_ordered,
+    parse_metrics_output,
     parse_sandbox_list_output,
     router_forward,
 )
@@ -46,10 +52,15 @@ if TYPE_CHECKING:
 #: Minimum seconds between two msb list refreshes.
 REFRESH_INTERVAL_S = 3.0
 
+#: Seconds to wait for one bulk ``msb metrics`` command.
+METRICS_TIMEOUT_S = 10.0
+
 #: Router state as shown per sandbox.
 RouterState = Literal["ok", "stopped", "no-router", "unreachable", "outdated"]
 
 _DAEMON_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -61,12 +72,17 @@ class RouterStatus:
     :ivar reachable: Per-daemon TCP reachability of the routed port.
     :ivar daemon_status: Raw output of the guest status script, or
         ``None`` when there is no script.
+    :ivar filesystems: Filesystem use reported by the router, keyed by
+        mount path. A missing entry means the router did not report that
+        filesystem (not a separate mount, or inspection failed); it is
+        not an error.
     """
 
     started_at: float | None
     routes: dict[str, int]
     reachable: dict[str, bool]
     daemon_status: str | None
+    filesystems: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 def parse_router_status_response(raw: bytes) -> RouterStatus | None:
@@ -114,11 +130,27 @@ def parse_router_status_response(raw: bytes) -> RouterStatus | None:
     daemon_status = payload.get("daemon_status")
     if not isinstance(daemon_status, str):
         daemon_status = None
+    filesystems: dict[str, dict[str, int]] = {}
+    raw_filesystems = payload.get("filesystems")
+    if isinstance(raw_filesystems, dict):
+        for mount, entry in raw_filesystems.items():
+            if not isinstance(mount, str) or not isinstance(entry, dict):
+                continue
+            values = {
+                key: entry[key]
+                for key in ("total_bytes", "used_bytes", "available_bytes")
+                if not isinstance(entry.get(key), bool)
+                and isinstance(entry.get(key), int)
+                and entry[key] >= 0
+            }
+            if len(values) == 3:
+                filesystems[mount] = values
     return RouterStatus(
         started_at=float(started_at) if started_at is not None else None,
         routes=routes,
         reachable=reachable,
         daemon_status=daemon_status,
+        filesystems=filesystems,
     )
 
 
@@ -321,11 +353,93 @@ def build_hints(sandbox: dict) -> list[dict]:
     return hints
 
 
+def build_sandbox_resources(
+    running: bool,
+    metrics: SandboxMetrics | None,
+    router: RouterStatus | str | None,
+    sampled_at: float,
+) -> dict | None:
+    """Join the resource sources of one sandbox into the API contract.
+
+    The result keeps partial data: a failed source only removes its own
+    fields. A missing disk entry means that the source did not report
+    that disk, not an error. Memory available is ``max(limit - used, 0)``
+    and root-disk total is used plus available, because msb reports the
+    root free value including blocks reserved for root.
+
+    :param running: Whether the sandbox is currently running.
+    :param metrics: Host sample from the bulk ``msb metrics`` command,
+        or ``None`` without a valid sample.
+    :param router: The router status answer (its ``filesystems`` supply
+        the docker disk), one of the failure strings, or ``None``.
+    :param sampled_at: Epoch-seconds time of the collector refresh.
+    :returns: The ``resources`` object of the sandbox view, or ``None``
+        for a stopped sandbox or when no source is valid.
+    """
+    if not running:
+        return None
+    disks: list[dict] = []
+    if (
+        metrics is not None
+        and metrics.root_used_bytes is not None
+        and metrics.root_free_bytes is not None
+    ):
+        disks.append(
+            {
+                "id": "root",
+                "label": "Root disk",
+                "mount": "/",
+                "used_bytes": metrics.root_used_bytes,
+                "available_bytes": metrics.root_free_bytes,
+                "total_bytes": metrics.root_used_bytes + metrics.root_free_bytes,
+            }
+        )
+    docker = (
+        router.filesystems.get(DOCKER_DATA_GUEST_PATH)
+        if isinstance(router, RouterStatus)
+        else None
+    )
+    if docker is not None:
+        disks.append(
+            {
+                "id": "docker",
+                "label": "Docker disk",
+                "mount": DOCKER_DATA_GUEST_PATH,
+                "used_bytes": docker["used_bytes"],
+                "available_bytes": docker["available_bytes"],
+                "total_bytes": docker["total_bytes"],
+            }
+        )
+    if metrics is None and not disks:
+        return None
+    memory_used = metrics.memory_used_bytes if metrics is not None else None
+    memory_limit = metrics.memory_limit_bytes if metrics is not None else None
+    return {
+        # A fresh router response proves liveness, so a docker disk
+        # without host metrics still reports a running sample.
+        "sample_state": metrics.state if metrics is not None else "running",
+        "sampled_at": sampled_at,
+        "cpu_percent": metrics.cpu_percent if metrics is not None else None,
+        "cpu_count": metrics.cpu_count if metrics is not None else None,
+        "memory_used_bytes": memory_used,
+        "memory_available_bytes": (
+            max(memory_limit - memory_used, 0)
+            if memory_used is not None and memory_limit is not None
+            else None
+        ),
+        "memory_limit_bytes": memory_limit,
+        "disks": disks,
+    }
+
+
 def build_sandbox_view(
     info: SandboxInfo,
     facts: InspectFacts | None,
     router: RouterStatus | str | None,
     proxy_port: int,
+    *,
+    metrics: SandboxMetrics | None = None,
+    sampled_at: float | None = None,
 ) -> dict:
     """Build the dashboard view dict of one sandbox.
 
@@ -335,7 +449,10 @@ def build_sandbox_view(
     :param router: The router status answer, one of the failure strings
         (``"unreachable"``/``"outdated"``), or ``None``.
     :param proxy_port: Host port of the central proxy.
-    :returns: The sandbox view dict with a ``hints`` key.
+    :param metrics: Host resource sample, or ``None`` when unavailable.
+    :param sampled_at: Epoch-seconds time of the collector refresh, used
+        as the ``resources.sampled_at`` value.
+    :returns: The sandbox view dict with ``hints`` and ``resources`` keys.
     """
     running = (info.status or "").lower() == "running"
     managed = info.name.startswith(f"{DEFAULT_SANDBOX_NAME_PREFIX}-")
@@ -382,6 +499,9 @@ def build_sandbox_view(
         ],
         "daemons": daemons,
     }
+    view["resources"] = build_sandbox_resources(
+        running, metrics, router, sampled_at if sampled_at is not None else 0.0
+    )
     view["hints"] = build_hints(view)
     return view
 
@@ -393,7 +513,9 @@ class DashboardCollector:
     older than :data:`REFRESH_INTERVAL_S`; concurrent callers wait for
     the same refresh instead of starting a second one. Inspect facts are
     cached per sandbox while the creation time stays the same (ports and
-    mounts are fixed at creation).
+    mounts are fixed at creation). Resource metrics are best-effort: a
+    failed ``msb metrics`` run or a bad document only clears the
+    resource data of the current refresh, never the other fields.
     """
 
     def __init__(
@@ -420,10 +542,41 @@ class DashboardCollector:
         self._views: list[dict] = []
         self._generated_at: float | None = None
         self._refresh_error: str | None = None
+        self._metrics_error: str | None = None
         self._facts_cache: dict[str, tuple[float | None, InspectFacts | None]] = {}
 
+    async def _collect_metrics(self) -> dict[str, SandboxMetrics]:
+        """Run one bulk ``msb metrics`` command for all sandboxes.
+
+        :returns: Valid samples by sandbox name; empty when the command
+            fails or the output is not a valid document. Sets
+            :attr:`_metrics_error` to a short safe message on failure
+            (never raw stderr or exception details).
+        """
+        self._metrics_error = None
+        try:
+            result = await asyncio.to_thread(
+                self._invoker.run,
+                build_metrics_args(),
+                check=False,
+                timeout=METRICS_TIMEOUT_S,
+            )
+        except (MsbCommandError, OSError, TimeoutError) as e:
+            self._metrics_error = "msb metrics failed"
+            logger.debug("msb metrics command failed: %s", e)
+            return {}
+        if result.returncode != 0:
+            self._metrics_error = "msb metrics failed"
+            return {}
+        try:
+            return parse_metrics_output(result.stdout)
+        except ConfigurationError as e:
+            self._metrics_error = "msb metrics returned unusable output"
+            logger.debug("msb metrics parse failed: %s", e)
+            return {}
+
     async def _refresh(self) -> None:
-        """Run one ``msb list``, inspect and router-status round."""
+        """Run one ``msb list``, inspect, router-status and metrics round."""
         try:
             result = await asyncio.to_thread(
                 self._invoker.run, build_list_args(running_only=False), check=False
@@ -485,9 +638,15 @@ class DashboardCollector:
             return await self._router_fetch(forward)
 
         routers = await asyncio.gather(*(router_for(info) for info in infos))
+        metrics = await self._collect_metrics()
         views = [
             build_sandbox_view(
-                info, facts_by_name.get(info.name), router, self._proxy_port
+                info,
+                facts_by_name.get(info.name),
+                router,
+                self._proxy_port,
+                metrics=metrics.get(info.name),
+                sampled_at=self._generated_at,
             )
             for info, router in zip(infos, routers)
         ]
@@ -500,12 +659,16 @@ class DashboardCollector:
         )
         self._views = views
 
-    async def sandboxes(self) -> tuple[list[dict], float | None, str | None]:
+    async def sandboxes(
+        self,
+    ) -> tuple[list[dict], float | None, str | None, str | None]:
         """Return the sandbox views, refreshing stale data first.
 
-        :returns: ``(sandbox views, generated_at, refresh_error)``.
-            On a failed refresh the previous views are kept and
-            ``refresh_error`` describes the failure.
+        :returns: ``(sandbox views, generated_at, refresh_error,
+            metrics_error)``. On a failed refresh the previous views are
+            kept and ``refresh_error`` describes the failure.
+            ``metrics_error`` is the resource-metrics failure of the last
+            refresh, or ``None``; it never removes other data.
         """
         now = self._clock()
         if self._generated_at is None or now - self._generated_at >= REFRESH_INTERVAL_S:
@@ -515,7 +678,7 @@ class DashboardCollector:
                     or self._clock() - self._generated_at >= REFRESH_INTERVAL_S
                 ):
                     await self._refresh()
-        return self._views, self._generated_at, self._refresh_error
+        return self._views, self._generated_at, self._refresh_error, self._metrics_error
 
     async def running_managed_view(self, name: str) -> dict[str, Any] | None:
         """Return the view of a running managed sandbox, refreshing first.

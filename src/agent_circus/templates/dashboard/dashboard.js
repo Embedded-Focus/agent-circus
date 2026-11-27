@@ -3,6 +3,7 @@
    replaceChildren); sandbox names and paths from msb are never parsed
    as HTML. */
 /* global navigator, document, window, localStorage */
+/* global AgentCircusMetricHistory */
 
 "use strict";
 
@@ -75,6 +76,24 @@
     route: { view: "overview" }, // or { view: "detail", sandbox: name }
     layout: "list", // list | cards (overview only)
   };
+
+  // Per-sandbox resource history, built from the polled state answers.
+  // The module is loaded before this script; a missing module only
+  // disables the charts, never the rest of the page.
+  var history =
+    typeof AgentCircusMetricHistory === "object" && AgentCircusMetricHistory
+      ? AgentCircusMetricHistory.createHistory()
+      : null;
+
+  /** Record one state payload into the history store (no-op without it). */
+  function recordHistory(data) {
+    if (history) history.record(data);
+  }
+
+  /** History series of one sandbox, or an empty array. */
+  function metricSeries(name, id, limit) {
+    return history ? history.series(name, id, limit) : [];
+  }
 
   // ---- API fetch and protocol check ---------------------------------------
 
@@ -410,6 +429,228 @@
     return holder;
   }
 
+  // ---- resource metrics ------------------------------------------------------
+
+  /** Format a percent value compactly: "40%", "4.5%", "-". */
+  function fmtPercent(p) {
+    if (p === null || p === undefined || !isFinite(p)) return "-";
+    var rounded = p < 10 ? Math.round(p * 10) / 10 : Math.round(p);
+    return rounded + "%";
+  }
+
+  /** Clamp a percent to the fixed 0..100 plot scale. */
+  function clampPercent(p) {
+    return Math.max(0, Math.min(100, p));
+  }
+
+  /**
+   * Current one-line text of a metric, or null when unavailable.
+   * CPU percent is the share of the allocated cores, so 80 across two
+   * cores is "40% capacity · 0.8 of 2 cores".
+   */
+  function metricCurrentText(id, res) {
+    if (!res) return null;
+    if (id === "cpu") {
+      if (res.cpu_percent === null || res.cpu_percent === undefined) return null;
+      var cores = res.cpu_count;
+      if (typeof cores === "number" && isFinite(cores) && cores > 0) {
+        return (
+          fmtPercent(res.cpu_percent / cores) + " capacity · " +
+          (Math.round((res.cpu_percent / 100) * cores * 10) / 10) +
+          " of " + cores + " cores"
+        );
+      }
+      // Without a core count only the across-cores value is truthful.
+      return fmtPercent(res.cpu_percent) + " core use";
+    }
+    if (id === "memory") {
+      if (res.memory_used_bytes === null || res.memory_limit_bytes === null) {
+        return null;
+      }
+      return (
+        fmtBytes(res.memory_used_bytes) + " used, " +
+        fmtBytes(res.memory_available_bytes) + " available"
+      );
+    }
+    var diskId = id.indexOf("disk:") === 0 ? id.slice(5) : null;
+    if (diskId) {
+      var disk = (res.disks || []).find(function (d) {
+        return d.id === diskId;
+      });
+      if (!disk) return null;
+      return (
+        fmtBytes(disk.used_bytes) + " used, " +
+        fmtBytes(disk.available_bytes) + " available"
+      );
+    }
+    return null;
+  }
+
+  /** Tooltip text of one history point. */
+  function metricPointTip(id, point) {
+    var text = fmtClock(point.t) + " · " + fmtPercent(point.percent);
+    if (point.used_bytes !== null) {
+      text +=
+        " · " + fmtBytes(point.used_bytes) + " used, " +
+        fmtBytes(point.available_bytes) + " avail";
+    }
+    return text;
+  }
+
+  /**
+   * Percent line chart on a fixed 0..100 scale.
+   * Points are history series items; a gap_before or missing percent
+   * starts a new path. opts: {width, height, strokeWidth, fixedSize,
+   * ariaLabel, tooltip}. Returns the chart node (svg, or a holder div
+   * with tooltip when opts.tooltip is set).
+   */
+  function percentChart(points, opts) {
+    var W = opts.width;
+    var H = opts.height;
+    var svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    svg.setAttribute("preserveAspectRatio", "none");
+    svg.setAttribute("role", "img");
+    if (opts.fixedSize) {
+      svg.setAttribute("width", String(W));
+      svg.setAttribute("height", String(H));
+    }
+    svg.setAttribute("aria-label", opts.ariaLabel || "chart");
+    var t0 = points.length ? points[0].t : 0;
+    var t1 = points.length ? points[points.length - 1].t : 1;
+    function x(point) {
+      if (t1 <= t0) return W / 2;
+      return ((point.t - t0) / (t1 - t0)) * W;
+    }
+    function y(percent) {
+      return H - (clampPercent(percent) / 100) * (H - 4) - 2;
+    }
+    // One polyline per gap-free run of valid points.
+    var run = [];
+    function flushRun() {
+      if (run.length < 1) return;
+      var line = document.createElementNS(SVG_NS, "polyline");
+      var pts = "";
+      run.forEach(function (point) {
+        pts += x(point).toFixed(2) + "," + y(point.percent).toFixed(2) + " ";
+      });
+      line.setAttribute("points", pts.trim());
+      line.setAttribute("fill", "none");
+      line.setAttribute("stroke", "var(--accent)");
+      line.setAttribute("stroke-width", String(opts.strokeWidth || 2));
+      line.setAttribute("stroke-linejoin", "round");
+      svg.append(line);
+      run = [];
+    }
+    points.forEach(function (point) {
+      if (
+        point.percent === null ||
+        point.percent === undefined ||
+        !isFinite(point.percent) ||
+        point.gap_before
+      ) {
+        flushRun();
+      }
+      if (point.percent !== null && point.percent !== undefined && isFinite(point.percent)) {
+        run.push(point);
+      }
+    });
+    flushRun();
+    if (!opts.tooltip) return svg;
+
+    // Hover layer with per-point tooltip and crosshair (detail charts).
+    var tooltip = make("div", "spark-tooltip");
+    tooltip.style.display = "none";
+    tooltip.style.position = "absolute";
+    tooltip.style.pointerEvents = "none";
+    var crosshair = document.createElementNS(SVG_NS, "line");
+    crosshair.setAttribute("y1", "0");
+    crosshair.setAttribute("y2", String(H));
+    crosshair.setAttribute("stroke", "var(--text-muted)");
+    crosshair.setAttribute("stroke-width", "1");
+    crosshair.style.display = "none";
+    var holder = make("div", "spark-holder");
+    holder.style.position = "relative";
+    holder.append(svg, tooltip);
+    points.forEach(function (point, i) {
+      var left = (i / points.length) * W;
+      var right = ((i + 1) / points.length) * W;
+      var rect = document.createElementNS(SVG_NS, "rect");
+      rect.setAttribute("x", (left - (right - left) / 2).toFixed(2));
+      rect.setAttribute("y", "0");
+      rect.setAttribute("width", (right - left).toFixed(2));
+      rect.setAttribute("height", String(H));
+      rect.setAttribute("fill", "transparent");
+      rect.addEventListener("mouseenter", function () {
+        tooltip.textContent = metricPointTip(opts.metricId, point);
+        tooltip.style.display = "block";
+        tooltip.style.left = Math.min((left / W) * 100, 70) + "%";
+        tooltip.style.top = "0";
+        crosshair.setAttribute("x1", x(point).toFixed(2));
+        crosshair.setAttribute("x2", x(point).toFixed(2));
+        crosshair.style.display = "";
+      });
+      rect.addEventListener("mouseleave", function () {
+        tooltip.style.display = "none";
+        crosshair.style.display = "none";
+      });
+      svg.append(rect);
+    });
+    svg.append(crosshair);
+    return holder;
+  }
+
+  var METRIC_LABELS = {
+    cpu: "CPU",
+    memory: "Memory",
+    "disk:root": "Root disk",
+    "disk:docker": "Docker disk",
+  };
+
+  /**
+   * One compact resource row: label, current text, sparkline.
+   * Returns null when the metric has neither a current value nor history.
+   */
+  function metricRow(sandboxName, id, res) {
+    var points = metricSeries(sandboxName, id, 60);
+    var current = metricCurrentText(id, res);
+    if (!current && points.length === 0) return null;
+    var row = make("div", "res-row");
+    row.append(make("span", "res-label", METRIC_LABELS[id] || id));
+    row.append(make("span", "res-value", current || "-"));
+    if (points.length > 0) {
+      row.append(
+        percentChart(points, {
+          width: 90,
+          height: 18,
+          strokeWidth: 1.5,
+          fixedSize: true,
+          ariaLabel:
+            (METRIC_LABELS[id] || id) + " over the last 10 minutes, currently " +
+            fmtPercent(points[points.length - 1].percent),
+        })
+      );
+    }
+    return row;
+  }
+
+  /** Compact resource area of a sandbox card (null without data). */
+  function renderCardResources(sandbox) {
+    var res = sandbox.resources;
+    if (!res) return null;
+    var ids = ["cpu", "memory", "disk:root", "disk:docker"];
+    var rows = make("div", "res-rows");
+    var any = false;
+    ids.forEach(function (id) {
+      var row = metricRow(sandbox.name, id, res);
+      if (row) {
+        rows.append(row);
+        any = true;
+      }
+    });
+    return any ? rows : null;
+  }
+
   function renderKpis(data) {
     var sandboxes = data.sandboxes || [];
     var managed = sandboxes.filter(function (s) {
@@ -536,6 +777,9 @@
       ws.append(make("span", "path", "workspace unknown"));
     }
     card.append(ws);
+
+    var resArea = renderCardResources(sandbox);
+    if (resArea) card.append(resArea);
 
     (sandbox.daemons || []).forEach(function (d) {
       var row = make("div", "daemon-row");
@@ -671,6 +915,49 @@
     return ["i", "st-good", hints.length, hints[0].text];
   }
 
+  /** Short list-view text of a metric, or "-" when unavailable. */
+  function metricListText(id, res) {
+    if (!res) return "-";
+    if (id === "cpu") {
+      // Show a capacity share only when the core count is known; a
+      // bare across-cores percent would read as a false capacity.
+      if (
+        res.cpu_percent === null ||
+        res.cpu_percent === undefined ||
+        typeof res.cpu_count !== "number" ||
+        res.cpu_count <= 0
+      ) {
+        return "-";
+      }
+      return fmtPercent(res.cpu_percent / res.cpu_count);
+    }
+    if (id === "memory") {
+      var used = res.memory_used_bytes;
+      var limit = res.memory_limit_bytes;
+      if (used === null || limit === null || limit <= 0) return "-";
+      return fmtPercent((100 * used) / limit) + " · " + fmtBytes(used);
+    }
+    return null; // disks are stacked separately
+  }
+
+  /** Mini row of one disk for the Storage cell, or null. */
+  function diskListRow(res, diskId, label) {
+    var disk = res
+      ? (res.disks || []).find(function (d) {
+          return d.id === diskId;
+        })
+      : null;
+    if (!disk) return null;
+    var row = make("div", "res-disk-row");
+    row.append(make("span", "res-label", label));
+    var total = disk.used_bytes + disk.available_bytes;
+    var pct = total > 0 ? (100 * disk.used_bytes) / total : null;
+    row.append(
+      make("span", "res-value", fmtPercent(pct) + " · " + fmtBytes(disk.used_bytes))
+    );
+    return row;
+  }
+
   function renderSandboxList(visible, data, now) {
     var bySandbox = (data.traffic || {}).by_sandbox || {};
     var wrap = make("div", "table-wrap");
@@ -684,14 +971,17 @@
       "Workspace",
       "Daemons",
       "Problems",
+      "CPU",
+      "Memory",
+      "Storage",
       "Active",
       "Traffic",
       "Age",
       "",
     ].forEach(function (h, i) {
       var cls = null;
-      if (i === 5) cls = "num";
-      if (i === 2 || i === 6) cls = "col-wide";
+      if (i === 8) cls = "num";
+      if (i === 2 || i === 9) cls = "col-wide";
       headRow.append(make("th", cls, h));
     });
     thead.append(headRow);
@@ -739,6 +1029,16 @@
       }
 
       var summary = bySandbox[s.name];
+      var res = s.resources;
+      var cpuCell = make("td", null, metricListText("cpu", res) || "-");
+      var memoryCell = make("td", null, metricListText("memory", res) || "-");
+      var storageCell = make("td");
+      var rootRow = diskListRow(res, "root", "Root");
+      var dockerRow = diskListRow(res, "docker", "Docker");
+      if (rootRow) storageCell.append(rootRow);
+      if (dockerRow) storageCell.append(dockerRow);
+      if (!rootRow && !dockerRow) storageCell.append(make("span", null, "-"));
+
       var activeCell = make("td", "num", String(summary ? summary.active : 0));
 
       var trafficCell = make("td", "col-wide");
@@ -770,6 +1070,9 @@
         wsCell,
         daemonCell,
         problems,
+        cpuCell,
+        memoryCell,
+        storageCell,
         activeCell,
         trafficCell,
         ageCell,
@@ -1007,6 +1310,13 @@
       banner.textContent = data.refresh_error;
       return;
     }
+    // A metrics failure is nonfatal: warn and keep polling.
+    if (data && data.metrics_error) {
+      banner.hidden = false;
+      banner.className = "banner warning";
+      banner.textContent = "Resource metrics are limited: " + data.metrics_error;
+      return;
+    }
     banner.hidden = true;
   }
 
@@ -1114,6 +1424,7 @@
     var hintsEl = el("detail-hints");
     hintsEl.replaceChildren(hintRows(sandbox));
 
+    renderDetailResources(sandbox);
     renderDetailDaemons(sandbox, data.traffic || {});
     renderDetailTraffic(data, sandbox, now);
     renderDetailPorts(sandbox);
@@ -1199,6 +1510,75 @@
       pairs.push(...metaPair("Shells", off));
     }
     dl.replaceChildren(...pairs);
+  }
+
+  var RESOURCE_SERIES_IDS = ["cpu", "memory", "disk:root", "disk:docker"];
+
+  /** Large chart block of one metric in the detail view, or null. */
+  function resourceChartBlock(sandboxName, id, res) {
+    var points = metricSeries(sandboxName, id); // all retained points
+    var current = metricCurrentText(id, res);
+    if (!current && points.length === 0) return null;
+    var label = METRIC_LABELS[id] || id;
+    var block = make("div", "res-chart");
+    var head = make("div", "res-chart-head");
+    head.append(make("span", "res-label", label));
+    head.append(make("span", "res-value", current || "-"));
+    block.append(head);
+    if (points.length > 0) {
+      var last = points[points.length - 1];
+      block.append(
+        percentChart(points, {
+          width: 560,
+          height: 64,
+          strokeWidth: 2,
+          metricId: id,
+          tooltip: true,
+          ariaLabel:
+            label + " over the last 10 minutes, currently " +
+            fmtPercent(last.percent),
+        })
+      );
+      var peak = null;
+      points.forEach(function (point) {
+        if (point.percent !== null && (peak === null || point.percent > peak)) {
+          peak = point.percent;
+        }
+      });
+      block.append(
+        make(
+          "div",
+          "res-summary",
+          points.length + " samples in 10 minutes" +
+            (peak === null ? "" : ", peak " + fmtPercent(peak))
+        )
+      );
+    } else {
+      block.append(make("div", "res-summary", "No history yet."));
+    }
+    return block;
+  }
+
+  /** Resource use section of the detail view. */
+  function renderDetailResources(sandbox) {
+    var target = el("detail-resources");
+    if (!sandbox.running) {
+      target.replaceChildren(
+        make("div", "empty", "Resource use needs a running sandbox.")
+      );
+      return;
+    }
+    var res = sandbox.resources;
+    var blocks = [];
+    RESOURCE_SERIES_IDS.forEach(function (id) {
+      var block = resourceChartBlock(sandbox.name, id, res);
+      if (block) blocks.push(block);
+    });
+    if (blocks.length === 0) {
+      target.replaceChildren(make("div", "empty", "No resource data available yet."));
+      return;
+    }
+    target.replaceChildren(...blocks);
   }
 
   function renderDetailDaemons(sandbox, traffic) {
@@ -1545,6 +1925,8 @@
         state.lastFetchAt = Date.now();
         state.failed = false;
         state.backoff = 0;
+        // Build history from this answer before anything renders it.
+        recordHistory(data);
         renderAll();
         renderUpdatedAt();
         scheduleFetch();

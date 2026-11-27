@@ -369,3 +369,139 @@ def test_router_constants_match_config(router):
     assert router.STATUS_HOST == ROUTER_STATUS_HOST
     assert router.STATUS_PATH == ROUTER_STATUS_PATH
     assert router.STATUS_API == ROUTER_STATUS_API
+
+
+# ---- docker data disk filesystem report -------------------------------------
+
+
+def _statvfs(frsize, blocks, bfree, bavail):
+    return os.statvfs_result((0, frsize, blocks, bfree, bavail, 0, 0, 0, 0, 100))
+
+
+def test_usage_from_statvfs_computes_byte_counts(router):
+    usage = router.usage_from_statvfs(_statvfs(4096, 1000, 500, 400))
+    assert usage == {
+        "total_bytes": 4096000,
+        "used_bytes": 2048000,
+        "available_bytes": 1638400,
+    }
+
+
+def test_usage_from_statvfs_excludes_reserved_blocks(router):
+    """available (f_bavail) is smaller than free (f_bfree) for root-only
+    blocks; used plus available can be smaller than total."""
+    usage = router.usage_from_statvfs(_statvfs(100, 1000, 300, 100))
+    assert usage["available_bytes"] == 10000
+    assert usage["used_bytes"] + usage["available_bytes"] < usage["total_bytes"]
+
+
+def test_usage_from_statvfs_none_for_zero_block_size(router):
+    assert router.usage_from_statvfs(_statvfs(0, 1000, 500, 400)) is None
+
+
+def test_usage_from_statvfs_clamps_used_at_zero(router):
+    usage = router.usage_from_statvfs(_statvfs(100, 100, 200, 50))
+    assert usage["used_bytes"] == 0
+
+
+def test_statvfs_usage_none_on_oserror(router, monkeypatch):
+    def raise_oserror(path):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(router.os, "statvfs", raise_oserror)
+    assert router.statvfs_usage("/var/lib/docker") is None
+
+
+def test_collect_filesystems_reports_only_separate_mount(router, monkeypatch):
+    monkeypatch.setattr(
+        router.os.path, "ismount", lambda path: path == router.DOCKER_DATA_PATH
+    )
+    monkeypatch.setattr(
+        router.os,
+        "statvfs",
+        lambda path: _statvfs(4096, 1000, 500, 400),
+    )
+    usage = router.collect_filesystems()
+    assert set(usage) == {"/var/lib/docker"}
+    assert usage["/var/lib/docker"]["total_bytes"] == 4096000
+
+
+def test_collect_filesystems_empty_when_not_a_mount(router, monkeypatch):
+    monkeypatch.setattr(router.os.path, "ismount", lambda path: False)
+    assert router.collect_filesystems() == {}
+
+
+def test_collect_filesystems_empty_when_inspection_fails(router, monkeypatch):
+    monkeypatch.setattr(router.os.path, "ismount", lambda path: True)
+
+    def raise_oserror(path):
+        raise OSError("gone")
+
+    monkeypatch.setattr(router.os, "statvfs", raise_oserror)
+    assert router.collect_filesystems() == {}
+
+
+def test_status_payload_includes_filesystems(router, tmp_path, monkeypatch):
+    routes_file = tmp_path / "routes.json"
+    routes_file.write_text("{}")
+    monkeypatch.setattr(
+        router,
+        "collect_filesystems",
+        lambda: {
+            "/var/lib/docker": {
+                "total_bytes": 10,
+                "used_bytes": 2,
+                "available_bytes": 7,
+            }
+        },
+    )
+    payload = asyncio.run(
+        router.status_payload(router.Routes(str(routes_file)), "/missing.sh")
+    )
+    assert payload["filesystems"] == {
+        "/var/lib/docker": {
+            "total_bytes": 10,
+            "used_bytes": 2,
+            "available_bytes": 7,
+        }
+    }
+    assert payload["api"] == 1
+
+
+def test_status_endpoint_serves_filesystems(tmp_path, router, monkeypatch):
+    async def scenario():
+        routes_file = tmp_path / "routes.json"
+        routes_file.write_text("{}")
+        monkeypatch.setattr(
+            router,
+            "collect_filesystems",
+            lambda: {
+                "/var/lib/docker": {
+                    "total_bytes": 10,
+                    "used_bytes": 2,
+                    "available_bytes": 7,
+                }
+            },
+        )
+        rserver = await asyncio.start_server(
+            lambda r, w: router.handle(
+                r, w, router.Routes(str(routes_file)), str(tmp_path / "nope.sh")
+            ),
+            "127.0.0.1",
+            0,
+        )
+        port = rserver.sockets[0].getsockname()[1]
+        try:
+            cr, cw = await asyncio.open_connection("127.0.0.1", port)
+            cw.write(b"GET /status HTTP/1.1\r\nHost: _circus\r\n\r\n")
+            await cw.drain()
+            data = await reader_all(cr)
+            cw.close()
+            return data
+        finally:
+            rserver.close()
+            await rserver.wait_closed()
+
+    data = _run(scenario())
+    payload = json.loads(data.split(b"\r\n\r\n", 1)[1])
+    assert payload["filesystems"]["/var/lib/docker"]["used_bytes"] == 2

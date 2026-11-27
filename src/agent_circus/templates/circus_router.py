@@ -21,8 +21,9 @@ The router also answers its own status endpoint on host ``_circus`` (a
 name the daemon grammar rejects, so it can never clash and a browser
 cannot reach it through the central proxy): ``GET /status`` returns a
 JSON object with the router's start time, its routes, the TCP
-reachability of each routed port, and the output of a daemon status
-script. The central proxy's dashboard polls this endpoint per sandbox.
+reachability of each routed port, the output of a daemon status
+script, and the use of the docker data disk when it is a separate
+filesystem. The central proxy's dashboard polls this endpoint per sandbox.
 """
 
 from __future__ import annotations
@@ -54,6 +55,11 @@ STATUS_API = 1
 PROBE_TIMEOUT_S = 0.5
 #: Seconds to wait for the daemon status script.
 STATUS_SCRIPT_TIMEOUT_S = 3.0
+
+#: Guest path of the docker data disk monitored by the status endpoint.
+#: Reported only while it is a separate mount, so the root filesystem is
+#: never reported twice.
+DOCKER_DATA_PATH = "/var/lib/docker"
 
 #: Router process start time (epoch seconds), read by the status endpoint.
 STARTED_AT = time.time()
@@ -294,13 +300,72 @@ async def run_status_script(path: str) -> str | None:
     return stdout.decode("utf-8", errors="replace")
 
 
-async def status_payload(routes: Routes, status_script: str) -> dict:
+def usage_from_statvfs(st: os.statvfs_result) -> dict[str, int] | None:
+    """Convert one ``os.statvfs`` result into byte counts.
+
+    ``available_bytes`` counts only blocks unprivileged processes may
+    use (``f_bavail``), so used plus available can be smaller than
+    total: the difference is reserved for root.
+
+    :param st: Result of ``os.statvfs``.
+    :returns: ``total_bytes``, ``used_bytes`` and ``available_bytes``;
+        ``None`` when the block size is not positive (the counts would
+        be meaningless).
+    """
+    block_size = st.f_frsize
+    if block_size <= 0:
+        return None
+    total_bytes = st.f_blocks * block_size
+    free_bytes = st.f_bfree * block_size
+    available_bytes = st.f_bavail * block_size
+    return {
+        "total_bytes": total_bytes,
+        "used_bytes": max(total_bytes - free_bytes, 0),
+        "available_bytes": available_bytes,
+    }
+
+
+def statvfs_usage(path: str) -> dict[str, int] | None:
+    """Inspect one filesystem and return its byte counts.
+
+    :param path: Guest path of the mount point.
+    :returns: The counts (see :func:`usage_from_statvfs`), or ``None``
+        when inspection fails; the status payload then omits the entry.
+    """
+    try:
+        return usage_from_statvfs(os.statvfs(path))
+    except OSError:
+        return None
+
+
+def collect_filesystems() -> dict[str, dict[str, int]]:
+    """Report the docker data disk when it is a separate filesystem.
+
+    :returns: Mapping with one ``total_bytes``/``used_bytes``/
+        ``available_bytes`` entry for :data:`DOCKER_DATA_PATH`, or an
+        empty dict when the path is not a separate mount or cannot be
+        inspected.
+    """
+    if not os.path.ismount(DOCKER_DATA_PATH):
+        return {}
+    usage = statvfs_usage(DOCKER_DATA_PATH)
+    return {DOCKER_DATA_PATH: usage} if usage is not None else {}
+
+
+async def status_payload(
+    routes: Routes,
+    status_script: str,
+    filesystems: dict[str, dict[str, int]] | None = None,
+) -> dict:
     """Build the JSON payload of the status endpoint.
 
     :param routes: Route table.
     :param status_script: Guest path of the daemon status script.
+    :param filesystems: Filesystem usage entries; ``None`` collects the
+        docker data disk live.
     :returns: The payload with the API version, the router start time,
-        the routes, per-route reachability and the daemon status output.
+        the routes, per-route reachability, the daemon status output and
+        the optional filesystem entries.
     """
     snapshot = routes.snapshot()
     reachable = dict(
@@ -312,6 +377,7 @@ async def status_payload(routes: Routes, status_script: str) -> dict:
         "routes": snapshot,
         "reachable": reachable,
         "daemon_status": await run_status_script(status_script),
+        "filesystems": collect_filesystems() if filesystems is None else filesystems,
     }
 
 

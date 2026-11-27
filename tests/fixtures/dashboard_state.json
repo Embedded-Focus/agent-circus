@@ -2,6 +2,7 @@
   "protocol_version": 1,
   "generated_at": 1763380000.0,
   "refresh_error": null,
+  "metrics_error": null,
   "proxy": {
     "port": 7700,
     "started_at": 1763379000.0,
@@ -55,7 +56,34 @@
           "reachable": null
         }
       ],
-      "hints": []
+      "hints": [],
+      "resources": {
+        "sample_state": "running",
+        "sampled_at": 1763380000.0,
+        "cpu_percent": 80.0,
+        "cpu_count": 2,
+        "memory_used_bytes": 536870912,
+        "memory_available_bytes": 536870912,
+        "memory_limit_bytes": 1073741824,
+        "disks": [
+          {
+            "id": "root",
+            "label": "Root disk",
+            "mount": "/",
+            "used_bytes": 2147483648,
+            "available_bytes": 6442450944,
+            "total_bytes": 8589934592
+          },
+          {
+            "id": "docker",
+            "label": "Docker disk",
+            "mount": "/var/lib/docker",
+            "used_bytes": 1073741824,
+            "available_bytes": 8589934592,
+            "total_bytes": 10737418240
+          }
+        ]
+      }
     },
     {
       "name": "agents-bar",
@@ -88,7 +116,26 @@
           "text": "Daemon opencode-web failed (crash limit reached).",
           "command": "cd /home/u/src/bar && agent-circus daemon restart opencode-web"
         }
-      ]
+      ],
+      "resources": {
+        "sample_state": "running",
+        "sampled_at": 1763380000.0,
+        "cpu_percent": null,
+        "cpu_count": null,
+        "memory_used_bytes": null,
+        "memory_available_bytes": null,
+        "memory_limit_bytes": null,
+        "disks": [
+          {
+            "id": "docker",
+            "label": "Docker disk",
+            "mount": "/var/lib/docker",
+            "used_bytes": 4294967296,
+            "available_bytes": 5368709120,
+            "total_bytes": 10737418240
+          }
+        ]
+      }
     },
     {
       "name": "agents-baz",
@@ -110,7 +157,8 @@
           "text": "Sandbox is stopped.",
           "command": "cd /home/u/src/baz && agent-circus up"
         }
-      ]
+      ],
+      "resources": null
     }
   ],
   "traffic": {
