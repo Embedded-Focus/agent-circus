@@ -202,6 +202,7 @@ from .system_skills import (
 )
 from .tracing import TraceSession
 from .utils import setup_logging
+from .volumes import format_capacity, format_volume_json, format_volume_table
 from .webshell import (
     ShellManager,
     build_shell_argv,
@@ -470,6 +471,82 @@ def ps(
     print(format_sandbox_table(selected))
 
 
+@app.command()
+def volumes(
+    workspace: Annotated[
+        Path,
+        typer.Option(
+            "--workspace",
+            "-w",
+            help="Workspace directory path.",
+            exists=True,
+            file_okay=False,
+            resolve_path=True,
+        ),
+    ] = Path("."),
+    format_: Annotated[
+        str,
+        typer.Option(
+            "--format",
+            help="Output format: table or json.",
+        ),
+    ] = "table",
+    quiet: Annotated[
+        bool,
+        typer.Option(
+            "--quiet",
+            "-q",
+            help="Only print volume names, one per line.",
+        ),
+    ] = False,
+) -> None:
+    """List Microsandbox volumes (including persistent docker volumes).
+
+    Volumes are host-level msb resources, so every volume msb knows
+    about is listed; there is no per-workspace filter. This workspace's
+    persistent docker volume is named ``agents-<project>-docker`` (see
+    ``agent-circus ps`` for the project name).
+
+    Only ``agents-<project>-docker`` volumes hold the docker images
+    and container data of one workspace, kept after the sandbox is
+    removed; deleting such a volume deletes that data. Any other volume
+    may hold different data, so check what a volume belongs to before
+    deleting it with ``msb volume rm <name>``.
+
+    Examples:
+        agent-circus volumes               # Table of every msb volume
+        agent-circus volumes --format json # Machine-readable output
+        agent-circus volumes --quiet       # Names only, one per line
+    """
+    if format_ not in ("table", "json"):
+        print(f"Error: unsupported --format {format_!r} (expected table or json)")
+        raise typer.Exit(code=1)
+
+    config = load_config(workspace)
+    binary = resolve_msb_binary(config.binary)
+    check_version(binary)
+    invoker = MsbInvoker(binary)
+    try:
+        result = invoker.run(build_volume_list_args())
+        volumes = parse_volume_list_output(result.stdout)
+    except (MsbCommandError, ConfigurationError) as e:
+        print(f"Error: {e}")
+        raise typer.Exit(code=1) from e
+
+    # Machine-readable formats stay parseable: no prose on stdout.
+    if quiet:
+        for volume in volumes:
+            print(volume.name)
+        return
+
+    if format_ == "json":
+        print(format_volume_json(volumes))
+        return
+
+    # Mirror ps: an empty selection still prints the header row.
+    print(format_volume_table(volumes))
+
+
 def _resolve_invoker(workspace: Path) -> tuple[AgentCircusConfig, MsbInvoker]:
     """Load config for *workspace* and build an msb invoker.
 
@@ -528,7 +605,7 @@ def _finish_docker_volume(
     if info.capacity_bytes is None:
         size = "unknown size"
     else:
-        size = _format_capacity(info.capacity_bytes)
+        size = format_capacity(info.capacity_bytes)
     typer.echo(
         f"Kept docker volume {volume} ({size}) with its docker images. "
         f"Delete it with: msb volume rm {volume}"
@@ -2158,19 +2235,6 @@ def _ensure_git_wrapper(
         )
 
 
-def _format_capacity(capacity_bytes: int) -> str:
-    """Format a byte count as an msb size string.
-
-    :param capacity_bytes: Size in bytes.
-    :returns: ``"<n>G"`` when the size is a whole number of GiB,
-        otherwise ``"<n>M"`` (MiB, rounded down).
-    """
-    gib = 1024 * 1024 * 1024
-    if capacity_bytes % gib == 0:
-        return f"{capacity_bytes // gib}G"
-    return f"{capacity_bytes // (1024 * 1024)}M"
-
-
 def _check_docker_volume(
     invoker: MsbInvoker, config: AgentCircusConfig, volume: str
 ) -> None:
@@ -2225,10 +2289,10 @@ def _check_docker_volume(
     ):
         typer.echo(
             f"Error: docker volume {volume} has "
-            f"{_format_capacity(entry.capacity_bytes)}, but "
+            f"{format_capacity(entry.capacity_bytes)}, but "
             f"msb.sandbox.docker_disk is {config.sandbox.docker_disk}. The "
             "size of an existing volume cannot change. Either set "
-            f'docker_disk = "{_format_capacity(entry.capacity_bytes)}", or '
+            f'docker_disk = "{format_capacity(entry.capacity_bytes)}", or '
             "delete the volume and its docker images with: "
             f"msb volume rm {volume}",
             err=True,
@@ -2238,7 +2302,7 @@ def _check_docker_volume(
         "Reusing persistent docker volume %s (%s).",
         volume,
         (
-            _format_capacity(entry.capacity_bytes)
+            format_capacity(entry.capacity_bytes)
             if entry.capacity_bytes is not None
             else config.sandbox.docker_disk
         ),

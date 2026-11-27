@@ -13,7 +13,7 @@ import pytest
 from typer.testing import CliRunner
 
 import agent_circus.cli as cli_module
-from agent_circus.cli import _format_capacity, app
+from agent_circus.cli import app
 from agent_circus.config import (
     GUEST_HOME,
     UV_PROJECT_ENVIRONMENT_DEFAULT,
@@ -29,6 +29,7 @@ from agent_circus.gitconfig import (
 )
 from agent_circus.gitworktree import GIT_WRAPPER_GUEST_PATH
 from agent_circus.ssh_agent import agent_link_path
+from agent_circus.volumes import format_capacity
 
 runner = CliRunner()
 
@@ -1603,8 +1604,8 @@ def test_up_installs_git_wrapper_without_mirror_root(tmp_path, fake_msb):
 
 
 def test_format_capacity_gib_and_mib():
-    assert _format_capacity(5368709120) == "5G"
-    assert _format_capacity(536870912) == "512M"
+    assert format_capacity(5368709120) == "5G"
+    assert format_capacity(536870912) == "512M"
 
 
 def test_up_boots_with_persistent_docker_volume(tmp_path, fake_msb):

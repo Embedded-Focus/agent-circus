@@ -35,41 +35,6 @@
   }
 
   /**
-   * Split an across-cores CPU percent into capacity and core use.
-   * cpu_percent is use across all cores (100 means one busy core), so
-   * capacity_percent is cpu_percent / cpu_count and used_cores is
-   * cpu_percent / 100. Returns null when either value cannot produce
-   * a truthful capacity result (missing, zero, Boolean, or non-finite
-   * count).
-   */
-  function cpuUsage(cpuPercent, cpuCount) {
-    if (
-      !isCount(cpuPercent) ||
-      typeof cpuCount !== "number" ||
-      !isFinite(cpuCount) ||
-      cpuCount <= 0
-    ) {
-      return null;
-    }
-    return {
-      used_cores: cpuPercent / 100,
-      capacity_percent: cpuPercent / cpuCount,
-    };
-  }
-
-  /**
-   * Horizontal time range of a chart, in data seconds: the
-   * RETENTION_S window that ends at the newest point, so sparse
-   * history never stretches across the full chart width. An empty or
-   * unusable series returns a finite placeholder range.
-   */
-  function chartTimeBounds(points) {
-    var last = points.length > 0 ? points[points.length - 1] : null;
-    var end = last !== null && isCount(last.t) ? last.t : 0;
-    return { start: end - RETENTION_S, end: end };
-  }
-
-  /**
    * Build one history point for a series from a resources object.
    * Returns null when this series has no usable sample.
    */
@@ -77,10 +42,17 @@
     var t = resources.sampled_at;
     if (!isCount(t)) return null;
     if (id === "cpu") {
-      var usage = cpuUsage(resources.cpu_percent, resources.cpu_count);
+      var cpuCount = resources.cpu_count;
+      var percent =
+        isCount(resources.cpu_percent) &&
+        typeof cpuCount === "number" &&
+        isFinite(cpuCount) &&
+        cpuCount > 0
+          ? resources.cpu_percent / cpuCount
+          : null;
       return {
         t: t,
-        percent: usage === null ? null : usage.capacity_percent,
+        percent: percent,
         used_bytes: null,
         available_bytes: null,
         total_bytes: null,
@@ -239,8 +211,6 @@
 
   globalThis.AgentCircusMetricHistory = {
     createHistory: createHistory,
-    cpuUsage: cpuUsage,
-    chartTimeBounds: chartTimeBounds,
     RETENTION_S: RETENTION_S,
     MAX_POINTS: MAX_POINTS,
     GAP_S: GAP_S,

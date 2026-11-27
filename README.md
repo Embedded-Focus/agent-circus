@@ -224,6 +224,7 @@ All commands work from your project directory and address the sandbox
 | --- | --- |
 | `agent-circus up` | Boot the sandbox, or reuse the running one. |
 | `agent-circus ps` | Show sandbox status for this workspace. |
+| `agent-circus volumes` | List Microsandbox volumes (persistent docker volumes included). |
 | `agent-circus exec ...` | Run a command or an ACP session in the sandbox. |
 | `agent-circus stop` | Stop the sandbox. Guest state persists. |
 | `agent-circus start` | Start the sandbox again and verify the Docker engine. |

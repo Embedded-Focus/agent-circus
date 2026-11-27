@@ -303,8 +303,8 @@ def _parse_metrics_record(entry: Any) -> SandboxMetrics | None:
 
     :param entry: One element of the top-level JSON array.
     :returns: The parsed sample, or ``None`` when the entry is not a
-        valid report (wrong shape, unknown state, a malformed top-level
-        ``cpus`` field, or any present metric violating its type rule).
+        valid report (wrong shape, unknown state, or any present metric
+        violating its type rule).
     """
     if not isinstance(entry, dict):
         return None
@@ -314,17 +314,15 @@ def _parse_metrics_record(entry: Any) -> SandboxMetrics | None:
         return None
     if state not in ("running", "stalled"):
         return None
-    # ``cpus`` belongs to the report itself, not to the nested metrics
-    # object; msb serializes it next to ``name`` and ``state``.
-    cpu_count: int | None = None
-    if "cpus" in entry:
-        raw_cpus = entry["cpus"]
-        if not isinstance(raw_cpus, int) or isinstance(raw_cpus, bool) or raw_cpus <= 0:
-            return None
-        cpu_count = raw_cpus
     report = entry.get("metrics")
     if not isinstance(report, dict):
         return None
+    cpu_count: int | None = None
+    if "cpus" in report:
+        raw_cpus = report["cpus"]
+        if not isinstance(raw_cpus, int) or isinstance(raw_cpus, bool) or raw_cpus <= 0:
+            return None
+        cpu_count = raw_cpus
     try:
         cpu_percent = _optional_number(report.get("cpu_percent"))
         memory_used = _optional_count(report.get("memory_bytes"))
