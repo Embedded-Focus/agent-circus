@@ -409,17 +409,21 @@ def test_build_metrics_args_is_bulk_json():
 
 
 def _metrics_record(**overrides):
-    """One valid msb metrics record, fields overridable."""
+    """One valid msb metrics record, fields overridable.
+
+    ``cpus`` is a top-level report field; ``report`` overrides replace
+    only the nested metrics object.
+    """
     report = {
         "timestamp": "2026-11-27T12:00:00Z",
         "cpu_percent": 80.0,
-        "cpus": 2,
         "memory_bytes": 536870912,
         "memory_limit_bytes": 1073741824,
         "upper_used_bytes": 2147483648,
         "upper_free_bytes": 6442450944,
     }
     report = overrides.pop("report", report)
+    overrides.setdefault("cpus", 2)
     entry = {"name": "agents-foo", "state": "running", "metrics": report}
     entry.update(overrides)
     return entry
@@ -484,16 +488,36 @@ def test_parse_metrics_output_missing_disk_fields_gives_none():
         {"memory_limit_bytes": -5},
         {"upper_used_bytes": True},
         {"upper_free_bytes": -1},
-        {"cpus": 0},
-        {"cpus": -2},
-        {"cpus": True},
-        {"cpus": 2.5},
-        {"cpus": "2"},
     ],
 )
 def test_parse_metrics_output_rejects_invalid_field_values(report):
     metrics = parse_metrics_output(json.dumps([_metrics_record(report=report)]))
     assert metrics == {}
+
+
+@pytest.mark.parametrize("cpus", [0, -2, True, 2.5, "2"])
+def test_parse_metrics_output_rejects_invalid_top_level_cpus(cpus):
+    metrics = parse_metrics_output(json.dumps([_metrics_record(cpus=cpus)]))
+    assert metrics == {}
+
+
+def test_parse_metrics_output_missing_cpus_keeps_sample_without_cpu_count():
+    entry = _metrics_record()
+    del entry["cpus"]
+    metrics = parse_metrics_output(json.dumps([entry]))
+    m = metrics["agents-foo"]
+    assert m.cpu_percent == pytest.approx(80.0)
+    assert m.cpu_count is None
+
+
+def test_parse_metrics_output_invalid_cpus_drops_only_own_record():
+    document = [
+        _metrics_record(name="agents-bad", cpus=0),
+        _metrics_record(name="agents-good"),
+    ]
+    metrics = parse_metrics_output(json.dumps(document))
+    assert set(metrics) == {"agents-good"}
+    assert metrics["agents-good"].cpu_count == 2
 
 
 def test_parse_metrics_output_zero_values_are_valid():
@@ -777,12 +801,25 @@ def test_collector_sorts_managed_running_first():
 
 _METRICS_REPORT = {
     "cpu_percent": 80.0,
-    "cpus": 2,
     "memory_bytes": 536870912,
     "memory_limit_bytes": 1073741824,
     "upper_used_bytes": 2147483648,
     "upper_free_bytes": 6442450944,
 }
+
+
+def _metrics_entry(name, state="running", report=None, cpus=2):
+    """One msb metrics record for a collector fixture.
+
+    ``cpus`` defaults to a two-core sandbox; ``cpus=None`` omits the
+    field, as msb does when the count is unknown.
+    """
+    if report is None:
+        report = _METRICS_REPORT
+    entry = {"name": name, "state": state, "metrics": report}
+    if cpus is not None:
+        entry["cpus"] = cpus
+    return entry
 
 
 def test_collector_runs_one_bulk_metrics_command_for_all_sandboxes():
@@ -799,6 +836,7 @@ def test_collector_runs_one_bulk_metrics_command_for_all_sandboxes():
                 {
                     "name": "agents-a",
                     "state": "running",
+                    "cpus": 2,
                     "metrics": _METRICS_REPORT,
                 },
                 {
@@ -832,10 +870,20 @@ def test_collector_stopped_sandbox_has_no_resources():
         "inspect_json": json.dumps({"config": {}}),
         "metrics_output": json.dumps(
             [
-                {"name": "agents-a", "state": "running", "metrics": _METRICS_REPORT},
+                {
+                    "name": "agents-a",
+                    "state": "running",
+                    "cpus": 2,
+                    "metrics": _METRICS_REPORT,
+                },
                 # msb may still report a terminal sample for a stopped
                 # sandbox; the view must not use it.
-                {"name": "agents-b", "state": "running", "metrics": _METRICS_REPORT},
+                {
+                    "name": "agents-b",
+                    "state": "running",
+                    "cpus": 2,
+                    "metrics": _METRICS_REPORT,
+                },
             ]
         ),
     }
@@ -852,9 +900,7 @@ def test_collector_joins_router_docker_disk_into_resources():
             [{"name": "agents-foo", "status": "Running", "created_at": 1.0}]
         ),
         "inspect_json": INSPECT_JSON,
-        "metrics_output": json.dumps(
-            [{"name": "agents-foo", "state": "running", "metrics": _METRICS_REPORT}]
-        ),
+        "metrics_output": json.dumps([_metrics_entry("agents-foo")]),
     }
 
     async def router_fetch(address, timeout=2.0):

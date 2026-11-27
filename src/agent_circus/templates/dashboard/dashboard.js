@@ -79,11 +79,13 @@
 
   // Per-sandbox resource history, built from the polled state answers.
   // The module is loaded before this script; a missing module only
-  // disables the charts, never the rest of the page.
-  var history =
+  // disables the charts and the split CPU text, never the rest of the
+  // page.
+  var metricHelpers =
     typeof AgentCircusMetricHistory === "object" && AgentCircusMetricHistory
-      ? AgentCircusMetricHistory.createHistory()
+      ? AgentCircusMetricHistory
       : null;
+  var history = metricHelpers ? metricHelpers.createHistory() : null;
 
   /** Record one state payload into the history store (no-op without it). */
   function recordHistory(data) {
@@ -446,18 +448,21 @@
   /**
    * Current one-line text of a metric, or null when unavailable.
    * CPU percent is the share of the allocated cores, so 80 across two
-   * cores is "40% capacity · 0.8 of 2 cores".
+   * cores is "40% capacity · 0.8 of 2 cores" (see cpuUsage in
+   * dashboard-metrics.js, the authoritative formula).
    */
   function metricCurrentText(id, res) {
     if (!res) return null;
     if (id === "cpu") {
       if (res.cpu_percent === null || res.cpu_percent === undefined) return null;
-      var cores = res.cpu_count;
-      if (typeof cores === "number" && isFinite(cores) && cores > 0) {
+      var usage = metricHelpers
+        ? metricHelpers.cpuUsage(res.cpu_percent, res.cpu_count)
+        : null;
+      if (usage) {
         return (
-          fmtPercent(res.cpu_percent / cores) + " capacity · " +
-          (Math.round((res.cpu_percent / 100) * cores * 10) / 10) +
-          " of " + cores + " cores"
+          fmtPercent(usage.capacity_percent) + " capacity · " +
+          (Math.round(usage.used_cores * 10) / 10) +
+          " of " + res.cpu_count + " cores"
         );
       }
       // Without a core count only the across-cores value is truthful.
@@ -516,11 +521,13 @@
       svg.setAttribute("height", String(H));
     }
     svg.setAttribute("aria-label", opts.ariaLabel || "chart");
-    var t0 = points.length ? points[0].t : 0;
-    var t1 = points.length ? points[points.length - 1].t : 1;
+    // The window is fixed and ends at the newest point; see
+    // chartTimeBounds in dashboard-metrics.js.
+    var bounds = metricHelpers
+      ? metricHelpers.chartTimeBounds(points)
+      : { start: 0, end: 1 };
     function x(point) {
-      if (t1 <= t0) return W / 2;
-      return ((point.t - t0) / (t1 - t0)) * W;
+      return ((point.t - bounds.start) / (bounds.end - bounds.start)) * W;
     }
     function y(percent) {
       return H - (clampPercent(percent) / 100) * (H - 4) - 2;
@@ -921,15 +928,10 @@
     if (id === "cpu") {
       // Show a capacity share only when the core count is known; a
       // bare across-cores percent would read as a false capacity.
-      if (
-        res.cpu_percent === null ||
-        res.cpu_percent === undefined ||
-        typeof res.cpu_count !== "number" ||
-        res.cpu_count <= 0
-      ) {
-        return "-";
-      }
-      return fmtPercent(res.cpu_percent / res.cpu_count);
+      var usage = metricHelpers
+        ? metricHelpers.cpuUsage(res.cpu_percent, res.cpu_count)
+        : null;
+      return usage ? fmtPercent(usage.capacity_percent) : "-";
     }
     if (id === "memory") {
       var used = res.memory_used_bytes;
